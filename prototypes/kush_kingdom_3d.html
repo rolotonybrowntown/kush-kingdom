@@ -360,6 +360,8 @@
                                                    // row's grow-light tile)
   var VEND_ZONE  = { x: 11.3, z: -22.0 };          // break-room vending machine
   var LOCKER_ZONE = { x: 11.3, z: -16.5 };         // break-room locker
+  var HIRE_ZONE  = { x: -11.3, z: -30.0 };         // potting bench: hire botanists
+  var MAX_BOTANISTS = 3;
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
@@ -403,6 +405,7 @@
     return {
       cash: 25,
       capLv: 0, speedLv: 0, sellLv: 0,
+      botanistLv: 0,          // hired botanists who plant seeds for you
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
       // grow-light level per row (every bed in a row lights up together)
@@ -452,6 +455,7 @@
       delete merged.plotLight;
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
+      merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
         merged.roomTier = 0;
@@ -492,6 +496,7 @@
   function costSpeed() { return Math.round(50 * Math.pow(1.6, state.speedLv)); }
   function costSell()  { return Math.round(80 * Math.pow(1.7, state.sellLv)); }
   function costBoost() { return 140; }
+  function costBotanist() { return Math.round(450 * Math.pow(2.4, state.botanistLv || 0)); }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -797,6 +802,9 @@
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
     pants:     mat(0x3b5b8a, { map: fabricTex, roughness: 0.9 }),
+    apron:     mat(0x2f7d4f, { map: fabricTex, roughness: 0.95 }),
+    strawHat:  mat(0xc9a355, { map: fabricTex, roughness: 0.9 }),
+    strawHatDk:mat(0xa8853f, { map: fabricTex, roughness: 0.9 }),
     accent:    mat(0xffcf40, { roughness: 0.25, metalness: 0.6, emissive: 0x7a5200, emissiveIntensity: 0.6 }),
     neonGreen: mat(0x2bd977, { emissive: 0x2bd977, emissiveIntensity: 1.1, roughness: 0.4 }),
     lightPanel:mat(0xfdf3dd, { emissive: 0xffeec4, emissiveIntensity: 0.9, roughness: 0.5 }),
@@ -1312,6 +1320,50 @@
     tbl.position.set(11.0, 0, -27.5);
     g.add(tbl);
 
+    scene.add(g);
+  })();
+
+  // ---- potting bench in the back corner: where botanists are taken on ----
+  (function pottingBench() {
+    var g = new THREE.Group();
+
+    var bench = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.2, 1.5), M.plank);
+    bench.position.set(0, 1.5, 0); bench.castShadow = true; bench.receiveShadow = true;
+    g.add(bench);
+    [[-1.3, -0.55], [1.3, -0.55], [-1.3, 0.55], [1.3, 0.55]].forEach(function (p) {
+      var leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.5, 0.16), M.woodDark);
+      leg.position.set(p[0], 0.75, p[1]); leg.castShadow = true;
+      g.add(leg);
+    });
+    // a shelf of soil bags under the bench
+    var bags = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 1.1), M.soil);
+    bags.position.set(0, 0.6, 0); bags.castShadow = true;
+    g.add(bags);
+
+    // terracotta pots with seedlings, lined up along the top
+    for (var p2 = 0; p2 < 4; p2++) {
+      var pot = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.18, 0.36, 10), M.plantPot);
+      pot.position.set(-1.05 + p2 * 0.7, 1.78, -0.1); pot.castShadow = true;
+      g.add(pot);
+      var sprout = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 5), M.plant);
+      sprout.position.set(-1.05 + p2 * 0.7, 2.14, -0.1); sprout.castShadow = true;
+      g.add(sprout);
+    }
+    // watering can, purely to sell the idea
+    var can = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 0.44, 10), M.metalRack);
+    can.position.set(1.15, 1.82, 0.35); can.castShadow = true;
+    g.add(can);
+    var spout = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.05, 0.6, 6), M.metalRack);
+    spout.position.set(1.5, 1.95, 0.35); spout.rotation.z = -0.7;
+    g.add(spout);
+
+    addGlow(g, 0, 2.0, 0.4, 3.0, 0x9ff0a0, 0.22);
+    var lbl = textSprite("BOTANIST", "#b6f5b0");
+    lbl.scale.set(2.4, 0.56, 1);
+    lbl.position.set(0, 2.9, 0);
+    g.add(lbl);
+
+    g.position.set(HIRE_ZONE.x, 0, HIRE_ZONE.z);
     scene.add(g);
   })();
 
@@ -2055,6 +2107,149 @@
   }
 
   // ===================================================================
+  //  BOTANISTS — hired staff who fetch seed packs and plant them for you
+  // ===================================================================
+  var botanists = [];
+  var BOT_SPEED = 4.2;
+  var BOT_GRAB_TIME = 0.45, BOT_PLANT_TIME = 0.55;
+
+  (function buildBotanists() {
+    for (var n = 0; n < MAX_BOTANISTS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.shirt);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      // apron over the front, so they read as staff rather than a customer
+      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.1), M.apron);
+      apron.position.set(0, 1.02, 0.3); apron.castShadow = true; g.add(apron);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      // Keep the brim tight: the camera looks almost straight down, and a
+      // wide one turns the whole character into a floating disc.
+      var hat = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.33, 0.22, 10), M.strawHat);
+      hat.position.y = 2.24; g.add(hat);
+      var brim = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.06, 12), M.strawHatDk);
+      brim.position.y = 2.13; brim.castShadow = true; g.add(brim);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // the seed pack they're carrying, shown only between shelf and bed
+      var pack = makeSeedPack(0.55);
+      pack.position.set(0, 1.25, 0.46);
+      pack.visible = false;
+      g.add(pack);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      botanists.push({
+        obj: g, l1: l1, l2: l2, pack: pack,
+        pos: { x: HIRE_ZONE.x + 1.6 + n * 0.9, z: HIRE_ZONE.z + 2.0 },
+        phase: "toSeed", timer: 0, bedIdx: -1, walkPhase: n * 1.7, slot: n,
+      });
+    }
+  })();
+
+  // where this botanist queues up at the shelf — spread out so they don't stack
+  function botSeedSpot(b) {
+    return { x: SEED_ZONE.x - 1.4 + b.slot * 1.4, z: SEED_ZONE.z + 2.3 };
+  }
+
+  // first empty bed nobody else is already walking to
+  function botFreeBed(self) {
+    for (var i = 0; i < state.plotsUnlocked; i++) {
+      if (state.plots[i].state !== "empty") continue;
+      var taken = false;
+      for (var j = 0; j < botanists.length; j++) {
+        var o = botanists[j];
+        if (o !== self && o.obj.visible && o.bedIdx === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
+  // returns true once standing on the target
+  function botStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(BOT_SPEED * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 11;
+    return false;
+  }
+
+  function updateBotanists(now, dt) {
+    for (var i = 0; i < botanists.length; i++) {
+      var b = botanists[i];
+      var hired = i < (state.botanistLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.bedIdx = -1; b.pack.visible = false; continue; }
+
+      var walking = false;
+      if (b.phase === "toSeed") {
+        b.pack.visible = false;
+        b.bedIdx = -1;
+        var s = botSeedSpot(b);
+        walking = !botStepTo(b, s.x, s.z, dt);
+        if (!walking) { b.phase = "grab"; b.timer = BOT_GRAB_TIME; }
+
+      } else if (b.phase === "grab") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.pack.visible = true;
+          b.bedIdx = botFreeBed(b);
+          b.phase = b.bedIdx >= 0 ? "toBed" : "waiting";
+          b.timer = 0.8;
+        }
+
+      } else if (b.phase === "waiting") {
+        // carrying a pack but every bed is busy — hold near the shelf and recheck
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.8;
+          b.bedIdx = botFreeBed(b);
+          if (b.bedIdx >= 0) b.phase = "toBed";
+        }
+
+      } else if (b.phase === "toBed") {
+        // the player may have planted it first, or the row got re-locked
+        if (b.bedIdx < 0 || b.bedIdx >= state.plotsUnlocked ||
+            state.plots[b.bedIdx].state !== "empty") {
+          b.bedIdx = botFreeBed(b);
+          if (b.bedIdx < 0) { b.phase = "waiting"; b.timer = 0.8; continue; }
+        }
+        var d2b = plotDefs[b.bedIdx];
+        walking = !botStepTo(b, d2b.x, d2b.z, dt);
+        if (!walking) { b.phase = "plant"; b.timer = BOT_PLANT_TIME; }
+
+      } else if (b.phase === "plant") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var bi = b.bedIdx;
+          if (bi >= 0 && bi < state.plotsUnlocked && state.plots[bi].state === "empty") {
+            state.plots[bi] = {
+              state: "growing", startedAt: Date.now(), duration: growTimeFor(bi) * 1000,
+            };
+            addFloater(plotDefs[bi].x, 2.3, plotDefs[bi].z, "PLANTED", "#9df0a0");
+          }
+          b.pack.visible = false;
+          b.bedIdx = -1;
+          b.phase = "toSeed";
+        }
+      }
+
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.5 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.06 : 0;
+    }
+  }
+
+  // ===================================================================
   //  FLOATING TEXT
   // ===================================================================
   var floaters = [];
@@ -2633,6 +2828,27 @@
       },
     },
     {
+      id: "botanist", label: "BOTANIST", icon: "\ud83c\udf3f", x: HIRE_ZONE.x, z: HIRE_ZONE.z,
+      color: 0x7fd97f, kiosk: false,
+      name: function () {
+        return (state.botanistLv || 0) === 0 ? "Hire a Botanist" : "Hire Another Botanist";
+      },
+      desc: function () {
+        var n = state.botanistLv || 0;
+        return n >= MAX_BOTANISTS
+          ? "Your full crew is on the floor"
+          : (n === 0
+              ? "They fetch seed packs and plant your beds for you"
+              : n + " on staff \u00b7 hire one more to plant faster");
+      },
+      cost: costBotanist,
+      maxed: function () { return (state.botanistLv || 0) >= MAX_BOTANISTS; },
+      buy: function () {
+        state.botanistLv = (state.botanistLv || 0) + 1;
+        toast("\ud83c\udf3f Botanist hired \u2014 they'll plant your beds for you!");
+      },
+    },
+    {
       id: "value", label: "PRICING", icon: "\ud83d\udcb5", x: PRICE_ZONE.x, z: PRICE_ZONE.z,
       color: 0xd6685b, kiosk: true,
       name: function () { return "Street Value"; },
@@ -2998,6 +3214,7 @@
     payIntoZone(dt);
     updateCoins(dt);
     updateNpcs(now, dt);
+    updateBotanists(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
