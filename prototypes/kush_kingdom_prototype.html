@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Kush Kingdom: Grow Empire</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --green-dark: #1e5631;
+    --green-mid: #3f8f4f;
+    --green-light: #8fd97a;
+    --sun: #ffd23f;
+    --brown: #6b4226;
+    --panel: #fffceb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    background: linear-gradient(180deg, #bdeeff 0%, #d8f7c4 35%, #eafccb 100%);
+    color: #2b3a1f;
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(90deg, var(--green-dark), var(--green-mid));
+    color: white;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.25);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header h1 {
+    font-size: 20px;
+    margin: 0;
+    text-shadow: 1px 1px 0 #123;
+  }
+  .stats {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    background: rgba(0,0,0,0.25);
+    border-radius: 20px;
+    padding: 6px 12px;
+    font-weight: bold;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(255,255,255,0.3);
+  }
+  .xpbar-wrap {
+    width: 100%;
+    background: rgba(0,0,0,0.3);
+    border-radius: 20px;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .xpbar-track {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    height: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .xpbar-fill {
+    height: 100%;
+    background: var(--sun);
+    transition: width 0.3s;
+  }
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  @media (max-width: 850px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 3px solid var(--green-dark);
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.15);
+  }
+  .card h2 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+    color: var(--green-dark);
+    border-bottom: 2px dashed var(--green-mid);
+    padding-bottom: 6px;
+  }
+  .farm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 10px;
+  }
+  .plot {
+    aspect-ratio: 1;
+    background: radial-gradient(circle at 50% 30%, #a9683a, var(--brown));
+    border: 2px solid #4a2c17;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    font-size: 30px;
+    user-select: none;
+    transition: transform 0.1s;
+  }
+  .plot:hover { transform: scale(1.05); }
+  .plot.locked {
+    background: repeating-linear-gradient(45deg,#8a8a8a,#8a8a8a 8px,#767676 8px,#767676 16px);
+    cursor: not-allowed;
+  }
+  .plot.ready {
+    box-shadow: 0 0 0 3px var(--sun), 0 0 16px var(--sun);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 3px var(--sun), 0 0 10px var(--sun); }
+    50% { box-shadow: 0 0 0 3px var(--sun), 0 0 22px var(--sun); }
+  }
+  .plot .bar {
+    position: absolute;
+    bottom: 4px;
+    left: 6px;
+    right: 6px;
+    height: 6px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .plot .bar-fill {
+    height: 100%;
+    background: var(--green-light);
+  }
+  .plot .label {
+    position: absolute;
+    top: 4px;
+    font-size: 9px;
+    color: #fff;
+    background: rgba(0,0,0,0.4);
+    padding: 1px 5px;
+    border-radius: 6px;
+  }
+  .plus { font-size: 34px; color: #d7c9a3; }
+  .shop-list, .upgrade-list { display: flex; flex-direction: column; gap: 8px; }
+  .shop-item, .upgrade-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: #f2ecd0;
+    border: 2px solid #c9bd8f;
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+  .shop-item.locked, .upgrade-item.maxed { opacity: 0.5; }
+  .shop-item .name, .upgrade-item .name { font-weight: bold; }
+  .small { font-size: 11px; color: #555; }
+  button {
+    background: var(--green-mid);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 12px;
+    box-shadow: 0 2px 0 var(--green-dark);
+  }
+  button:disabled {
+    background: #a3a3a3;
+    box-shadow: 0 2px 0 #6b6b6b;
+    cursor: not-allowed;
+  }
+  button:active:not(:disabled) { transform: translateY(2px); box-shadow: none; }
+  .inv-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 4px 0;
+    border-bottom: 1px dashed #c9bd8f;
+  }
+  .sell-btn, .cure-btn {
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px;
+    font-size: 14px;
+  }
+  #toast-wrap {
+    position: fixed;
+    top: 70px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 999;
+  }
+  .toast {
+    background: var(--green-dark);
+    color: #fff;
+    padding: 10px 14px;
+    border-radius: 10px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+    font-size: 13px;
+    max-width: 260px;
+    animation: fadeIn 0.25s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-8px);} to { opacity: 1; transform: translateY(0);} }
+  #plant-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  #plant-modal {
+    background: var(--panel);
+    border: 3px solid var(--green-dark);
+    border-radius: 14px;
+    padding: 16px;
+    width: 300px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  #plant-modal h3 { margin-top: 0; color: var(--green-dark); }
+  footer {
+    text-align: center;
+    font-size: 12px;
+    color: #4a5d3a;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌿 Kush Kingdom: Grow Empire</h1>
+  <div class="stats">
+    <div class="pill">💵 <span id="cash-val">0</span></div>
+    <div class="pill">✨ <span id="kief-val">0</span></div>
+    <div class="pill">🎒 Lv <span id="level-val">1</span></div>
+  </div>
+</header>
+<div class="xpbar-wrap" style="max-width:1200px;margin:8px auto 0;">
+  <span>XP</span>
+  <div class="xpbar-track"><div class="xpbar-fill" id="xp-fill" style="width:0%"></div></div>
+  <span id="xp-label" class="small" style="color:#fff;">0/0</span>
+</div>
+
+<div id="toast-wrap"></div>
+
+<main>
+  <div class="card">
+    <h2>🌱 The Farm</h2>
+    <div class="farm-grid" id="farm-grid"></div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card">
+      <h2>📦 Inventory</h2>
+      <div class="inv-row"><span>Raw Bud</span><span id="raw-total">0</span></div>
+      <div class="inv-row"><span>Cured Bud</span><span id="cured-total">0</span></div>
+      <div class="small" id="storage-label">Storage: 0/0</div>
+      <button class="cure-btn" id="cure-btn">🔥 Cure Raw Bud</button>
+      <button class="sell-btn" id="sell-btn">💰 Sell All Cured Bud</button>
+    </div>
+
+    <div class="card">
+      <h2>🌾 Strains (tap a plot to plant)</h2>
+      <div class="shop-list" id="strain-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>🏗️ Upgrades</h2>
+      <div class="upgrade-list" id="upgrade-list"></div>
+    </div>
+  </div>
+</main>
+
+<footer>Kush Kingdom: Grow Empire — idle tycoon prototype. Progress autosaves in this browser.</footer>
+
+<div id="plant-modal-overlay">
+  <div id="plant-modal">
+    <h3>Choose a strain to plant</h3>
+    <div class="shop-list" id="plant-modal-list"></div>
+    <button style="margin-top:10px;width:100%;background:#a83232;" id="close-modal">Cancel</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  const SAVE_KEY = "kushKingdomSave_v1";
+
+  const STRAINS = [
+    { id: "bag",    name: "Bag Seed",     cost: 0,     grow: 8,   yield: 1, sell: 2,   unlockLv: 1 },
+    { id: "dirt",   name: "Dirt Weed",    cost: 20,    grow: 15,  yield: 2, sell: 5,   unlockLv: 1 },
+    { id: "blue",   name: "Blue Dream",   cost: 80,    grow: 30,  yield: 2, sell: 12,  unlockLv: 2 },
+    { id: "sour",   name: "Sour Diesel",  cost: 250,   grow: 45,  yield: 3, sell: 22,  unlockLv: 3 },
+    { id: "og",     name: "OG Kush",      cost: 600,   grow: 60,  yield: 3, sell: 40,  unlockLv: 4 },
+    { id: "purple", name: "Purple Haze",  cost: 1500,  grow: 90,  yield: 4, sell: 70,  unlockLv: 5 },
+    { id: "gold",   name: "Golden Kush",  cost: 4000,  grow: 120, yield: 5, sell: 130, unlockLv: 6 },
+    { id: "king",   name: "Kingpin Kush", cost: 10000, grow: 180, yield: 6, sell: 250, unlockLv: 7 },
+  ];
+  const STRAIN_MAP = Object.fromEntries(STRAINS.map(s => [s.id, s]));
+
+  const CURE_MULTIPLIER = 1.8;
+  const MAX_PLOTS = 20;
+
+  function defaultState() {
+    return {
+      cash: 50,
+      kief: 5,
+      xp: 0,
+      level: 1,
+      rawInventory: {},
+      curedInventory: {},
+      plots: [
+        { state: "empty" }, { state: "empty" }, { state: "empty" },
+        { state: "empty" }, { state: "empty" }, { state: "empty" },
+      ],
+      greenhouseLv: 0,
+      curingLv: 0,
+      dispensaryLv: 0,
+      storageLv: 0,
+      curing: null, // { startedAt, duration, batch: {strainId: qty} }
+      lastSaveTime: Date.now(),
+    };
+  }
+
+  let state = loadState();
+  let activePlantPlotIndex = null;
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return defaultState();
+      const loaded = Object.assign(defaultState(), JSON.parse(raw));
+      return loaded;
+    } catch (e) {
+      return defaultState();
+    }
+  }
+
+  function saveState() {
+    state.lastSaveTime = Date.now();
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  }
+
+  function formatNumber(n) {
+    n = Math.floor(n);
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(n);
+  }
+
+  function toast(msg) {
+    const wrap = document.getElementById("toast-wrap");
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(() => el.remove(), 4500);
+  }
+
+  // ---- Derived stats from upgrades ----
+  function growTimeFor(strain) {
+    const speedFactor = Math.pow(0.95, state.greenhouseLv); // -5% per level
+    return strain.grow * Math.max(speedFactor, 0.4);
+  }
+  function cureDuration() {
+    const base = 10;
+    return base * Math.max(Math.pow(0.9, state.curingLv), 0.35);
+  }
+  function sellMultiplier() {
+    return 1 + state.dispensaryLv * 0.15;
+  }
+  function storageCap() {
+    return 50 + state.storageLv * 25;
+  }
+  function maxPlots() {
+    return state.plots.length;
+  }
+  function xpToNext(level) {
+    return Math.round(60 * Math.pow(level, 1.4));
+  }
+
+  function totalInventory(inv) {
+    return Object.values(inv).reduce((a, b) => a + b, 0);
+  }
+
+  // ---- Cost formulas ----
+  function costExpandPlot() {
+    return Math.round(50 * Math.pow(1.6, state.plots.length - 6));
+  }
+  function costGreenhouse() {
+    return Math.round(100 * Math.pow(1.7, state.greenhouseLv));
+  }
+  function costCuring() {
+    return Math.round(120 * Math.pow(1.7, state.curingLv));
+  }
+  function costDispensary() {
+    return Math.round(150 * Math.pow(1.8, state.dispensaryLv));
+  }
+  function costStorage() {
+    return Math.round(80 * Math.pow(1.5, state.storageLv));
+  }
+
+  // ---- Actions ----
+  function addXp(amount) {
+    state.xp += amount;
+    let leveled = false;
+    while (state.xp >= xpToNext(state.level)) {
+      state.xp -= xpToNext(state.level);
+      state.level += 1;
+      state.kief += state.level * 2;
+      leveled = true;
+    }
+    if (leveled) toast(`🎉 Level up! You're now Level ${state.level}. +Kief bonus!`);
+  }
+
+  function openPlantModal(plotIndex) {
+    activePlantPlotIndex = plotIndex;
+    const list = document.getElementById("plant-modal-list");
+    list.innerHTML = "";
+    STRAINS.forEach(s => {
+      const locked = state.level < s.unlockLv;
+      const affordable = state.cash >= s.cost;
+      const row = document.createElement("div");
+      row.className = "shop-item" + (locked ? " locked" : "");
+      row.innerHTML = `
+        <div>
+          <div class="name">${s.name}</div>
+          <div class="small">${locked ? "Unlocks at Lv." + s.unlockLv : `Cost $${formatNumber(s.cost)} · ${Math.round(growTimeFor(s))}s · sells ~$${s.sell}`}</div>
+        </div>
+        <button ${locked || !affordable ? "disabled" : ""} data-strain="${s.id}">Plant</button>
+      `;
+      list.appendChild(row);
+    });
+    list.querySelectorAll("button[data-strain]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        plantStrain(activePlantPlotIndex, btn.getAttribute("data-strain"));
+        closePlantModal();
+      });
+    });
+    document.getElementById("plant-modal-overlay").style.display = "flex";
+  }
+  function closePlantModal() {
+    document.getElementById("plant-modal-overlay").style.display = "none";
+    activePlantPlotIndex = null;
+  }
+
+  function plantStrain(plotIndex, strainId) {
+    const s = STRAIN_MAP[strainId];
+    if (!s || state.level < s.unlockLv || state.cash < s.cost) return;
+    state.cash -= s.cost;
+    state.plots[plotIndex] = {
+      state: "growing",
+      strainId: s.id,
+      startedAt: Date.now(),
+      duration: growTimeFor(s) * 1000,
+    };
+    render();
+  }
+
+  function harvestPlot(plotIndex) {
+    const plot = state.plots[plotIndex];
+    if (!plot || plot.state !== "ready") return;
+    const s = STRAIN_MAP[plot.strainId];
+    const rawTotal = totalInventory(state.rawInventory) + totalInventory(state.curedInventory);
+    if (rawTotal >= storageCap()) {
+      toast("📦 Storage full! Cure or sell before harvesting more.");
+      return;
+    }
+    state.rawInventory[s.id] = (state.rawInventory[s.id] || 0) + s.yield;
+    addXp(s.yield * 2);
+    state.plots[plotIndex] = { state: "empty" };
+    render();
+  }
+
+  function startCuring() {
+    if (state.curing) { toast("Curing shed is already running a batch."); return; }
+    const rawTotal = totalInventory(state.rawInventory);
+    if (rawTotal <= 0) { toast("No raw bud to cure."); return; }
+    state.curing = {
+      startedAt: Date.now(),
+      duration: cureDuration() * 1000,
+      batch: Object.assign({}, state.rawInventory),
+    };
+    state.rawInventory = {};
+    render();
+  }
+
+  function finishCuringIfDone() {
+    if (!state.curing) return;
+    const elapsed = Date.now() - state.curing.startedAt;
+    if (elapsed >= state.curing.duration) {
+      Object.entries(state.curing.batch).forEach(([id, qty]) => {
+        state.curedInventory[id] = (state.curedInventory[id] || 0) + qty;
+      });
+      toast("🔥 A batch finished curing!");
+      state.curing = null;
+    }
+  }
+
+  function sellAll() {
+    const curedTotal = totalInventory(state.curedInventory);
+    if (curedTotal <= 0) { toast("No cured bud to sell."); return; }
+    let earned = 0;
+    Object.entries(state.curedInventory).forEach(([id, qty]) => {
+      const s = STRAIN_MAP[id];
+      if (s) earned += qty * s.sell * CURE_MULTIPLIER * sellMultiplier();
+    });
+    earned = Math.round(earned);
+    state.cash += earned;
+    addXp(Math.max(1, Math.floor(earned / 10)));
+    state.curedInventory = {};
+    toast(`💰 Sold cured bud for $${formatNumber(earned)}!`);
+    render();
+  }
+
+  function buyExpandPlot() {
+    if (state.plots.length >= MAX_PLOTS) return;
+    const cost = costExpandPlot();
+    if (state.cash < cost) return;
+    state.cash -= cost;
+    state.plots.push({ state: "empty" });
+    render();
+  }
+  function buyGreenhouse() {
+    const cost = costGreenhouse();
+    if (state.cash < cost) return;
+    state.cash -= cost;
+    state.greenhouseLv += 1;
+    render();
+  }
+  function buyCuring() {
+    const cost = costCuring();
+    if (state.cash < cost) return;
+    state.cash -= cost;
+    state.curingLv += 1;
+    render();
+  }
+  function buyDispensary() {
+    const cost = costDispensary();
+    if (state.cash < cost) return;
+    state.cash -= cost;
+    state.dispensaryLv += 1;
+    render();
+  }
+  function buyStorage() {
+    const cost = costStorage();
+    if (state.cash < cost) return;
+    state.cash -= cost;
+    state.storageLv += 1;
+    render();
+  }
+
+  // ---- Rendering ----
+  function renderFarm() {
+    const grid = document.getElementById("farm-grid");
+    grid.innerHTML = "";
+    state.plots.forEach((plot, i) => {
+      const div = document.createElement("div");
+      div.className = "plot";
+      if (plot.state === "empty") {
+        div.innerHTML = `<span class="plus">+</span>`;
+        div.addEventListener("click", () => openPlantModal(i));
+      } else if (plot.state === "growing") {
+        const elapsed = Date.now() - plot.startedAt;
+        const pct = Math.min(1, elapsed / plot.duration);
+        const icon = pct < 0.33 ? "🌱" : pct < 0.75 ? "🌿" : "🍃";
+        div.innerHTML = `
+          <span class="label">${STRAIN_MAP[plot.strainId].name}</span>
+          <span>${icon}</span>
+          <div class="bar"><div class="bar-fill" style="width:${Math.round(pct*100)}%"></div></div>
+        `;
+        if (pct >= 1) {
+          plot.state = "ready";
+        }
+      } else if (plot.state === "ready") {
+        div.classList.add("ready");
+        div.innerHTML = `<span class="label">Ready!</span><span>🌾</span>`;
+        div.addEventListener("click", () => harvestPlot(i));
+      }
+      grid.appendChild(div);
+    });
+  }
+
+  function renderInventory() {
+    document.getElementById("raw-total").textContent = formatNumber(totalInventory(state.rawInventory));
+    document.getElementById("cured-total").textContent = formatNumber(totalInventory(state.curedInventory));
+    const cap = storageCap();
+    const used = totalInventory(state.rawInventory) + totalInventory(state.curedInventory);
+    document.getElementById("storage-label").textContent = `Storage: ${formatNumber(used)}/${formatNumber(cap)}`;
+
+    const cureBtn = document.getElementById("cure-btn");
+    if (state.curing) {
+      const elapsed = Date.now() - state.curing.startedAt;
+      const pct = Math.min(1, elapsed / state.curing.duration);
+      cureBtn.textContent = `🔥 Curing... ${Math.round(pct * 100)}%`;
+      cureBtn.disabled = true;
+    } else {
+      cureBtn.textContent = "🔥 Cure Raw Bud";
+      cureBtn.disabled = totalInventory(state.rawInventory) <= 0;
+    }
+    document.getElementById("sell-btn").disabled = totalInventory(state.curedInventory) <= 0;
+  }
+
+  function renderStrainList() {
+    const list = document.getElementById("strain-list");
+    list.innerHTML = "";
+    STRAINS.forEach(s => {
+      const locked = state.level < s.unlockLv;
+      const row = document.createElement("div");
+      row.className = "shop-item" + (locked ? " locked" : "");
+      row.innerHTML = `
+        <div>
+          <div class="name">${s.name}</div>
+          <div class="small">${locked ? "Unlocks at Lv." + s.unlockLv : `$${formatNumber(s.cost)} · ${Math.round(growTimeFor(s))}s grow · sells ~$${Math.round(s.sell*CURE_MULTIPLIER*sellMultiplier())} cured`}</div>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  function renderUpgrades() {
+    const list = document.getElementById("upgrade-list");
+    list.innerHTML = "";
+    const items = [
+      {
+        name: `Expand Plots (${state.plots.length}/${MAX_PLOTS})`,
+        desc: "Adds one more grow plot.",
+        cost: costExpandPlot(),
+        maxed: state.plots.length >= MAX_PLOTS,
+        onBuy: buyExpandPlot,
+      },
+      {
+        name: `Greenhouse Lv.${state.greenhouseLv}`,
+        desc: "Faster grow times (-5%/lv).",
+        cost: costGreenhouse(),
+        maxed: false,
+        onBuy: buyGreenhouse,
+      },
+      {
+        name: `Curing Shed Lv.${state.curingLv}`,
+        desc: "Faster curing (-10%/lv).",
+        cost: costCuring(),
+        maxed: false,
+        onBuy: buyCuring,
+      },
+      {
+        name: `Dispensary Lv.${state.dispensaryLv}`,
+        desc: "Higher sell prices (+15%/lv).",
+        cost: costDispensary(),
+        maxed: false,
+        onBuy: buyDispensary,
+      },
+      {
+        name: `Storage Silo Lv.${state.storageLv}`,
+        desc: "More inventory capacity (+25/lv).",
+        cost: costStorage(),
+        maxed: false,
+        onBuy: buyStorage,
+      },
+    ];
+    items.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "upgrade-item" + (item.maxed ? " maxed" : "");
+      row.innerHTML = `
+        <div>
+          <div class="name">${item.name}</div>
+          <div class="small">${item.desc}</div>
+        </div>
+        <button ${item.maxed || state.cash < item.cost ? "disabled" : ""}>${item.maxed ? "MAX" : "$" + formatNumber(item.cost)}</button>
+      `;
+      if (!item.maxed) {
+        row.querySelector("button").addEventListener("click", item.onBuy);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function renderHeader() {
+    document.getElementById("cash-val").textContent = formatNumber(state.cash);
+    document.getElementById("kief-val").textContent = formatNumber(state.kief);
+    document.getElementById("level-val").textContent = state.level;
+    const need = xpToNext(state.level);
+    document.getElementById("xp-fill").style.width = Math.min(100, (state.xp / need) * 100) + "%";
+    document.getElementById("xp-label").textContent = `${formatNumber(state.xp)}/${formatNumber(need)}`;
+  }
+
+  function render() {
+    renderHeader();
+    renderFarm();
+    renderInventory();
+    renderStrainList();
+    renderUpgrades();
+  }
+
+  // ---- Game loop ----
+  function tick() {
+    finishCuringIfDone();
+    render();
+  }
+
+  function applyOfflineProgress() {
+    const elapsedMs = Date.now() - (state.lastSaveTime || Date.now());
+    if (elapsedMs < 5000) return;
+    let anyReady = false;
+    state.plots.forEach(plot => {
+      if (plot.state === "growing") {
+        const totalElapsed = (Date.now() - plot.startedAt);
+        if (totalElapsed >= plot.duration) anyReady = true;
+      }
+    });
+    finishCuringIfDone();
+    if (anyReady) {
+      const mins = Math.round(elapsedMs / 60000);
+      toast(`🌤️ Welcome back! Some crops finished growing while you were away (~${mins} min).`);
+    }
+  }
+
+  // ---- Wire up static buttons ----
+  document.getElementById("cure-btn").addEventListener("click", startCuring);
+  document.getElementById("sell-btn").addEventListener("click", sellAll);
+  document.getElementById("close-modal").addEventListener("click", closePlantModal);
+  document.getElementById("plant-modal-overlay").addEventListener("click", (e) => {
+    if (e.target.id === "plant-modal-overlay") closePlantModal();
+  });
+
+  applyOfflineProgress();
+  render();
+  setInterval(tick, 250);
+  setInterval(saveState, 4000);
+  window.addEventListener("beforeunload", saveState);
+})();
+</script>
+</body>
+</html>
