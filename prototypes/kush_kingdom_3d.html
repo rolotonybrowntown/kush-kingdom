@@ -116,20 +116,24 @@
     box-shadow: 0 5px 16px rgba(0,0,0,0.4);
   }
 
-  /* ---------------- Joystick ---------------- */
+  /* ---------------- Joystick: floats to wherever the player first
+     touches down, so it works equally well left- or right-handed ---------------- */
   #joy-base {
-    position: absolute;
-    left: calc(var(--safe-l) + 22px);
-    bottom: calc(var(--safe-b) + 26px);
+    position: fixed;
+    top: 0; left: 0;
     width: 130px; height: 130px;
+    margin-left: -65px; margin-top: -65px;
     border-radius: 50%;
     background: radial-gradient(circle, rgba(143,224,138,0.13), rgba(10,26,18,0.5));
     border: 2px solid rgba(143,224,138,0.38);
-    touch-action: none;
     z-index: 8;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s ease;
   }
+  #joy-base.show { opacity: 1; }
   #joy-knob {
     position: absolute;
     left: 50%; top: 50%;
@@ -331,10 +335,10 @@
   var WALL_H = 9;
 
   var ROOM_TIERS = [
-    { retailMaxZ: 2,  camDist: 15 },
-    { retailMaxZ: 7,  camDist: 17 },
-    { retailMaxZ: 12, camDist: 19 },
-    { retailMaxZ: 17, camDist: 21 },
+    { retailMaxZ: 2,  camDist: 22 },
+    { retailMaxZ: 7,  camDist: 24 },
+    { retailMaxZ: 12, camDist: 26 },
+    { retailMaxZ: 17, camDist: 28 },
   ];
   var MAX_ROOM_TIER = ROOM_TIERS.length - 1;
   function retailMaxZForTier(t) { return ROOM_TIERS[t].retailMaxZ; }
@@ -599,6 +603,40 @@
     return finishTex(c, 2, 2, true);
   }
 
+  // loose potting soil: irregular dark clumps and crumbly speckle, no
+  // directional grain, so it reads as dirt rather than a wood-toned box
+  function makeSoilTexture() {
+    var S = 256;
+    var c = document.createElement("canvas");
+    c.width = c.height = S;
+    var g = c.getContext("2d");
+    g.fillStyle = "#ffffff"; g.fillRect(0, 0, S, S);
+    // big soft clumps first, for tonal variation
+    for (var i = 0; i < 70; i++) {
+      var sh = 130 + Math.random() * 70;
+      g.fillStyle = "rgba(" + sh + "," + (sh - 24) + "," + (sh - 44) + "," + (0.18 + Math.random() * 0.22) + ")";
+      var r = 6 + Math.random() * 16;
+      g.beginPath(); g.arc(Math.random() * S, Math.random() * S, r, 0, 6.283); g.fill();
+    }
+    // fine crumbly speckle on top
+    for (var j = 0; j < 900; j++) {
+      var sh2 = 90 + Math.random() * 90;
+      g.fillStyle = "rgba(" + sh2 + "," + (sh2 - 22) + "," + (sh2 - 40) + "," + (0.3 + Math.random() * 0.35) + ")";
+      g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 2.4, 1 + Math.random() * 2.4);
+    }
+    // occasional dark bits of mulch/bark
+    for (var k = 0; k < 40; k++) {
+      g.fillStyle = "rgba(40,26,16," + (0.35 + Math.random() * 0.3) + ")";
+      var bx = Math.random() * S, by = Math.random() * S;
+      g.save();
+      g.translate(bx, by);
+      g.rotate(Math.random() * 6.283);
+      g.fillRect(-2.5 - Math.random() * 2, -1, 5 + Math.random() * 4, 2);
+      g.restore();
+    }
+    return finishTex(c, 1.6, 1.6, true);
+  }
+
   // woven fabric for upholstery
   function makeFabricTexture() {
     var S = 128;
@@ -629,6 +667,7 @@
   var plankTex = makePlankTexture();
   var plasterTex = makePlasterTexture();
   var woodTex = makeWoodTexture();
+  var soilTex = makeSoilTexture();
   var fabricTex = makeFabricTexture();
   var glowTex = makeGlowTexture();
 
@@ -678,7 +717,7 @@
     wallTrim:    mat(0x9c7043, { map: woodTex, roughness: 0.5 }),
     windowGlass: mat(0xcfeef8, { transparent: true, opacity: 0.35, roughness: 0.04, metalness: 0.2 }),
     metal:       mat(0xb9c0c6, { roughness: 0.28, metalness: 0.85 }),
-    soil:      matFlat(0x6b4526, { roughness: 1 }),
+    soil:      matFlat(0x6b4526, { map: soilTex, roughness: 1 }),
     wood:      mat(0xc08a4e, { map: woodTex, roughness: 0.6 }),
     woodDark:  mat(0x7d5330, { map: woodTex, roughness: 0.6 }),
     plank:     mat(0xd7a869, { map: woodTex, roughness: 0.55 }),
@@ -1860,21 +1899,26 @@
       var cycle = 13;
       var t = ((now / 1000) + npc.phase) % cycle;
       var queueX = SELL_ZONE.x - 0.4 + (idx - 1) * 1.5;
-      var startZ = retailMaxZForTier(state.roomTier) - 1.5, queueZ = SELL_ZONE.z + 4.2;
+      var startZ = retailMaxZForTier(state.roomTier) - 1.5, queueZ = SELL_ZONE.z + 3.0;
       var walking;
       var z;
+      var phase;
       if (t < 5) {                     // walking in
         var p = t / 5;
         z = startZ + (queueZ - startZ) * p;
-        walking = true;
+        walking = true; phase = "in";
       } else if (t < 9.5) {            // waiting at the counter
         z = queueZ;
-        walking = false;
+        walking = false; phase = "wait";
       } else {                          // walking away
         var p2 = (t - 9.5) / (cycle - 9.5);
         z = queueZ + (startZ - queueZ) * p2;
-        walking = true;
+        walking = true; phase = "out";
       }
+      // the instant a customer arrives at the counter, they buy one bud off
+      // the pile (if there is one) — the actual sale, not just decoration
+      if (phase === "wait" && npc.lastPhase !== "wait") customerBuyBud();
+      npc.lastPhase = phase;
       npc.obj.position.set(queueX, 0, z);
       npc.obj.rotation.y = t < 9.5 ? Math.PI : 0;
       var swing = walking ? Math.sin(now * 0.009 + idx) * 0.5 : 0;
@@ -1919,6 +1963,10 @@
   });
   window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
 
+  // ---- Movement input: tap anywhere to walk there; press-and-drag anywhere
+  // to steer with an analog joystick that appears right under your thumb.
+  // One set of listeners on the canvas covers both, so it works equally well
+  // held in the left or right hand. ----
   var joyBase = document.getElementById("joy-base");
   var joyKnob = document.getElementById("joy-knob");
   var joyOn = false, joyVec = { x: 0, y: 0 }, joyId = null, JOY_MAX = 48;
@@ -1931,29 +1979,53 @@
     joyKnob.style.transform = "translate(calc(-50% + " + kx + "px), calc(-50% + " + ky + "px))";
     joyVec.x = kx / JOY_MAX; joyVec.y = ky / JOY_MAX;
   }
-  joyBase.addEventListener("pointerdown", function (e) {
-    joyOn = true; joyId = e.pointerId; joyBase.setPointerCapture(e.pointerId); setJoy(e); e.preventDefault();
-  });
-  joyBase.addEventListener("pointermove", function (e) { if (joyOn && e.pointerId === joyId) { setJoy(e); e.preventDefault(); } });
-  function joyEnd(e) {
-    if (e.pointerId !== joyId) return;
-    joyOn = false; joyVec.x = 0; joyVec.y = 0;
+  function showJoyAt(x, y) {
+    joyBase.style.left = x + "px";
+    joyBase.style.top = y + "px";
+    joyBase.classList.add("show");
+  }
+  function hideJoy() {
+    joyBase.classList.remove("show");
     joyKnob.style.transform = "translate(-50%, -50%)";
   }
-  joyBase.addEventListener("pointerup", joyEnd);
-  joyBase.addEventListener("pointercancel", joyEnd);
 
-  // tap anywhere on the field to walk there (nice on a phone)
   var tapTarget = null;
   var raycaster = new THREE.Raycaster();
   var ndc = new THREE.Vector2();
-  canvas.addEventListener("pointerdown", function (e) {
-    ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
-    ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  function walkToScreenPoint(clientX, clientY) {
+    ndc.x = (clientX / window.innerWidth) * 2 - 1;
+    ndc.y = -(clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(ndc, camera);
     var hit = raycaster.intersectObject(ground, false);
     if (hit.length) tapTarget = new THREE.Vector3(hit[0].point.x, 0, hit[0].point.z);
+  }
+
+  var joyStartX = 0, joyStartY = 0, joyDragged = false;
+  var JOY_DRAG_THRESHOLD = 10; // px of finger movement before it counts as a drag, not a tap
+  canvas.addEventListener("pointerdown", function (e) {
+    joyOn = true; joyId = e.pointerId; joyDragged = false;
+    joyStartX = e.clientX; joyStartY = e.clientY;
+    joyVec.x = 0; joyVec.y = 0;
+    showJoyAt(e.clientX, e.clientY);
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
+  canvas.addEventListener("pointermove", function (e) {
+    if (!joyOn || e.pointerId !== joyId) return;
+    if (!joyDragged && Math.hypot(e.clientX - joyStartX, e.clientY - joyStartY) > JOY_DRAG_THRESHOLD) {
+      joyDragged = true;
+    }
+    if (joyDragged) setJoy(e);
+    e.preventDefault();
+  });
+  function joyEnd(e) {
+    if (e.pointerId !== joyId) return;
+    joyOn = false; joyVec.x = 0; joyVec.y = 0;
+    hideJoy();
+    if (!joyDragged) walkToScreenPoint(e.clientX, e.clientY); // quick tap = walk there
+  }
+  canvas.addEventListener("pointerup", joyEnd);
+  canvas.addEventListener("pointercancel", joyEnd);
 
   function inputVector() {
     if (joyOn && (Math.abs(joyVec.x) > 0.06 || Math.abs(joyVec.y) > 0.06)) {
@@ -2029,13 +2101,11 @@
     var buds = 0;
     for (var i7 = 0; i7 < player.backpack.length; i7++) if (player.backpack[i7].type === "bud") buds++;
     if (!buds) return;
-    var earned = Math.round(buds * sellValue());
     player.backpack = player.backpack.filter(function (it) { return it.type !== "bud"; });
     syncStack();
+    // Delivered buds just join the counter pile — no cash yet. A customer
+    // has to actually walk up and buy one before any money appears.
     for (var pb = 0; pb < buds; pb++) dropBudOnCounter();
-    // payment lands as cash stacks beside the counter rather than going
-    // straight into the wallet — walk over them to pick it up
-    payOutCash(earned);
     renderUpgrades();
   }
 
@@ -2182,6 +2252,7 @@
     var col = within % perRow;
     m.userData.restY = 0.2 + layer * 0.34;
     m.userData.bornAt = performance.now();
+    m.userData.value = sellValue(); // locked in at drop-off time
     m.position.set(
       -1.85 + col * 0.53 + (row ? 0.26 : 0) + (Math.random() - 0.5) * 0.06,
       m.userData.restY + 2.2,               // starts high, falls into place
@@ -2193,7 +2264,7 @@
     lastPileAt = performance.now();
   }
 
-  var lastPileAt = 0, lastClearAt = 0;
+  var lastPileAt = 0;
   function updateCounterPile(now, dt) {
     for (var i = 0; i < pileMeshes.length; i++) {
       var m = pileMeshes[i];
@@ -2206,13 +2277,19 @@
         m.position.y = m.userData.restY;
       }
     }
-    // customers slowly clear the counter, but only once a few have stacked up,
-    // so a small delivery stays on display long enough to see
-    if (pileMeshes.length > 4 && now - lastClearAt > 3400) {
-      var old = pileMeshes.shift();
-      counterPile.remove(old);
-      lastClearAt = now;
-    }
+    // The pile is no longer cleared on a timer — see customerBuyBud(), called
+    // from updateNpcs() when a customer actually reaches the counter.
+  }
+
+  // a customer at the counter buys the oldest bud on the pile: it vanishes,
+  // and its value pays out as cash on the tray — no dialogue, just the
+  // physical hand-off
+  function customerBuyBud() {
+    if (!pileMeshes.length) return false;
+    var m = pileMeshes.shift();
+    counterPile.remove(m);
+    payOutCash(m.userData.value || sellValue());
+    return true;
   }
 
   function updatePlotStates() {
@@ -2520,6 +2597,17 @@
     tag.position.set(0, st.kiosk ? 3.5 : 5.4, 0);
     g.add(tag);
     st.tag = tag;
+
+    // clear square marker showing exactly where to stand to pay — same
+    // dashed-outline language as the locked-plot pads, so "step here to
+    // spend money" reads consistently everywhere in the shop
+    var payDash = new THREE.Mesh(
+      new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
+    );
+    payDash.rotation.x = -Math.PI / 2;
+    payDash.position.y = 0.27;
+    g.add(payDash);
 
     // floor arc, sitting outside the kiosk base, that sweeps round as money
     // is poured in (the base would hide a plain filling disc)
