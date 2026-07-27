@@ -75,24 +75,19 @@
     flex-shrink: 0;
   }
   .chip.cash .icon { background: linear-gradient(180deg, #6fd68a, #23834f); }
-  .chip.pack .icon { background: linear-gradient(180deg, #d8a45c, #8a5c33); }
+  /* the bag chip is a warning now, not a readout: it only appears when full */
+  .chip.pack { display: none; }
+  .chip.pack.on { display: flex; animation: packpulse 0.9s ease-in-out infinite; }
+  .chip.pack .icon { background: linear-gradient(180deg, #f0a35c, #a8451f); }
+  .chip.pack span { color: #ffc9a3; letter-spacing: 0.5px; }
+  @keyframes packpulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
+  }
   .chip.boost { display: none; }
   .chip.boost.on { display: flex; }
   .chip.boost .icon { background: linear-gradient(180deg, #7fe6f5, #2f7d8f); }
   .chip.boost span { color: #9fe8ff; }
-
-  #packbar {
-    width: 100%; height: 5px;
-    border-radius: 4px;
-    background: rgba(255,255,255,0.16);
-    overflow: hidden;
-    margin-top: 5px;
-  }
-  #packfill {
-    height: 100%; width: 0%;
-    background: linear-gradient(90deg, var(--green-light), var(--gold));
-    transition: width 0.14s;
-  }
 
   #objective {
     position: absolute;
@@ -115,6 +110,7 @@
     text-overflow: ellipsis;
     box-shadow: 0 5px 16px rgba(0,0,0,0.4);
   }
+  #objective.hidden { display: none; }
 
   /* ---------------- Joystick: floats to wherever the player first
      touches down, so it works equally well left- or right-handed ---------------- */
@@ -254,13 +250,7 @@
   <div id="hud-top">
     <div class="chip-stack">
       <div class="chip cash"><div class="icon">💵</div><span id="cash-val">0</span></div>
-      <div class="chip pack">
-        <div class="icon">🎒</div>
-        <div style="display:flex;flex-direction:column;flex:1;">
-          <span id="pack-val">0/0</span>
-          <div id="packbar"><div id="packfill"></div></div>
-        </div>
-      </div>
+      <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
     </div>
   </div>
@@ -314,7 +304,7 @@
   var SAVE_KEY = "kushKingdom3D_v3";
 
   var BASE_SPEED = 7.2;
-  var BASE_GROW_TIME = 9;
+  var BASE_GROW_TIME = 6;
   var BASE_SELL_VALUE = 6;
   var BASE_CAP = 5;
   var SEED_COOLDOWN = 300;
@@ -393,9 +383,8 @@
   // one pay tile per row, sitting beside column 0 of that row
   var ROW_TILE_X = -((PLOT_COLS - 1) * PLOT_SPACING_X) / 2 - PLOT_SPACING_X + 1.3;
   var ROW_TILE_HALF = (PLOT_SIZE + 0.5) / 2;
-  function rowCost(rowNum) { return Math.round(600 * Math.pow(3, rowNum - 1)); }
-  // lighting a whole row costs roughly what four separate beds used to
-  function rowLightCost(lv) { return Math.round(220 * Math.pow(1.9, lv)); }
+  function rowCost(rowNum) { return Math.round(200 * Math.pow(3.2, rowNum - 1)); }
+  function rowLightCost(lv) { return Math.round(250 * Math.pow(1.9, lv)); }
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
 
   // ===================================================================
@@ -406,6 +395,7 @@
       cash: 25,
       capLv: 0, speedLv: 0, sellLv: 0,
       botanistLv: 0,          // hired botanists who plant seeds for you
+      tutSeen: {},            // one-shot "what to do next" prompts already shown
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
       // grow-light level per row (every bed in a row lights up together)
@@ -456,6 +446,7 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
+      if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
         merged.roomTier = 0;
@@ -475,8 +466,24 @@
   }
 
   function moveSpeed()   { return BASE_SPEED * (1 + 0.11 * state.speedLv); }
-  function sellValue()   { return BASE_SELL_VALUE * (1 + 0.15 * state.sellLv); }
   function backpackCap() { return BASE_CAP + state.capLv; }
+
+  // Each strain adds a flat $4 a bud, and every tenth one is a step change
+  // that doubles the lot — so there's always a big one to save toward.
+  //   Lv.0 $6 · Lv.1 $10 · Lv.9 $42 · Lv.10 $92 · Lv.20 $344
+  function sellValue() {
+    var lv = state.sellLv || 0;
+    return (BASE_SELL_VALUE + 4 * lv) * Math.pow(2, Math.floor(lv / 10));
+  }
+  var STRAIN_NAMES = [
+    "Bag Seed", "Green Crack", "Sour Diesel", "Blue Dream", "Gelato",
+    "Wedding Cake", "Purple Punch", "Zkittlez", "Runtz", "Gorilla Glue",
+  ];
+  function strainName(lv) {
+    var tier = Math.floor(lv / STRAIN_NAMES.length);
+    var base = STRAIN_NAMES[lv % STRAIN_NAMES.length];
+    return tier > 0 ? base + " #" + (tier + 1) : base;
+  }
 
   function boostActive()  { return Date.now() < (state.boostUntil || 0); }
   function boostSecsLeft() { return Math.max(0, Math.ceil(((state.boostUntil || 0) - Date.now()) / 1000)); }
@@ -492,11 +499,11 @@
     return Math.max(t, 0.8);
   }
 
-  function costCap()   { return Math.round(60 * Math.pow(1.6, state.capLv)); }
-  function costSpeed() { return Math.round(50 * Math.pow(1.6, state.speedLv)); }
-  function costSell()  { return Math.round(80 * Math.pow(1.7, state.sellLv)); }
-  function costBoost() { return 140; }
-  function costBotanist() { return Math.round(450 * Math.pow(2.4, state.botanistLv || 0)); }
+  function costCap()   { return Math.round(45 * Math.pow(1.55, state.capLv)); }
+  function costSpeed() { return Math.round(40 * Math.pow(1.55, state.speedLv)); }
+  function costSell()  { return Math.round(69 * Math.pow(1.5, state.sellLv)); }
+  function costBoost() { return 100; }
+  function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -802,6 +809,8 @@
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
     pants:     mat(0x3b5b8a, { map: fabricTex, roughness: 0.9 }),
+    energyCan: mat(0x1668c8, { roughness: 0.3, metalness: 0.55 }),
+    energyBand:mat(0xf5d13b, { roughness: 0.35, metalness: 0.4 }),
     apron:     mat(0x2f7d4f, { map: fabricTex, roughness: 0.95 }),
     strawHat:  mat(0xc9a355, { map: fabricTex, roughness: 0.9 }),
     strawHatDk:mat(0xa8853f, { map: fabricTex, roughness: 0.9 }),
@@ -1247,30 +1256,38 @@
   (function breakRoom() {
     var g = new THREE.Group();
 
-    // vending machine
+    // an oversized energy drink can, standing in for the old vending machine
     var vend = new THREE.Group();
-    var vBody = new THREE.Mesh(new THREE.BoxGeometry(2.4, 4.4, 1.3), M.vending);
-    vBody.position.y = 2.2; vBody.castShadow = true; vBody.receiveShadow = true;
-    vend.add(vBody);
-    var vGlass = new THREE.Mesh(new THREE.BoxGeometry(1.7, 3.0, 0.08), M.counterGlass);
-    vGlass.position.set(-0.25, 2.6, 0.68);
-    vend.add(vGlass);
-    for (var r = 0; r < 3; r++) {
-      for (var c = 0; c < 3; c++) {
-        var can = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.4, 10),
-          [M.packA, M.packB, M.packC][(r + c) % 3]);
-        can.position.set(-0.9 + c * 0.44, 1.55 + r * 0.9, 0.5);
-        vend.add(can);
-      }
-    }
-    var vPanel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.1), M.dark);
-    vPanel.position.set(0.82, 2.9, 0.68);
-    vend.add(vPanel);
-    addGlow(vend, -0.25, 2.6, 0.9, 3.2, 0x9fd4ff, 0.3);
-    var vLabel = textSprite("REFUEL", "#bfe8ff");
-    vLabel.scale.set(1.9, 0.5, 1);
-    vLabel.position.set(0, 4.75, 0.2);
+    var canBody = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.15, 3.6, 24), M.energyCan);
+    canBody.position.y = 2.0; canBody.castShadow = true; canBody.receiveShadow = true;
+    vend.add(canBody);
+    // pinched rims top and bottom, so it reads as a drinks can not a barrel
+    [[0.42, 3.72], [0.42, 0.28]].forEach(function (r2) {
+      var rim = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.15, r2[0], 24), M.metal);
+      rim.position.y = r2[1];
+      rim.castShadow = true;
+      vend.add(rim);
+    });
+    var lid = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.12, 24), M.metal);
+    lid.position.y = 3.94;
+    vend.add(lid);
+    var tab = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.05, 6, 12), M.metal);
+    tab.rotation.x = -Math.PI / 2;
+    tab.position.set(0.28, 4.02, 0);
+    vend.add(tab);
+    // banded flash across the middle
+    var band = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 0.9, 24), M.energyBand);
+    band.position.y = 1.75;
+    vend.add(band);
+    addGlow(vend, 0, 2.2, 1.0, 3.4, 0x8fe6ff, 0.3);
+    var vLabel = textSprite("ENERGY", "#eafcff");
+    vLabel.scale.set(2.1, 0.55, 1);
+    vLabel.position.set(0, 1.75, 1.22);
     vend.add(vLabel);
+    var vTop = textSprite("ENERGY", "#bfe8ff");
+    vTop.scale.set(1.9, 0.5, 1);
+    vTop.position.set(0, 4.6, 0.2);
+    vend.add(vTop);
     vend.position.set(VEND_ZONE.x, 0, VEND_ZONE.z);
     g.add(vend);
 
@@ -1367,7 +1384,6 @@
     scene.add(g);
   })();
 
-  var sellCoin;
   var counterTiers = [], counterTopMesh = null;
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   (function dispensaryCounter() {
@@ -1474,12 +1490,6 @@
     neon.scale.set(1.25, 0.42, 1);
     neon.position.set(2.1, 3.0, -1.42);
     g.add(neon);
-
-    sellCoin = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.52, 0.13, 10), M.accent);
-    sellCoin.rotation.x = Math.PI / 2;
-    sellCoin.position.set(0, 4.5, -0.1);
-    sellCoin.castShadow = true;
-    g.add(sellCoin);
 
     // ---- counter fit-out that levels up with Street Value ----
     // a second till at Lv.2, a third plus a premium stone top at Lv.4
@@ -1724,32 +1734,25 @@
   }
   for (var pi = 0; pi < plotDefs.length; pi++) plotObjects.push(makePlot(pi));
 
-  // ---- one pay tile per row, sitting snug against column 0 — stand here to
-  // unlock the whole row of beds at once, instead of paying per bed ----
-  var rowTiles = [];
-  function makeRowTile(rowIdx) {
-    var rz = plotDefs[rowIdx * PLOT_COLS].z;
+  // ---- the one and only "stand here to buy" square ----
+  // Every purchasable upgrade in the shop uses this exact widget, so a player
+  // who learns one has learned all of them: tinted floor patch, dashed
+  // outline, a bar that fills as money goes in, a label and a running price.
+  function makePaySquare(half, color, hex, labelText, worldZ) {
     var g = new THREE.Group();
-    var TW = ROW_TILE_HALF * 2;
-    var y0 = floorTopAt(rz);
+    var W = half * 2;
+    var y0 = floorTopAt(worldZ);
+
     var tint = new THREE.Mesh(
-      new THREE.PlaneGeometry(TW, TW),
-      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.32, depthWrite: false })
+      new THREE.PlaneGeometry(W, W),
+      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.32, depthWrite: false })
     );
     tint.rotation.x = -Math.PI / 2;
     tint.position.y = y0 + 0.01;
     g.add(tint);
 
-    var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(TW, TW),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
-    );
-    dash.rotation.x = -Math.PI / 2;
-    dash.position.y = y0 + 0.03;
-    g.add(dash);
-
     var fill = new THREE.Mesh(
-      new THREE.PlaneGeometry(TW - 0.2, TW - 0.2),
+      new THREE.PlaneGeometry(W - 0.2, W - 0.2),
       new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.6, depthWrite: false })
     );
     fill.rotation.x = -Math.PI / 2;
@@ -1757,20 +1760,42 @@
     fill.scale.z = 0.001;
     g.add(fill);
 
-    var priceSprite = textSprite("$0", "#ffe066");
-    priceSprite.scale.set(2.6, 0.98, 1);
-    priceSprite.position.y = 2.0;
-    g.add(priceSprite);
+    var dash = new THREE.Mesh(
+      new THREE.PlaneGeometry(W, W),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
+    );
+    dash.rotation.x = -Math.PI / 2;
+    dash.position.y = y0 + 0.03;
+    g.add(dash);
 
-    var lbl = textSprite("ADD ROW", "#ffe066");
+    var price = textSprite("$0", hex);
+    price.scale.set(2.6, 0.98, 1);
+    price.position.y = 2.0;
+    g.add(price);
+
+    var lbl = textSprite(labelText, hex);
     lbl.scale.set(2.4, 0.55, 1);
     lbl.position.y = 2.7;
     g.add(lbl);
 
-    g.position.set(ROW_TILE_X, 0, rz);
-    g.visible = false;
-    scene.add(g);
-    return { group: g, tint: tint, dash: dash, fill: fill, price: priceSprite, lbl: lbl };
+    return { group: g, tint: tint, dash: dash, fill: fill, price: price, lbl: lbl, half: half };
+  }
+
+  // fills the bar left-to-right as `prog` (0..1) of the price is paid
+  function setPaySquareProgress(sq, prog) {
+    sq.fill.scale.z = Math.max(0.001, prog);
+    sq.fill.position.z = -(sq.half * 2 - 0.2) / 2 * (1 - prog);
+  }
+
+  // ---- one pay tile per row, sitting snug against column 0 ----
+  var rowTiles = [];
+  function makeRowTile(rowIdx) {
+    var rz = plotDefs[rowIdx * PLOT_COLS].z;
+    var sq = makePaySquare(ROW_TILE_HALF, 0xffd35c, "#ffe066", "ADD ROW", rz);
+    sq.group.position.set(ROW_TILE_X, 0, rz);
+    sq.group.visible = false;
+    scene.add(sq.group);
+    return sq;
   }
   for (var ri = 0; ri < PLOT_ROWS; ri++) rowTiles.push(makeRowTile(ri));
 
@@ -1821,14 +1846,15 @@
         updateSpriteText(rt.price, "$" + fmt(remain), off.hex);
         rt.price.userData.last = remain;
       }
-      var prog = Math.min(1, paid / off.cost);
-      rt.fill.scale.z = Math.max(0.001, prog);
-      rt.fill.position.z = -(ROW_TILE_HALF * 2 - 0.2) / 2 * (1 - prog);
+      setPaySquareProgress(rt, Math.min(1, paid / off.cost));
       rt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
     }
   }
 
-  // ---- grow-light fixtures hanging over each bed, one bar per level ----
+  // ---- how a bed shows its light level ----
+  // Nothing hangs above the bed any more: overhead rigs sat right in the
+  // camera's line of sight and hid the beds underneath them. The level now
+  // reads from the bed's own fitting plus a glow pooled on the floor.
   var lightRigs = [];
   function refreshPlotLights() {
     for (var i = 0; i < plotDefs.length; i++) {
@@ -1857,37 +1883,16 @@
       while (rig.children.length) rig.remove(rig.children[0]);
       if (lv <= 0) continue;
 
-      var rigY = 4.3;
-      // hanger cables + frame
-      [-1, 1].forEach(function (sgn) {
-        var cable = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, WALL_H - rigY, 6), M.dark);
-        cable.position.set(sgn * 1.1, rigY + (WALL_H - rigY) / 2, 0);
-        rig.add(cable);
-      });
-      var frame = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.16, 1.5), M.metalRack);
-      frame.position.y = rigY; frame.castShadow = true;
-      rig.add(frame);
-      // one glowing tube per level
-      for (var b = 0; b < lv; b++) {
-        var off = (b - (lv - 1) / 2) * 0.46;
-        var tube = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.12, 0.3), M.growLight);
-        tube.position.set(0, rigY - 0.16, off);
-        rig.add(tube);
-      }
-      addGlow(rig, 0, rigY - 0.5, 0, 3.2 + lv * 0.4, 0xd08bff, 0.05 + lv * 0.02);
       var pool = new THREE.Mesh(
         new THREE.CircleGeometry(2.0, 20),
         new THREE.MeshBasicMaterial({
           map: glowTex, color: 0xc98bff, transparent: true,
-          opacity: 0.05 + lv * 0.018, blending: THREE.AdditiveBlending, depthWrite: false,
+          opacity: 0.10 + lv * 0.05, blending: THREE.AdditiveBlending, depthWrite: false,
         })
       );
       pool.rotation.x = -Math.PI / 2;
-      pool.position.y = 0.9;
+      pool.position.y = (lv >= 3 ? 1.62 : 0.86);
       rig.add(pool);
-      var pl = new THREE.PointLight(0xd39bff, 0.12 + lv * 0.07, 7, 2);
-      pl.position.set(0, rigY - 0.7, 0);
-      rig.add(pl);
     }
   }
   refreshPlotLights();
@@ -2061,48 +2066,83 @@
       var l1 = new THREE.Mesh(lgeo, M.pants); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
       var l2 = new THREE.Mesh(lgeo, M.pants); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
       g.add(l1); g.add(l2);
+      // order bubble above their head: how many buds they still want
+      var bubble = textSprite("x1", "#ffe98a");
+      bubble.scale.set(1.5, 0.62, 1);
+      bubble.position.y = 3.05;
+      bubble.visible = false;
+      g.add(bubble);
       g.scale.setScalar(0.95);
       scene.add(g);
       npcs.push({
-        obj: g, l1: l1, l2: l2,
-        phase: n * 2.4,
+        obj: g, l1: l1, l2: l2, bubble: bubble,
+        phase: n * 1.9,
         slot: n,
+        want: 0, shown: -1, buyAcc: 0,
       });
     }
   })();
 
+  // Bigger operations draw bigger orders, so demand keeps pace with supply.
+  function rollOrder() {
+    var reach = 1 + Math.floor((state.plotsUnlocked || PLOT_COLS) / PLOT_COLS);
+    return 1 + Math.floor(Math.random() * (reach + 1));
+  }
+
+  var NPC_CYCLE = 7.0, NPC_IN = 2.2, NPC_WAIT_END = 5.4;
+  var NPC_BUY_EVERY = 0.28;   // seconds between buds handed over
+
   function updateNpcs(now, dt) {
     npcs.forEach(function (npc, idx) {
       // walk up toward the gate, pause at the counter queue, loop back off-screen
-      var cycle = 13;
-      var t = ((now / 1000) + npc.phase) % cycle;
+      var t = ((now / 1000) + npc.phase) % NPC_CYCLE;
       var queueX = SELL_ZONE.x - 0.4 + (idx - 1) * 1.5;
       var startZ = retailMaxZForTier(state.roomTier) - 1.5, queueZ = SELL_ZONE.z + 3.0;
-      var walking;
-      var z;
-      var phase;
-      if (t < 5) {                     // walking in
-        var p = t / 5;
-        z = startZ + (queueZ - startZ) * p;
+      var walking, z, phase;
+      if (t < NPC_IN) {                       // walking in
+        z = startZ + (queueZ - startZ) * (t / NPC_IN);
         walking = true; phase = "in";
-      } else if (t < 9.5) {            // waiting at the counter
+      } else if (t < NPC_WAIT_END) {          // at the counter
         z = queueZ;
         walking = false; phase = "wait";
-      } else {                          // walking away
-        var p2 = (t - 9.5) / (cycle - 9.5);
+      } else {                                // walking away
+        var p2 = (t - NPC_WAIT_END) / (NPC_CYCLE - NPC_WAIT_END);
         z = queueZ + (startZ - queueZ) * p2;
         walking = true; phase = "out";
       }
-      // the instant a customer arrives at the counter, they buy one bud off
-      // the pile (if there is one) — the actual sale, not just decoration
-      if (phase === "wait" && npc.lastPhase !== "wait") customerBuyBud();
+
+      // a fresh order is decided on the way in, so the bubble is readable
+      // before they reach the counter
+      if (phase === "in" && npc.lastPhase !== "in") {
+        npc.want = rollOrder();
+        npc.buyAcc = 0;
+      }
+      // at the counter they take buds off the pile one at a time — if the
+      // pile runs dry the rest of the order goes unfilled, which is the
+      // signal to go grow more
+      if (phase === "wait") {
+        npc.buyAcc += dt;
+        while (npc.want > 0 && npc.buyAcc >= NPC_BUY_EVERY) {
+          npc.buyAcc -= NPC_BUY_EVERY;
+          if (!customerBuyBud()) break;
+          npc.want--;
+        }
+      }
       npc.lastPhase = phase;
+
+      var showBubble = npc.want > 0 && phase !== "out";
+      npc.bubble.visible = showBubble;
+      if (showBubble && npc.shown !== npc.want) {
+        updateSpriteText(npc.bubble, "🌿 x" + npc.want, "#ffe98a");
+        npc.shown = npc.want;
+      }
+
       npc.obj.position.set(queueX, 0, z);
-      npc.obj.rotation.y = t < 9.5 ? Math.PI : 0;
-      var swing = walking ? Math.sin(now * 0.009 + idx) * 0.5 : 0;
+      npc.obj.rotation.y = t < NPC_WAIT_END ? Math.PI : 0;
+      var swing = walking ? Math.sin(now * 0.011 + idx) * 0.5 : 0;
       npc.l1.rotation.x = swing;
       npc.l2.rotation.x = -swing;
-      npc.obj.position.y = walking ? Math.abs(Math.sin(now * 0.009 + idx)) * 0.06 : 0;
+      npc.obj.position.y = walking ? Math.abs(Math.sin(now * 0.011 + idx)) * 0.06 : 0;
     });
   }
 
@@ -2381,10 +2421,22 @@
     if (d2(player.pos.x, player.pos.z, SEED_ZONE.x, SEED_ZONE.z) > SEED_ZONE.r + PLAYER_RADIUS) return;
     if (player.backpack.length >= backpackCap()) return;
     if (now - player.lastSeed < SEED_COOLDOWN) return;
+    // Only take as many seeds as there are beds waiting for one. Filling the
+    // whole bag with seeds used to lock you out of harvesting — no room for
+    // the buds — which stalled earnings completely.
+    var seeds = 0, openBeds = 0;
+    for (var s0 = 0; s0 < player.backpack.length; s0++) {
+      if (player.backpack[s0].type === "seed") seeds++;
+    }
+    for (var b0 = 0; b0 < state.plotsUnlocked; b0++) {
+      if (state.plots[b0].state === "empty") openBeds++;
+    }
+    if (seeds >= openBeds) return;
     player.backpack.push({ type: "seed" });
     player.lastSeed = now;
     syncStack();
     addFloater(player.pos.x, 3.1, player.pos.z, "+SEED", "#ffe066");
+    markTut("seed");
   }
 
   function handlePlots() {
@@ -2400,6 +2452,7 @@
             syncStack();
             state.plots[i6] = { state: "growing", startedAt: Date.now(), duration: growTimeFor(i6) * 1000 };
             addFloater(d.x, 2.3, d.z, "PLANTED", "#9df0a0");
+            markTut("plant");
             break;
           }
         }
@@ -2408,6 +2461,7 @@
         syncStack();
         state.plots[i6] = { state: "empty" };
         addFloater(d.x, 2.5, d.z, "+BUD", "#a8f57a");
+        markTut("harvest");
       }
     }
   }
@@ -2427,6 +2481,7 @@
     // Delivered buds just join the counter pile — no cash yet. A customer
     // has to actually walk up and buy one before any money appears.
     for (var pb = 0; pb < buds; pb++) dropBudOnCounter();
+    markTut("sell");
     renderUpgrades();
   }
 
@@ -2532,6 +2587,7 @@
     var onPad = Math.abs(player.pos.x - CASH_PAD.x) <= CASH_PAD.half + PLAYER_RADIUS &&
                 Math.abs(player.pos.z - CASH_PAD.z) <= CASH_PAD.half + PLAYER_RADIUS;
     if (onPad && pendingCash > 0) {
+      markTut("collect");
       var claimed = pendingCash;
       state.cash += claimed;
       pendingCash = 0;
@@ -2743,9 +2799,26 @@
   //  HUD / SHOP
   // ===================================================================
   var cashEl = document.getElementById("cash-val");
-  var packEl = document.getElementById("pack-val");
-  var packFill = document.getElementById("packfill");
+  var packChip = document.getElementById("pack-chip");
   var objEl = document.getElementById("objective");
+
+  // These prompts are a tutorial, not a permanent HUD: each one stops showing
+  // the first time the player actually does that thing, and once they've done
+  // all of them the bar goes away for good.
+  var TUT_STEPS = [
+    { key: "collect", text: "💵 Grab your cash by the till" },
+    { key: "sell",    text: "🏪 Take your buds out to the counter" },
+    { key: "harvest", text: "🌾 A bed is ready — harvest it" },
+    { key: "plant",   text: "🌱 Stand on an empty bed to plant" },
+    { key: "seed",    text: "🎒 Grab seed packs from the back room" },
+  ];
+  function tutDone(key) { return !!(state.tutSeen && state.tutSeen[key]); }
+  function markTut(key) {
+    if (!state.tutSeen) state.tutSeen = {};
+    if (state.tutSeen[key]) return;
+    state.tutSeen[key] = true;
+    renderHud();
+  }
 
   function objective() {
     var hasSeed = false, hasBud = false, anyReady = false, anyEmpty = false;
@@ -2757,12 +2830,18 @@
       if (state.plots[b].state === "ready") anyReady = true;
       if (state.plots[b].state === "empty") anyEmpty = true;
     }
-    if (pendingCash > 0) return "💵 Grab your cash by the till";
-    if (hasBud) return "🏪 Take your buds out to the counter";
-    if (anyReady) return "🌾 A bed is ready — harvest it";
-    if (hasSeed && anyEmpty) return "🌱 Stand on an empty bed to plant";
-    if (anyEmpty) return "🎒 Grab seed packs from the back room";
-    return "⏳ Wait for your plants to grow";
+    var applies = {
+      collect: pendingCash > 0,
+      sell:    hasBud,
+      harvest: anyReady,
+      plant:   hasSeed && anyEmpty,
+      seed:    anyEmpty,
+    };
+    for (var i = 0; i < TUT_STEPS.length; i++) {
+      var s = TUT_STEPS[i];
+      if (applies[s.key] && !tutDone(s.key)) return s.text;
+    }
+    return "";
   }
 
   var boostChip = document.getElementById("boost-chip");
@@ -2770,10 +2849,11 @@
 
   function renderHud() {
     cashEl.textContent = fmt(state.cash);
-    var cap = backpackCap();
-    packEl.textContent = player.backpack.length + "/" + cap;
-    packFill.style.width = Math.min(100, (player.backpack.length / cap) * 100) + "%";
-    objEl.textContent = objective();
+    // the bag only speaks up when it's full and blocking you
+    packChip.classList.toggle("on", player.backpack.length >= backpackCap());
+    var obj = objective();
+    objEl.textContent = obj;
+    objEl.classList.toggle("hidden", !obj);
     if (boostActive()) {
       boostChip.classList.add("on");
       boostVal.textContent = boostSecsLeft() + "s";
@@ -2804,7 +2884,7 @@
       buy: function () { state.capLv++; },
     },
     {
-      id: "speed", label: "REFUEL", icon: "\u26a1", x: VEND_ZONE.x, z: VEND_ZONE.z,
+      id: "speed", label: "ENERGY", icon: "\u26a1", x: VEND_ZONE.x, z: VEND_ZONE.z,
       color: 0x7fc4ff, kiosk: false,
       name: function () { return "Energy Drink"; },
       desc: function () { return "Lv." + state.speedLv + " \u00b7 +11% move speed, permanently"; },
@@ -2849,12 +2929,20 @@
       },
     },
     {
-      id: "value", label: "PRICING", icon: "\ud83d\udcb5", x: PRICE_ZONE.x, z: PRICE_ZONE.z,
+      id: "value", label: "STRAIN", icon: "\ud83c\udf3f", x: PRICE_ZONE.x, z: PRICE_ZONE.z,
       color: 0xd6685b, kiosk: true,
-      name: function () { return "Street Value"; },
-      desc: function () { return "$" + sellValue().toFixed(1) + " per bud at the counter"; },
+      name: function () { return "Buy a New Strain"; },
+      desc: function () {
+        var lv = state.sellLv || 0;
+        var next = (BASE_SELL_VALUE + 4 * (lv + 1)) * Math.pow(2, Math.floor((lv + 1) / 10));
+        return strainName(lv) + " → " + strainName(lv + 1) +
+               " · $" + fmt(sellValue()) + " → $" + fmt(next) + " per bud";
+      },
       cost: costSell,
-      buy: function () { state.sellLv++; },
+      buy: function () {
+        state.sellLv++;
+        toast("🌿 Now selling " + strainName(state.sellLv) + " — $" + fmt(sellValue()) + " a bud!");
+      },
     },
     {
       id: "expand", label: "EXPAND", icon: "\ud83c\udfd7\ufe0f", x: EXPAND_STATION.x, z: EXPAND_STATION.z,
@@ -2876,90 +2964,44 @@
     },
   ];
   var STATION_R = 2.6;
+  var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
 
   // ---- build the kiosks ----
   var stationGroup = new THREE.Group();
   scene.add(stationGroup);
   stationDefs.forEach(function (st) {
-    var g = new THREE.Group();
+    // Identical pay square to the row tiles — one interaction to learn.
+    var sq = makePaySquare(STATION_PAD_HALF, st.color, "#ffe066", st.label, st.z);
+    var g = sq.group;
 
-    // Back-of-house stations attach to a real fitting (locker, vending
-    // machine, hydro tank), so they only need the tag + payment ring.
-    // Retail stations get a standalone kiosk to stand at.
+    // Retail stations get a kiosk fitting, but it sits *behind* the square
+    // rather than on it, so the square is always clear to stand on.
     if (st.kiosk) {
+      var kiosk = new THREE.Group();
       var base = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.2, 0.3, 20), M.counter);
       base.position.y = 0.4; base.receiveShadow = true; base.castShadow = true;
-      g.add(base);
+      kiosk.add(base);
       var post = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 1.5, 14), M.metal);
       post.position.y = 1.2; post.castShadow = true;
-      g.add(post);
+      kiosk.add(post);
       var headUnit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.15, 0.34), M.dark);
       headUnit.position.y = 2.35; headUnit.rotation.x = -0.22; headUnit.castShadow = true;
-      g.add(headUnit);
+      kiosk.add(headUnit);
       var face = new THREE.Mesh(new THREE.PlaneGeometry(1.45, 0.9),
         new THREE.MeshStandardMaterial({ color: st.color, emissive: st.color, emissiveIntensity: 0.55, roughness: 0.5 }));
       face.position.set(0, 2.35, 0.2); face.rotation.x = -0.22;
-      g.add(face);
-      addGlow(g, 0, 2.35, 0.35, 3.0, st.color, 0.32);
-
+      kiosk.add(face);
+      addGlow(kiosk, 0, 2.35, 0.35, 3.0, st.color, 0.32);
       var icon = textSprite(st.icon, "#ffffff");
       icon.scale.set(0.95, 0.95, 1);
       icon.position.set(0, 2.55, 0.28);
-      g.add(icon);
-      var lbl = textSprite(st.label, "#ffffff");
-      lbl.scale.set(1.7, 0.42, 1);
-      lbl.position.set(0, 2.02, 0.3);
-      g.add(lbl);
+      kiosk.add(icon);
+      kiosk.position.z = -(STATION_PAD_HALF + 1.1);
+      g.add(kiosk);
     }
 
-    // floating price tag, refreshed as levels/costs change
-    var tag = textSprite("$0", "#ffe066");
-    tag.scale.set(1.9, 0.62, 1);
-    tag.position.set(0, st.kiosk ? 3.5 : 5.4, 0);
-    g.add(tag);
-    st.tag = tag;
-
-    // clear square marker showing exactly where to stand to pay — same
-    // dashed-outline language as the locked-plot pads, so "step here to
-    // spend money" reads consistently everywhere in the shop
-    var payTint = new THREE.Mesh(
-      new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
-      new THREE.MeshBasicMaterial({ color: st.color, transparent: true, opacity: 0.22, depthWrite: false })
-    );
-    var stY = floorTopAt(st.z);
-    payTint.rotation.x = -Math.PI / 2;
-    payTint.position.y = stY + 0.01;
-    g.add(payTint);
-
-    var payDash = new THREE.Mesh(
-      new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
-    );
-    payDash.rotation.x = -Math.PI / 2;
-    payDash.position.y = stY + 0.03;
-    g.add(payDash);
-
-    // floor arc, sitting outside the kiosk base, that sweeps round as money
-    // is poured in (the base would hide a plain filling disc)
-    var track = new THREE.Mesh(
-      new THREE.RingGeometry(1.42, 1.86, 40),
-      new THREE.MeshBasicMaterial({ color: 0x0d2b18, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide })
-    );
-    track.rotation.x = -Math.PI / 2;
-    track.position.y = stY + 0.04;
-    g.add(track);
-
-    var ring = new THREE.Mesh(
-      new THREE.RingGeometry(1.42, 1.86, 40, 1, -Math.PI / 2, 0.001),
-      new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide })
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = stY + 0.05;
-    ring.visible = false;
-    g.add(ring);
-    st.ring = ring;
-    st.ringArc = 0;
-    st.track = track;
+    st.tag = sq.price;
+    st.sq = sq;
 
     g.position.set(st.x, 0, st.z);
     stationGroup.add(g);
@@ -2974,25 +3016,27 @@
 
   function refreshStationTags() {
     stationDefs.forEach(function (st) {
-      var maxed = st.maxed && st.maxed();
-      if (maxed) {
-        updateSpriteText(st.tag, "MAX", "#9fb0a6");
-        st.ring.visible = false;
-        st.track.visible = false;
+      var sq = st.sq;
+      if (st.maxed && st.maxed()) {
+        if (sq.price.userData.last !== "MAX") {
+          updateSpriteText(sq.price, "MAX", "#9fb0a6");
+          sq.price.userData.last = "MAX";
+        }
+        setPaySquareProgress(sq, 0);
+        sq.dash.visible = false;
+        sq.tint.material.opacity = 0.1;
         return;
       }
+      sq.dash.visible = true;
+      sq.tint.material.opacity = 0.32;
       var cost = st.cost();
       var paid = state.stationPaid[st.id] || 0;
       var remain = Math.max(0, Math.ceil(cost - paid));
-      updateSpriteText(st.tag, "$" + fmt(remain), state.cash > 0 ? "#8ff5a8" : "#ffb3a7");
-      // sweep the arc round to match how much has been paid in so far
-      var arc = Math.max(0.001, Math.min(1, paid / cost)) * Math.PI * 2;
-      st.ring.visible = paid > 0;
-      if (Math.abs(arc - st.ringArc) > 0.02) {
-        st.ring.geometry.dispose();
-        st.ring.geometry = new THREE.RingGeometry(1.42, 1.86, 40, 1, -Math.PI / 2, arc);
-        st.ringArc = arc;
+      if (sq.price.userData.last !== remain) {
+        updateSpriteText(sq.price, "$" + fmt(remain), "#ffe066");
+        sq.price.userData.last = remain;
       }
+      setPaySquareProgress(sq, Math.min(1, paid / cost));
     });
   }
 
@@ -3004,7 +3048,6 @@
   function inBox(px, pz, cx, cz, half) {
     return Math.abs(px - cx) <= half && Math.abs(pz - cz) <= half;
   }
-  var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
   function currentZone() {
     // Every bed upgrade is bought from that row's own tile — beds themselves
     // are never payment zones, so planting and harvesting stay free.
@@ -3085,7 +3128,7 @@
   // You have to actually stand still on a square for a moment before it
   // starts spending — just passing through on your way somewhere else
   // (e.g. crossing the grow room to reach the seed shelf) never costs you.
-  var ZONE_DWELL = 0.35;
+  var ZONE_DWELL = 0.45;
   var zoneDwellKey = null, zoneDwellSince = 0;
   // One purchase per visit. A square often has something else to sell the
   // instant it finishes (add a row, then light that row), and chaining
@@ -3219,10 +3262,6 @@
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
     sellRing.material.opacity = 0.35 + Math.sin(now * 0.003 + 1.2) * 0.18;
-    if (sellCoin) {
-      sellCoin.rotation.z = now * 0.0018;
-      sellCoin.position.y = 5.0 + Math.sin(now * 0.003) * 0.22;
-    }
 
     hudAcc += dt;
     if (hudAcc > 0.1) { renderHud(); renderPrompt(); hudAcc = 0; }
