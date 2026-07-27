@@ -367,14 +367,11 @@
   var PRICE_ZONE = { x: -9.0, z: -5.0 };           // pricing station
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
 
-  // 3 wide x 4 deep grid of grow beds, filling the back room
-  // Rows are spaced wide enough to fit a grow-light pay tile in the aisle
-  // behind each one — the light can't be bought by standing on the bed
-  // itself, or planting a seed there would charge you for a light.
-  var PLOT_COLS = 4, PLOT_ROWS = 3, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 5.4, PLOT_SIZE = 3.0;
-  var PLOT_GRID_CZ = -19.0;
-  var LIGHT_TILE_DZ = -2.5;     // tile sits in the aisle behind the bed
-  var LIGHT_TILE_HALF = 1.0;
+  // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
+  // bought a row at a time from one tile beside that row, so beds themselves
+  // are never payment zones — standing on one only ever plants or harvests.
+  var PLOT_COLS = 4, PLOT_ROWS = 4, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 4.0, PLOT_SIZE = 3.0;
+  var PLOT_GRID_CZ = -19.5;
   var plotDefs = [];
   (function () {
     var w = (PLOT_COLS - 1) * PLOT_SPACING_X;
@@ -388,13 +385,15 @@
       }
     }
   })();
-  var MAX_PLOTS = plotDefs.length; // 12
+  var MAX_PLOTS = plotDefs.length; // 16
   var STARTING_PLOTS = PLOT_COLS;  // one full row free to start
-  var MAX_LIGHT_LV = 3;            // grow-light tiers per bed
-  // pay tile sits beside column 0, snug against the row it unlocks
+  var MAX_LIGHT_LV = 3;            // grow-light tiers, applied per row
+  // one pay tile per row, sitting beside column 0 of that row
   var ROW_TILE_X = -((PLOT_COLS - 1) * PLOT_SPACING_X) / 2 - PLOT_SPACING_X + 1.3;
   var ROW_TILE_HALF = (PLOT_SIZE + 0.5) / 2;
   function rowCost(rowNum) { return Math.round(600 * Math.pow(3, rowNum - 1)); }
+  // lighting a whole row costs roughly what four separate beds used to
+  function rowLightCost(lv) { return Math.round(220 * Math.pow(1.9, lv)); }
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
 
   // ===================================================================
@@ -406,10 +405,9 @@
       capLv: 0, speedLv: 0, sellLv: 0,
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
-      // grow-light level installed on each individual bed
-      plotLight: plotDefs.map(function () { return 0; }),
-      // partial payments held per grow light / row unlock / upgrade station
-      lightPaid: plotDefs.map(function () { return 0; }),
+      // grow-light level per row (every bed in a row lights up together)
+      rowLight: [],
+      // partial payments, keyed per row tile / upgrade station
       stationPaid: {},
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
@@ -422,19 +420,37 @@
       var raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return defaultState();
       var merged = Object.assign(defaultState(), JSON.parse(raw));
-      if (!Array.isArray(merged.plots) || merged.plots.length !== plotDefs.length) {
-        merged.plots = plotDefs.map(function () { return { state: "locked" }; });
+      // The grid has grown over time, so resize rather than reset — wiping the
+      // array here would also wipe how many beds the player had already earned.
+      if (!Array.isArray(merged.plots)) merged.plots = [];
+      merged.plots.length = plotDefs.length;
+      for (var pz = 0; pz < merged.plots.length; pz++) {
+        if (!merged.plots[pz] || typeof merged.plots[pz] !== "object") merged.plots[pz] = { state: "locked" };
+      }
+      if (typeof merged.plotsUnlocked !== "number" || !isFinite(merged.plotsUnlocked)) {
         merged.plotsUnlocked = STARTING_PLOTS;
       }
-      // Beds now unlock a whole row at a time — round an older save's count
-      // up to the next full row so nobody loses a bed they already had.
-      merged.plotsUnlocked = Math.min(MAX_PLOTS, Math.ceil(merged.plotsUnlocked / PLOT_COLS) * PLOT_COLS);
-      if (!Array.isArray(merged.plotLight) || merged.plotLight.length !== plotDefs.length) {
-        merged.plotLight = plotDefs.map(function () { return 0; });
+      // Beds unlock a whole row at a time now — round an older save's count up
+      // to the next full row so nobody loses a bed they already had.
+      merged.plotsUnlocked = Math.max(STARTING_PLOTS,
+        Math.min(MAX_PLOTS, Math.ceil(merged.plotsUnlocked / PLOT_COLS) * PLOT_COLS));
+      // Lights used to be per bed; collapse an older save down to per row by
+      // keeping the best light any bed in that row had already earned.
+      if (!Array.isArray(merged.rowLight) || merged.rowLight.length !== PLOT_ROWS) {
+        var old = Array.isArray(merged.plotLight) ? merged.plotLight : null;
+        merged.rowLight = [];
+        for (var r0 = 0; r0 < PLOT_ROWS; r0++) {
+          var best = 0;
+          if (old) {
+            for (var c0 = 0; c0 < PLOT_COLS; c0++) {
+              best = Math.max(best, old[r0 * PLOT_COLS + c0] || 0);
+            }
+          }
+          merged.rowLight.push(Math.min(MAX_LIGHT_LV, best));
+        }
       }
-      if (!Array.isArray(merged.lightPaid) || merged.lightPaid.length !== plotDefs.length) {
-        merged.lightPaid = plotDefs.map(function () { return 0; });
-      }
+      delete merged.plotLight;
+      delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
@@ -461,11 +477,13 @@
   function boostActive()  { return Date.now() < (state.boostUntil || 0); }
   function boostSecsLeft() { return Math.max(0, Math.ceil(((state.boostUntil || 0) - Date.now()) / 1000)); }
 
-  // Grow time is per bed now: each bed's own grow lights speed it up, and the
-  // hydroponic feed doubles the rate across every bed while it's running.
+  function rowOf(idx) { return Math.floor(idx / PLOT_COLS); }
+  function lightLvOf(idx) { return (state.rowLight && state.rowLight[rowOf(idx)]) || 0; }
+
+  // Grow time is per row: a row's grow lights speed up every bed in it, and
+  // the hydroponic feed doubles the rate across every bed while it's running.
   function growTimeFor(idx) {
-    var lv = (state.plotLight && state.plotLight[idx]) || 0;
-    var t = BASE_GROW_TIME * Math.pow(0.72, lv);
+    var t = BASE_GROW_TIME * Math.pow(0.72, lightLvOf(idx));
     if (boostActive()) t *= 0.5;
     return Math.max(t, 0.8);
   }
@@ -473,10 +491,6 @@
   function costCap()   { return Math.round(60 * Math.pow(1.6, state.capLv)); }
   function costSpeed() { return Math.round(50 * Math.pow(1.6, state.speedLv)); }
   function costSell()  { return Math.round(80 * Math.pow(1.7, state.sellLv)); }
-  function costLight(idx) {
-    var lv = (state.plotLight && state.plotLight[idx]) || 0;
-    return Math.round(55 * Math.pow(1.85, lv));
-  }
   function costBoost() { return 140; }
 
   function fmt(n) {
@@ -1649,52 +1663,11 @@
     glow.visible = false;
     g.add(glow);
 
-    // ---- light-upgrade pay tile, in the aisle behind the bed rather than on
-    // it: standing on the bed plants/harvests (always free), standing on this
-    // tile is the only thing that ever spends money on a grow light ----
-    var lightPad = new THREE.Group();
-    var LT = LIGHT_TILE_HALF * 2;
-    var padY = floorTopAt(d.z + LIGHT_TILE_DZ);
-    var lightTint = new THREE.Mesh(
-      new THREE.PlaneGeometry(LT, LT),
-      new THREE.MeshBasicMaterial({ color: 0xc98bff, transparent: true, opacity: 0.3, depthWrite: false })
-    );
-    lightTint.rotation.x = -Math.PI / 2;
-    lightTint.position.y = padY + 0.01;
-    lightPad.add(lightTint);
-    var lightDash = new THREE.Mesh(
-      new THREE.PlaneGeometry(LT, LT),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
-    );
-    lightDash.rotation.x = -Math.PI / 2;
-    lightDash.position.y = padY + 0.03;
-    lightPad.add(lightDash);
-    var lightFill = new THREE.Mesh(
-      new THREE.PlaneGeometry(LT - 0.16, LT - 0.16),
-      new THREE.MeshBasicMaterial({ color: 0xe7c4ff, transparent: true, opacity: 0.6, depthWrite: false })
-    );
-    lightFill.rotation.x = -Math.PI / 2;
-    lightFill.position.y = padY + 0.02;
-    lightFill.scale.z = 0.001;
-    lightPad.add(lightFill);
-    var lightPrice = textSprite("$0", "#e7c4ff");
-    lightPrice.scale.set(2.0, 0.75, 1);
-    lightPrice.position.y = 1.5;
-    lightPad.add(lightPrice);
-    var lightLbl = textSprite("GROW LIGHT", "#e7c4ff");
-    lightLbl.scale.set(2.2, 0.5, 1);
-    lightLbl.position.y = 2.1;
-    lightPad.add(lightLbl);
-    lightPad.position.z = LIGHT_TILE_DZ;
-    lightPad.visible = false;
-    g.add(lightPad);
-
     scene.add(g);
 
     return {
       group: g, frame: frame, soil: soil, plant: plant, glow: glow,
       tray: tray, rack: rack,
-      lightPad: lightPad, lightFill: lightFill, lightPrice: lightPrice,
     };
   }
   for (var pi = 0; pi < plotDefs.length; pi++) plotObjects.push(makePlot(pi));
@@ -1737,7 +1710,7 @@
     priceSprite.position.y = 2.0;
     g.add(priceSprite);
 
-    var lbl = textSprite("UNLOCK ROW", "#ffe066");
+    var lbl = textSprite("ADD ROW", "#ffe066");
     lbl.scale.set(2.4, 0.55, 1);
     lbl.position.y = 2.7;
     g.add(lbl);
@@ -1745,25 +1718,58 @@
     g.position.set(ROW_TILE_X, 0, rz);
     g.visible = false;
     scene.add(g);
-    return { group: g, dash: dash, fill: fill, price: priceSprite };
+    return { group: g, tint: tint, dash: dash, fill: fill, price: priceSprite, lbl: lbl };
   }
   for (var ri = 0; ri < PLOT_ROWS; ri++) rowTiles.push(makeRowTile(ri));
 
+  // What this row's tile is selling right now: add the row if it isn't built
+  // yet, otherwise light it. Single source of truth shared by the tile
+  // visuals and the payment-zone lookup, so they can never disagree.
+  var ROW_ADD_COLOR = 0xffd35c, ROW_LIGHT_COLOR = 0xc98bff;
+  function rowOffer(r) {
+    var unlockedRows = state.plotsUnlocked / PLOT_COLS;
+    if (r > unlockedRows) return null;            // can't skip ahead
+    if (r === unlockedRows) {
+      return {
+        kind: "add", row: r, key: "row" + r,
+        label: "ADD ROW", color: ROW_ADD_COLOR, hex: "#ffe066",
+        name: "Add Row " + (r + 1),
+        desc: "Build " + PLOT_COLS + " more soil beds",
+        cost: rowCost(r),
+      };
+    }
+    var lv = (state.rowLight && state.rowLight[r]) || 0;
+    if (lv >= MAX_LIGHT_LV) return null;          // row fully kitted out
+    var idx0 = r * PLOT_COLS;
+    return {
+      kind: "light", row: r, key: "light" + r,
+      label: "GROW LIGHT", color: ROW_LIGHT_COLOR, hex: "#e7c4ff",
+      name: lv === 0 ? "Install Grow Lights" : "Upgrade Grow Lights",
+      desc: "Row " + (r + 1) + " · " + growTimeFor(idx0).toFixed(1) + "s → " +
+            (BASE_GROW_TIME * Math.pow(0.72, lv + 1) * (boostActive() ? 0.5 : 1)).toFixed(1) + "s per crop",
+      cost: rowLightCost(lv),
+    };
+  }
+
   function updateRowTiles(now) {
-    var nextRow = Math.floor(state.plotsUnlocked / PLOT_COLS);
     for (var ri2 = 0; ri2 < rowTiles.length; ri2++) {
       var rt = rowTiles[ri2];
-      var show = (ri2 === nextRow && state.plotsUnlocked < MAX_PLOTS);
-      rt.group.visible = show;
-      if (!show) continue;
-      var cost = rowCost(nextRow);
-      var paid = state.stationPaid["row" + nextRow] || 0;
-      var remain = Math.max(0, Math.ceil(cost - paid));
+      var off = rowOffer(ri2);
+      rt.group.visible = !!off;
+      if (!off) continue;
+      if (rt.lbl.userData.last !== off.label) {
+        updateSpriteText(rt.lbl, off.label, off.hex);
+        rt.tint.material.color.setHex(off.color);
+        rt.lbl.userData.last = off.label;
+        rt.price.userData.last = null;   // force the price to redraw in the new colour
+      }
+      var paid = state.stationPaid[off.key] || 0;
+      var remain = Math.max(0, Math.ceil(off.cost - paid));
       if (rt.price.userData.last !== remain) {
-        updateSpriteText(rt.price, "$" + fmt(remain), "#ffe066");
+        updateSpriteText(rt.price, "$" + fmt(remain), off.hex);
         rt.price.userData.last = remain;
       }
-      var prog = Math.min(1, paid / cost);
+      var prog = Math.min(1, paid / off.cost);
       rt.fill.scale.z = Math.max(0.001, prog);
       rt.fill.position.z = -(ROW_TILE_HALF * 2 - 0.2) / 2 * (1 - prog);
       rt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
@@ -1774,7 +1780,7 @@
   var lightRigs = [];
   function refreshPlotLights() {
     for (var i = 0; i < plotDefs.length; i++) {
-      var lv = (state.plotLight && state.plotLight[i]) || 0;
+      var lv = lightLvOf(i);
       var rig = lightRigs[i];
       if (!rig) {
         rig = new THREE.Group();
@@ -2416,29 +2422,16 @@
 
       if (plot.state === "locked") {
         po.frame.visible = false; po.soil.visible = false;
+        po.tray.visible = false; po.rack.visible = false;
         po.plant.visible = false; po.glow.visible = false;
         continue;
       }
 
-      po.frame.visible = true; po.soil.visible = true;
-
-      // The light tile is off the bed now, so it can stay up whatever the bed
-      // is doing — you can pay for a light while the crop is still growing.
-      var lightUpgradeable = (state.plotLight[i9] || 0) < MAX_LIGHT_LV;
-      po.lightPad.visible = lightUpgradeable;
-      if (lightUpgradeable) {
-        var lCost = costLight(i9);
-        var lPaid = state.lightPaid[i9] || 0;
-        var lRemain = Math.max(0, Math.ceil(lCost - lPaid));
-        if (po.lightPrice.userData.last !== lRemain) {
-          updateSpriteText(po.lightPrice, "$" + fmt(lRemain), "#e7c4ff");
-          po.lightPrice.userData.last = lRemain;
-        }
-        var lProg = Math.min(1, lPaid / lCost);
-        po.lightFill.scale.z = Math.max(0.001, lProg);
-        po.lightFill.position.z = -(LIGHT_TILE_HALF * 2 - 0.16) / 2 * (1 - lProg);
-        po.lightPad.children[1].material.opacity = 0.55 + Math.sin(now * 0.004 + i9) * 0.25;
-      }
+      // Which fitting is showing is driven by this row's light tier, so don't
+      // blanket-restore the soil box here or it'd show through the hydro tray.
+      var tier = lightLvOf(i9);
+      po.frame.visible = tier < 2;
+      po.soil.visible = tier < 2;
 
       if (plot.state === "empty") {
         po.plant.visible = false; po.glow.visible = false;
@@ -2757,20 +2750,11 @@
     st.obj = g;
   });
 
-  // Row-unlock and upgrade-station payments share the same keyed bucket
-  // (state.stationPaid) since only one of each is ever "next" at a time.
-  function zonePaid(z) {
-    if (z.kind === "light") return state.lightPaid[z.idx] || 0;
-    return state.stationPaid[z.key] || 0;
-  }
-  function zoneAddPaid(z, v) {
-    if (z.kind === "light") state.lightPaid[z.idx] = (state.lightPaid[z.idx] || 0) + v;
-    else state.stationPaid[z.key] = (state.stationPaid[z.key] || 0) + v;
-  }
-  function zoneResetPaid(z) {
-    if (z.kind === "light") state.lightPaid[z.idx] = 0;
-    else state.stationPaid[z.key] = 0;
-  }
+  // Every partial payment — row tiles and upgrade stations alike — lives in
+  // one keyed bucket, so part-paying something and walking away is persisted.
+  function zonePaid(z) { return state.stationPaid[z.key] || 0; }
+  function zoneAddPaid(z, v) { state.stationPaid[z.key] = (state.stationPaid[z.key] || 0) + v; }
+  function zoneResetPaid(z) { state.stationPaid[z.key] = 0; }
 
   function refreshStationTags() {
     stationDefs.forEach(function (st) {
@@ -2806,56 +2790,40 @@
   }
   var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
   function currentZone() {
-    if (state.plotsUnlocked < MAX_PLOTS) {
-      var base = state.plotsUnlocked;
-      var nextRow = base / PLOT_COLS; // always a whole row boundary
-      var rz = plotDefs[base].z;
-      if (inBox(player.pos.x, player.pos.z, ROW_TILE_X, rz, ROW_TILE_HALF)) {
+    // Every bed upgrade is bought from that row's own tile — beds themselves
+    // are never payment zones, so planting and harvesting stay free.
+    for (var r = 0; r < PLOT_ROWS; r++) {
+      var rz = plotDefs[r * PLOT_COLS].z;
+      if (!inBox(player.pos.x, player.pos.z, ROW_TILE_X, rz, ROW_TILE_HALF)) continue;
+      var off = rowOffer(r);
+      if (!off) break;
+      return (function (o, zz) {
         return {
-          kind: "row", key: "row" + nextRow,
-          name: "Unlock Row " + (nextRow + 1),
-          desc: "Open up " + PLOT_COLS + " more soil beds to plant in",
-          cost: rowCost(nextRow), maxed: false,
-          x: ROW_TILE_X, z: rz, y: 1.2,
+          kind: o.kind, key: o.key, slot: "rowtile" + o.row,
+          name: o.name, desc: o.desc,
+          cost: o.cost, maxed: false,
+          x: ROW_TILE_X, z: zz, y: 1.2,
           complete: function () {
-            for (var k = 0; k < PLOT_COLS; k++) state.plots[base + k] = { state: "empty" };
-            state.plotsUnlocked = base + PLOT_COLS;
-            addFloater(ROW_TILE_X, 2.6, rz, "UNLOCKED!", "#9df0a0");
-            toast("🌱 New row of beds unlocked!");
+            if (o.kind === "add") {
+              var base = o.row * PLOT_COLS;
+              for (var k = 0; k < PLOT_COLS; k++) state.plots[base + k] = { state: "empty" };
+              state.plotsUnlocked = base + PLOT_COLS;
+              addFloater(ROW_TILE_X, 2.6, zz, "ROW ADDED!", "#9df0a0");
+              toast("🌱 New row of beds added!");
+            } else {
+              state.rowLight[o.row] = (state.rowLight[o.row] || 0) + 1;
+              addFloater(ROW_TILE_X, 2.6, zz, "LIGHTS ON!", "#ffe9a8");
+            }
+            refreshPlotLights();
           },
         };
-      }
-    }
-    // A grow light is bought from its own tile in the aisle behind the bed,
-    // never from the bed itself — otherwise standing there to plant a seed
-    // would quietly charge you for a light.
-    for (var gi = 0; gi < state.plotsUnlocked; gi++) {
-      var gd = plotDefs[gi];
-      if ((state.plotLight[gi] || 0) >= MAX_LIGHT_LV) continue;
-      if (inBox(player.pos.x, player.pos.z, gd.x, gd.z + LIGHT_TILE_DZ, LIGHT_TILE_HALF)) {
-        return (function (bi, bd) {
-          var lv = state.plotLight[bi] || 0;
-          return {
-            kind: "light", idx: bi, key: "light" + bi,
-            name: lv === 0 ? "Install Grow Light" : "Upgrade Grow Light",
-            desc: "Bed " + (bi + 1) + " \u00b7 " + growTimeFor(bi).toFixed(1) + "s \u2192 " +
-                  (BASE_GROW_TIME * Math.pow(0.72, lv + 1) * (boostActive() ? 0.5 : 1)).toFixed(1) + "s per crop",
-            cost: costLight(bi), maxed: false,
-            x: bd.x, z: bd.z, y: 1.6,
-            complete: function () {
-              state.plotLight[bi] = (state.plotLight[bi] || 0) + 1;
-              refreshPlotLights();
-              addFloater(bd.x, 3.0, bd.z, "LIGHT ON!", "#ffe9a8");
-            },
-          };
-        })(gi, gd);
-      }
+      })(off, rz);
     }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
       if (inBox(player.pos.x, player.pos.z, st.x, st.z, STATION_PAD_HALF)) {
         return {
-          kind: "station", key: st.id,
+          kind: "station", key: st.id, slot: "station" + st.id,
           name: st.name(), desc: st.desc(),
           cost: st.cost(), maxed: !!(st.maxed && st.maxed()),
           x: st.x, z: st.z, y: 1.6,
@@ -2903,9 +2871,15 @@
   // (e.g. crossing the grow room to reach the seed shelf) never costs you.
   var ZONE_DWELL = 0.35;
   var zoneDwellKey = null, zoneDwellSince = 0;
+  // One purchase per visit. A square often has something else to sell the
+  // instant it finishes (add a row, then light that row), and chaining
+  // straight into it would empty your wallet while you just stood there.
+  var zoneDoneSlot = null;
   function payIntoZone(dt) {
     var z = currentZone();
-    if (!z || z.maxed) { zoneDwellKey = null; return; }
+    if (!z || z.maxed) { zoneDwellKey = null; zoneDoneSlot = null; return; }
+    if (zoneDoneSlot && zoneDoneSlot !== z.slot) zoneDoneSlot = null;
+    if (zoneDoneSlot === z.slot) return;   // step off and back on to buy again
     var paid = zonePaid(z);
 
     // Settle anything already fully funded first. Float drift can leave `paid`
@@ -2917,6 +2891,7 @@
       z.complete();
       renderHud(); refreshStationTags(); saveState();
       zoneDwellKey = null;
+      zoneDoneSlot = z.slot;
       return;
     }
 
@@ -2947,6 +2922,7 @@
       zoneResetPaid(z);
       z.complete();
       renderHud(); refreshStationTags(); saveState();
+      zoneDoneSlot = z.slot;
     }
   }
 
