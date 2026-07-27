@@ -377,6 +377,7 @@
   var MAX_PLOTS = plotDefs.length; // 12
   var STARTING_PLOTS = 3;
   var MAX_LIGHT_LV = 3;            // grow-light tiers per bed
+  var LIGHT_ZONE_R = 1.6;          // must be standing basically on the bed itself
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
 
   // ===================================================================
@@ -711,8 +712,8 @@
     packC:       mat(0x8f5fb8, { map: fabricTex, roughness: 0.45, metalness: 0.25 }),
     white2:      mat(0xf2efe6),
     growLight:   mat(0xe7c4ff, { emissive: 0xc98bff, emissiveIntensity: 1.6, roughness: 0.4 }),
-    cashNote:    mat(0x86c98a, { roughness: 0.85 }),
-    cashBand:    mat(0xd8b23f, { roughness: 0.6, metalness: 0.3 }),
+    cashNote:    mat(0x2fdc5e, { roughness: 0.75 }),
+    cashBand:    mat(0xffd75e, { roughness: 0.5, metalness: 0.35 }),
     wallAccent:  mat(0x2e4a3a, { map: plasterTex, roughness: 0.85 }),
     wallTrim:    mat(0x9c7043, { map: woodTex, roughness: 0.5 }),
     windowGlass: mat(0xcfeef8, { transparent: true, opacity: 0.35, roughness: 0.04, metalness: 0.2 }),
@@ -1615,8 +1616,16 @@
     glow.visible = false;
     g.add(glow);
 
-    // ---- locked build pad (dashed outline + price sign + fill bar) ----
+    // ---- locked build pad (tinted fill + dashed outline + price sign) ----
     var pad = new THREE.Group();
+    var padTint = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
+      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.2, depthWrite: false })
+    );
+    padTint.rotation.x = -Math.PI / 2;
+    padTint.position.y = 0.253;
+    pad.add(padTint);
+
     var dash = new THREE.Mesh(
       new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
       new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
@@ -1640,12 +1649,47 @@
     pad.add(priceSprite);
 
     g.add(pad);
+
+    // ---- separate light-upgrade pad, shown only while the bed is empty and
+    // not yet at max light level — this is what makes "standing here will
+    // spend money on a grow light" visible, instead of a silent proximity check ----
+    var lightPad = new THREE.Group();
+    var lightTint = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
+      new THREE.MeshBasicMaterial({ color: 0xc98bff, transparent: true, opacity: 0.22, depthWrite: false })
+    );
+    lightTint.rotation.x = -Math.PI / 2;
+    lightTint.position.y = 0.253;
+    lightPad.add(lightTint);
+    var lightDash = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.7, depthWrite: false })
+    );
+    lightDash.rotation.x = -Math.PI / 2;
+    lightDash.position.y = 0.27;
+    lightPad.add(lightDash);
+    var lightFill = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.1, PLOT_SIZE + 0.1),
+      new THREE.MeshBasicMaterial({ color: 0xe7c4ff, transparent: true, opacity: 0.55, depthWrite: false })
+    );
+    lightFill.rotation.x = -Math.PI / 2;
+    lightFill.position.y = 0.26;
+    lightFill.scale.z = 0.001;
+    lightPad.add(lightFill);
+    var lightPrice = textSprite("$0", "#e7c4ff");
+    lightPrice.scale.set(2.0, 0.75, 1);
+    lightPrice.position.y = 1.5;
+    lightPad.add(lightPrice);
+    lightPad.visible = false;
+    g.add(lightPad);
+
     scene.add(g);
 
     return {
       group: g, frame: frame, soil: soil, plant: plant, glow: glow,
       tray: tray, rack: rack,
       pad: pad, padFill: fill, padPrice: priceSprite,
+      lightPad: lightPad, lightFill: lightFill, lightPrice: lightPrice,
     };
   }
   for (var pi = 0; pi < plotDefs.length; pi++) plotObjects.push(makePlot(pi));
@@ -2109,27 +2153,57 @@
     renderUpgrades();
   }
 
-  // ---- cash stacks that build up beside the till after each sale ----
-  var cashDrops = [];
-  var CASH_MAX = 14;
-  var noteGeo = new THREE.BoxGeometry(0.62, 0.055, 0.34);
-  var bandGeo = new THREE.BoxGeometry(0.17, 0.075, 0.36);
+  // ---- one continuously-growing pallet of cash on the payout tray ----
+  // Bricks tile a layer across the tray footprint, then a new layer starts
+  // directly on top once the layer below fills — leave it uncollected long
+  // enough and it becomes a genuinely tall stack.
+  var pendingCash = 0;
+  var cashBricks = [];
+  var BRICK_VALUE = 8;
+  var BRICK_COLS = 4, BRICK_ROWS = 4;
+  var BRICK_MAX_LAYERS = 24;
+  var BRICK_W = 0.72, BRICK_D = 0.5, BRICK_H = 0.2;
+  var brickGeo = new THREE.BoxGeometry(BRICK_W, BRICK_H, BRICK_D);
+  var brickBandGeo = new THREE.BoxGeometry(BRICK_W + 0.04, BRICK_H * 0.42, 0.12);
 
-  function makeCashStack(value) {
+  function brickSpot(i) {
+    var perLayer = BRICK_COLS * BRICK_ROWS;
+    var layer = Math.floor(i / perLayer);
+    var within = i % perLayer;
+    var col = within % BRICK_COLS, row = Math.floor(within / BRICK_COLS);
+    var margin = 0.42;
+    var stepX = (CASH_PAD.half * 2 - margin * 2) / (BRICK_COLS - 1);
+    var stepZ = (CASH_PAD.half * 2 - margin * 2) / (BRICK_ROWS - 1);
+    return {
+      x: CASH_PAD.x - (CASH_PAD.half - margin) + col * stepX,
+      z: CASH_PAD.z - (CASH_PAD.half - margin) + row * stepZ,
+      y: 0.42 + layer * BRICK_H,
+    };
+  }
+
+  function addCashBrick() {
+    var spot = brickSpot(cashBricks.length);
     var g = new THREE.Group();
-    var notes = Math.max(2, Math.min(7, Math.round(value / 12) + 2));
-    for (var i = 0; i < notes; i++) {
-      var n = new THREE.Mesh(noteGeo, M.cashNote);
-      n.position.set((Math.random() - 0.5) * 0.05, 0.055 * i, (Math.random() - 0.5) * 0.04);
-      n.rotation.y = (Math.random() - 0.5) * 0.18;
-      n.castShadow = true;
-      g.add(n);
-    }
-    var band = new THREE.Mesh(bandGeo, M.cashBand);
-    band.position.y = 0.055 * (notes - 1) / 2;
+    var body = new THREE.Mesh(brickGeo, M.cashNote);
+    body.castShadow = true;
+    g.add(body);
+    var band = new THREE.Mesh(brickBandGeo, M.cashBand);
     g.add(band);
-    g.userData.value = value;
-    return g;
+    g.position.set(spot.x, spot.y + 2.2, spot.z);
+    g.rotation.y = (Math.random() - 0.5) * 0.08;
+    scene.add(g);
+    cashBricks.push({ obj: g, restY: spot.y, bornAt: performance.now() });
+  }
+
+  function removeCashBrick() {
+    var b = cashBricks.pop();
+    if (b) scene.remove(b.obj);
+  }
+
+  function refreshCashPile() {
+    var target = Math.min(BRICK_COLS * BRICK_ROWS * BRICK_MAX_LAYERS, Math.floor(pendingCash / BRICK_VALUE));
+    while (cashBricks.length < target) addCashBrick();
+    while (cashBricks.length > target) removeCashBrick();
   }
 
   // ---- the payout tray itself: a marked square on the floor by the till ----
@@ -2168,66 +2242,37 @@
     scene.add(g);
   })();
 
-  // stacks tile across the tray in a grid, then start a second layer
-  function cashSpot(i) {
-    var cols = 3;
-    var layer = Math.floor(i / (cols * cols));
-    var within = i % (cols * cols);
-    var cx = within % cols, cz = Math.floor(within / cols);
-    var step = (CASH_PAD.half * 2 - 0.5) / (cols - 1);
-    return {
-      x: CASH_PAD.x - (CASH_PAD.half - 0.25) + cx * step,
-      z: CASH_PAD.z - (CASH_PAD.half - 0.25) + cz * step,
-      y: 0.42 + layer * 0.42,
-    };
-  }
-
   function payOutCash(amount) {
     if (amount <= 0) return;
-    // a couple of stacks per sale reads better than one lump
-    var parts = Math.max(1, Math.min(3, Math.round(amount / 25)));
-    var base = Math.floor(amount / parts);
-    for (var i = 0; i < parts; i++) {
-      // keep payouts in whole dollars; the remainder rides on the last stack
-      var each = (i === parts - 1) ? amount - base * (parts - 1) : base;
-      if (each <= 0) continue;
-      // merge into the oldest stack once the floor is full, so it never litters
-      if (cashDrops.length >= CASH_MAX) {
-        cashDrops[0].value += each;
-        continue;
-      }
-      var spot = cashSpot(cashDrops.length);
-      var g = makeCashStack(each);
-      g.position.set(spot.x, spot.y + 2.2, spot.z);
-      g.rotation.y = (Math.random() - 0.5) * 0.5;
-      scene.add(g);
-      cashDrops.push({ obj: g, value: each, x: spot.x, z: spot.z, restY: spot.y, bornAt: performance.now() });
-    }
+    pendingCash += amount;
+    refreshCashPile();
   }
 
   function updateCashDrops(now, dt) {
-    // standing on the tray sweeps it, one stack at a time so the pickup reads
-    var onPad = Math.abs(player.pos.x - CASH_PAD.x) <= CASH_PAD.half + PLAYER_RADIUS &&
-                Math.abs(player.pos.z - CASH_PAD.z) <= CASH_PAD.half + PLAYER_RADIUS;
-    for (var i = cashDrops.length - 1; i >= 0; i--) {
-      var c = cashDrops[i];
-      // drop into place, then bob gently so it reads as collectable
-      var t = (now - c.bornAt) / 300;
+    // fresh bricks drop into place, then the whole pallet just sits there
+    // building up until the player walks over and claims it in one sweep
+    for (var i = 0; i < cashBricks.length; i++) {
+      var b = cashBricks[i];
+      var t = (now - b.bornAt) / 300;
       if (t < 1) {
         var e = 1 - Math.pow(1 - t, 3);
-        c.obj.position.y = c.restY + 2.2 * (1 - e);
+        b.obj.position.y = b.restY + 2.2 * (1 - e);
       } else {
-        c.obj.position.y = c.restY + Math.sin(now * 0.004 + i) * 0.05;
+        b.obj.position.y = b.restY;
       }
+    }
 
-      if (onPad && now - c.bornAt > 160) {
-        state.cash += c.value;
-        addFloater(c.x, 2.4, c.z, "+$" + fmt(c.value), "#8ff5a8");
-        scene.remove(c.obj);
-        cashDrops.splice(i, 1);
-        renderHud();
-        refreshStationTags();
-      }
+    var onPad = Math.abs(player.pos.x - CASH_PAD.x) <= CASH_PAD.half + PLAYER_RADIUS &&
+                Math.abs(player.pos.z - CASH_PAD.z) <= CASH_PAD.half + PLAYER_RADIUS;
+    if (onPad && pendingCash > 0) {
+      var claimed = pendingCash;
+      state.cash += claimed;
+      pendingCash = 0;
+      refreshCashPile();
+      addFloater(CASH_PAD.x, 2.6, CASH_PAD.z, "+$" + fmt(claimed), "#8ff5a8");
+      renderHud();
+      refreshStationTags();
+      saveState();
     }
   }
 
@@ -2321,7 +2366,7 @@
           var prog = Math.min(1, paid / cost);
           po.padFill.scale.z = Math.max(0.001, prog);
           po.padFill.position.z = -(PLOT_SIZE + 0.3) / 2 * (1 - prog);
-          po.pad.children[0].material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+          po.pad.children[1].material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25; // children[1] = dash (padTint is 0)
         }
         continue;
       }
@@ -2331,7 +2376,24 @@
 
       if (plot.state === "empty") {
         po.plant.visible = false; po.glow.visible = false;
+        var lightLv = state.plotLight[i9] || 0;
+        var lightUpgradeable = lightLv < MAX_LIGHT_LV;
+        po.lightPad.visible = lightUpgradeable;
+        if (lightUpgradeable) {
+          var lCost = costLight(i9);
+          var lPaid = state.lightPaid[i9] || 0;
+          var lRemain = Math.max(0, Math.ceil(lCost - lPaid));
+          if (po.lightPrice.userData.last !== lRemain) {
+            updateSpriteText(po.lightPrice, "$" + fmt(lRemain), "#e7c4ff");
+            po.lightPrice.userData.last = lRemain;
+          }
+          var lProg = Math.min(1, lPaid / lCost);
+          po.lightFill.scale.z = Math.max(0.001, lProg);
+          po.lightFill.position.z = -(PLOT_SIZE + 0.1) / 2 * (1 - lProg);
+          po.lightPad.children[1].material.opacity = 0.45 + Math.sin(now * 0.004 + i9) * 0.2;
+        }
       } else if (plot.state === "growing") {
+        po.lightPad.visible = false;
         var pct = Math.min(1, (Date.now() - plot.startedAt) / plot.duration);
         po.plant.visible = true;
         var sc = 0.2 + 0.8 * pct;
@@ -2340,6 +2402,7 @@
         po.plant.userData.bud.visible = false;
         po.glow.visible = false;
       } else {
+        po.lightPad.visible = false;
         po.plant.visible = true;
         var bob = 1 + Math.sin(now * 0.005 + i9) * 0.03;
         po.plant.scale.set(bob, bob, bob);
@@ -2355,6 +2418,7 @@
   function updatePlayer(dt, now) {
     var v = inputVector();
     var moving = Math.abs(v.x) > 0.01 || Math.abs(v.z) > 0.01;
+    player.moving = moving;
     var spd = moveSpeed() * (1 - Math.min(0.2, player.backpack.length * 0.02));
 
     player.pos.x += v.x * spd * dt;
@@ -2457,7 +2521,7 @@
       if (state.plots[b].state === "ready") anyReady = true;
       if (state.plots[b].state === "empty") anyEmpty = true;
     }
-    if (cashDrops.length) return "💵 Grab your cash by the till";
+    if (pendingCash > 0) return "💵 Grab your cash by the till";
     if (hasBud) return "🏪 Take your buds out to the counter";
     if (anyReady) return "🌾 A bed is ready — harvest it";
     if (hasSeed && anyEmpty) return "🌱 Stand on an empty bed to plant";
@@ -2601,6 +2665,14 @@
     // clear square marker showing exactly where to stand to pay — same
     // dashed-outline language as the locked-plot pads, so "step here to
     // spend money" reads consistently everywhere in the shop
+    var payTint = new THREE.Mesh(
+      new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
+      new THREE.MeshBasicMaterial({ color: st.color, transparent: true, opacity: 0.22, depthWrite: false })
+    );
+    payTint.rotation.x = -Math.PI / 2;
+    payTint.position.y = 0.253;
+    g.add(payTint);
+
     var payDash = new THREE.Mesh(
       new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
       new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
@@ -2699,11 +2771,14 @@
     }
     // A grow light is bought at the bed itself. Only offered while the bed is
     // sitting empty, so it can't quietly eat your cash right after planting.
+    // Uses a tighter radius than planting/harvesting (which is deliberately
+    // generous) — otherwise just walking down the aisle past an empty bed,
+    // e.g. on the way to the seed shelf, would count as "standing at" it.
     for (var gi = 0; gi < state.plotsUnlocked; gi++) {
       var gd = plotDefs[gi];
       if (state.plots[gi].state !== "empty") continue;
       if ((state.plotLight[gi] || 0) >= MAX_LIGHT_LV) continue;
-      if (d2(player.pos.x, player.pos.z, gd.x, gd.z) <= PLOT_SIZE * 0.7 + PLAYER_RADIUS) {
+      if (d2(player.pos.x, player.pos.z, gd.x, gd.z) <= LIGHT_ZONE_R) {
         return (function (bi, bd) {
           var lv = state.plotLight[bi] || 0;
           return {
@@ -2769,20 +2844,37 @@
 
   // ---- standing in a zone pours your cash into it, a bit at a time ----
   var coinAcc = 0;
+  // You have to actually stand still on a square for a moment before it
+  // starts spending — just passing through on your way somewhere else
+  // (e.g. crossing the grow room to reach the seed shelf) never costs you.
+  var ZONE_DWELL = 0.35;
+  var zoneDwellKey = null, zoneDwellSince = 0;
   function payIntoZone(dt) {
     var z = currentZone();
-    if (!z || z.maxed) return;
+    if (!z || z.maxed) { zoneDwellKey = null; return; }
     var paid = zonePaid(z);
 
     // Settle anything already fully funded first. Float drift can leave `paid`
     // a hair under `cost`, which used to trip the "nothing owed" guard below
-    // and strand the upgrade at $0 forever.
+    // and strand the upgrade at $0 forever. (No dwell needed here — this
+    // doesn't spend any new cash, it just finalizes what's already paid.)
     if (paid >= z.cost - 0.01) {
       zoneResetPaid(z);
       z.complete();
       renderHud(); refreshStationTags(); saveState();
+      zoneDwellKey = null;
       return;
     }
+
+    // Require the player to actually be standing still, not just within
+    // radius — walking straight through a zone at normal speed can otherwise
+    // sit inside the trigger radius longer than the dwell window and still
+    // get charged, which is exactly the accidental-purchase bug this guards.
+    if (zoneDwellKey !== z.key || player.moving) {
+      zoneDwellKey = z.key;
+      zoneDwellSince = performance.now();
+    }
+    if (performance.now() - zoneDwellSince < ZONE_DWELL * 1000) return;
 
     var owed = z.cost - paid;
     if (owed <= 0 || state.cash <= 0) return;
