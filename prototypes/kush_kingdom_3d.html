@@ -377,7 +377,6 @@
   var MAX_PLOTS = plotDefs.length; // 12
   var STARTING_PLOTS = 3;
   var MAX_LIGHT_LV = 3;            // grow-light tiers per bed
-  var LIGHT_ZONE_R = 1.6;          // must be standing basically on the bed itself
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
 
   // ===================================================================
@@ -2749,11 +2748,21 @@
   }
 
   // ---- which payment zone the player is standing in, if any ----
+  // Hit tests below are plain axis-aligned boxes sized to match the visible
+  // tinted/dashed square exactly (see padTint/lightTint/payTint above) —
+  // not a generous circular radius — so money only ever moves while the
+  // player is standing on the marked spot, never just walking near it.
+  function inBox(px, pz, cx, cz, half) {
+    return Math.abs(px - cx) <= half && Math.abs(pz - cz) <= half;
+  }
+  var PLOT_PAD_HALF = (PLOT_SIZE + 0.5) / 2;
+  var LIGHT_PAD_HALF = (PLOT_SIZE + 0.3) / 2;
+  var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
   function currentZone() {
     var idx = state.plotsUnlocked;
     if (idx < MAX_PLOTS) {
       var d = plotDefs[idx];
-      if (d2(player.pos.x, player.pos.z, d.x, d.z) <= PLOT_SIZE * 0.7 + PLAYER_RADIUS) {
+      if (inBox(player.pos.x, player.pos.z, d.x, d.z, PLOT_PAD_HALF)) {
         return {
           kind: "plot", idx: idx, key: "plot" + idx,
           name: "Unlock Plot " + (idx + 1),
@@ -2778,7 +2787,7 @@
       var gd = plotDefs[gi];
       if (state.plots[gi].state !== "empty") continue;
       if ((state.plotLight[gi] || 0) >= MAX_LIGHT_LV) continue;
-      if (d2(player.pos.x, player.pos.z, gd.x, gd.z) <= LIGHT_ZONE_R) {
+      if (inBox(player.pos.x, player.pos.z, gd.x, gd.z, LIGHT_PAD_HALF)) {
         return (function (bi, bd) {
           var lv = state.plotLight[bi] || 0;
           return {
@@ -2799,7 +2808,7 @@
     }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
-      if (d2(player.pos.x, player.pos.z, st.x, st.z) <= STATION_R + PLAYER_RADIUS) {
+      if (inBox(player.pos.x, player.pos.z, st.x, st.z, STATION_PAD_HALF)) {
         return {
           kind: "station", key: st.id,
           name: st.name(), desc: st.desc(),
