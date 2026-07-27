@@ -40,7 +40,7 @@
   /* ---------------- HUD (top-left stacked chips, like the reference) ------- */
   #hud-top {
     position: absolute;
-    top: calc(var(--safe-t) + 10px);
+    top: calc(var(--safe-t) + 18px);
     left: calc(var(--safe-l) + 12px);
     right: calc(var(--safe-r) + 12px);
     display: flex;
@@ -88,6 +88,28 @@
   .chip.boost.on { display: flex; }
   .chip.boost .icon { background: linear-gradient(180deg, #7fe6f5, #2f7d8f); }
   .chip.boost span { color: #9fe8ff; }
+  .chip.promo { display: none; }
+  .chip.promo.on { display: flex; }
+  .chip.promo .icon { background: linear-gradient(180deg, #ffd05c, #c06a12); }
+  .chip.promo span { color: #ffd98a; }
+
+  /* shop level, riding on the corner of the cash chip */
+  .chip.cash { position: relative; overflow: visible; }
+  #level-star {
+    position: absolute;
+    right: -12px; top: -12px;
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #ffd75e, #e08a12);
+    clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%,
+                       50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  }
+  #level-star span {
+    font-size: 13px; font-weight: 900;
+    color: #4a2c00;
+    margin-top: 4px;
+  }
 
   #objective {
     position: absolute;
@@ -249,9 +271,13 @@
 
   <div id="hud-top">
     <div class="chip-stack">
-      <div class="chip cash"><div class="icon">💵</div><span id="cash-val">0</span></div>
+      <div class="chip cash">
+        <div class="icon">💵</div><span id="cash-val">0</span>
+        <div id="level-star"><span id="level-val">1</span></div>
+      </div>
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
+      <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
     </div>
   </div>
 
@@ -342,6 +368,14 @@
   function camDistForTier(t)    { return ROOM_TIERS[t].camDist; }
   // cost to expand FROM (t-1) TO t
   function expandCost(t) { return Math.round(200 * Math.pow(3.2, t - 1)); }
+  // what each level physically adds, so the upgrade card promises something
+  // concrete rather than an abstract "tier 1 -> 2"
+  var LEVEL_REVEALS = [
+    "",
+    "Opens a wall of product shelving",
+    "Adds a customer lounge",
+    "Adds a premium display floor",
+  ];
 
   // ---- back room fittings ----
   var SEED_ZONE = { x: -6.5, z: -30.2, r: 3.0 };   // seed-pack shelf
@@ -365,6 +399,7 @@
   // x=-9 because the strain kiosk's fitting hangs back into that lane.
   var RUNNER_ZONE = { x: -5.0, z: -9.0 };          // dispatch point: hire runners
   var MAX_RUNNERS = 3;
+  var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -394,6 +429,8 @@
   function rowCost(rowNum) { return Math.round(200 * Math.pow(3.2, rowNum - 1)); }
   function rowLightCost(lv) { return Math.round(250 * Math.pow(1.9, lv)); }
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
+  var PROMO_SECONDS = 60;          // how long one promotion runs
+  var PROMO_MULT = 2;              // money multiplier per sale while running
 
   // ===================================================================
   //  STATE
@@ -413,6 +450,7 @@
       stationPaid: {},
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
+      promoUntil: 0,          // promotion expiry (epoch ms)
       lastSaveTime: Date.now(),
     };
   }
@@ -454,6 +492,7 @@
       delete merged.plotLight;
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
+      if (typeof merged.promoUntil !== "number") merged.promoUntil = 0;
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
@@ -495,6 +534,10 @@
     return tier > 0 ? base + " #" + (tier + 1) : base;
   }
 
+  function promoActive()  { return Date.now() < (state.promoUntil || 0); }
+  function promoSecsLeft() { return Math.max(0, Math.ceil(((state.promoUntil || 0) - Date.now()) / 1000)); }
+  // shop level is 1-based for the player; tier 0 is "Level 1"
+  function storeLevel() { return (state.roomTier || 0) + 1; }
   function boostActive()  { return Date.now() < (state.boostUntil || 0); }
   function boostSecsLeft() { return Math.max(0, Math.ceil(((state.boostUntil || 0) - Date.now()) / 1000)); }
 
@@ -515,6 +558,9 @@
   function costBoost() { return 100; }
   function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
   function costRunner() { return Math.round(500 * Math.pow(2.2, state.runnerLv || 0)); }
+  // priced off what a bud currently fetches, so a promotion stays worth
+  // running at every stage rather than going trivial once strains scale up
+  function costPromo() { return Math.round(sellValue() * 22); }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -540,24 +586,24 @@
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  // Without these two, MeshStandardMaterial renders washed-out and flat —
-  // they're what actually makes the PBR lighting read as "lit".
   renderer.outputEncoding = THREE.sRGBEncoding;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  // ACES filmic rolls highlights off toward grey, which is exactly the look
+  // we don't want here. Linear keeps the palette flat and poster-bright.
+  renderer.toneMapping = THREE.LinearToneMapping;
+  renderer.toneMappingExposure = 0.72;
 
   var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1b1f26);
-  scene.fog = new THREE.Fog(0x232830, 55, 105);
+  scene.background = new THREE.Color(0x7fd2f5);
+  scene.fog = new THREE.Fog(0x9fe0fa, 55, 105);
 
   var camera = new THREE.PerspectiveCamera(42, 1, 0.5, 260);
 
-  // Interior lighting is deliberately dim at the base level — the ceiling
-  // panels and can lights supply most of the illumination, which is what
-  // gives the shop pooled highlights instead of flat uniform brightness.
-  var hemi = new THREE.HemisphereLight(0xdfe8ff, 0x6b563f, 0.32);
+  // Bright and fairly even: a cartoon reads on flat saturated colour, so the
+  // fixtures are accents on top of good overall light rather than the only
+  // thing lifting the scene out of shadow.
+  var hemi = new THREE.HemisphereLight(0xeaf4ff, 0x9c8a6e, 0.42);
   scene.add(hemi);
-  var sun = new THREE.DirectionalLight(0xffe6bd, 0.55);
+  var sun = new THREE.DirectionalLight(0xfff4dd, 0.62);
   sun.position.set(11, 26, -9);
   sun.castShadow = true;
   sun.shadow.mapSize.width = 2048;
@@ -570,7 +616,7 @@
   sun.shadow.camera.bottom = -34;
   sun.shadow.bias = -0.0013;
   scene.add(sun);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.22));
 
   // ---- Procedural textures. Each returns a white/grey canvas tinted by the
   // material's `color`, so one texture serves many surfaces. Colour maps must
@@ -755,8 +801,20 @@
 
   // Flat shading is opt-in now — forcing it globally was flattening every
   // curved surface and cancelling out the lighting detail.
+  // Every surface goes through here, so one saturation pass lifts the whole
+  // shop into cartoon territory without hand-retuning sixty hex values.
+  // Greys have no saturation to scale, so they stay neutral.
+  var COLOR_PUNCH = 1.4;
+  function punch(m) {
+    var hsl = {};
+    m.color.getHSL(hsl);
+    // saturation only — lifting lightness too blows every surface to white
+    m.color.setHSL(hsl.h, Math.min(1, hsl.s * COLOR_PUNCH), hsl.l);
+    return m;
+  }
   function mat(c, o) {
-    return new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.8, metalness: 0 }, o || {}));
+    return punch(new THREE.MeshStandardMaterial(
+      Object.assign({ color: c, roughness: 0.8, metalness: 0 }, o || {})));
   }
   function matFlat(c, o) {
     var m = mat(c, o);
@@ -1572,7 +1630,8 @@
       size -= 2;
     } while (g.measureText(text).width > c.width - 36 && size > 12);
     g.textAlign = "center"; g.textBaseline = "middle";
-    g.lineWidth = 10; g.strokeStyle = "rgba(8,26,17,0.92)";
+    // heavy dark outline so bright labels stay legible against any floor
+    g.lineWidth = 16; g.strokeStyle = "rgba(6,20,13,0.96)";
     g.lineJoin = "round";
     g.strokeText(text, c.width / 2, c.height / 2);
     g.fillStyle = color; g.fillText(text, c.width / 2, c.height / 2);
@@ -1592,7 +1651,8 @@
       size -= 2;
     } while (g.measureText(text).width > c.width - 36 && size > 12);
     g.textAlign = "center"; g.textBaseline = "middle";
-    g.lineWidth = 10; g.strokeStyle = "rgba(8,26,17,0.92)";
+    // heavy dark outline so bright labels stay legible against any floor
+    g.lineWidth = 16; g.strokeStyle = "rgba(6,20,13,0.96)";
     g.lineJoin = "round";
     g.strokeText(text, c.width / 2, c.height / 2);
     g.fillStyle = color; g.fillText(text, c.width / 2, c.height / 2);
@@ -1756,9 +1816,11 @@
     var W = half * 2;
     var y0 = floorTopAt(worldZ);
 
+    // a solid, saturated slab reads from across the room where a faint tint
+    // just disappeared into the floor
     var tint = new THREE.Mesh(
       new THREE.PlaneGeometry(W, W),
-      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.32, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.78, depthWrite: false })
     );
     tint.rotation.x = -Math.PI / 2;
     tint.position.y = y0 + 0.01;
@@ -1766,7 +1828,7 @@
 
     var fill = new THREE.Mesh(
       new THREE.PlaneGeometry(W - 0.2, W - 0.2),
-      new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.6, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: 0x5dff8f, transparent: true, opacity: 0.92, depthWrite: false })
     );
     fill.rotation.x = -Math.PI / 2;
     fill.position.y = y0 + 0.02;
@@ -1774,24 +1836,36 @@
     g.add(fill);
 
     var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(W, W),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
+      new THREE.PlaneGeometry(W + 0.5, W + 0.5),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
     );
     dash.rotation.x = -Math.PI / 2;
     dash.position.y = y0 + 0.03;
     g.add(dash);
 
-    var price = textSprite("$0", hex);
-    price.scale.set(2.6, 0.98, 1);
-    price.position.y = 2.0;
+    // glow puddle so the square pops even on the bright retail floor
+    var halo = new THREE.Mesh(
+      new THREE.PlaneGeometry(W * 1.3, W * 1.3),
+      new THREE.MeshBasicMaterial({
+        map: glowTex, color: color, transparent: true,
+        opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = y0 + 0.005;
+    g.add(halo);
+
+    var price = textSprite("$0", "#ffffff");
+    price.scale.set(4.0, 1.5, 1);
+    price.position.y = 2.3;
     g.add(price);
 
     var lbl = textSprite(labelText, hex);
-    lbl.scale.set(2.4, 0.55, 1);
-    lbl.position.y = 2.7;
+    lbl.scale.set(3.7, 0.85, 1);
+    lbl.position.y = 3.3;
     g.add(lbl);
 
-    return { group: g, tint: tint, dash: dash, fill: fill, price: price, lbl: lbl, half: half };
+    return { group: g, tint: tint, dash: dash, fill: fill, price: price, lbl: lbl, halo: halo, half: half };
   }
 
   // fills the bar left-to-right as `prog` (0..1) of the price is paid
@@ -2718,23 +2792,34 @@
   (function buildCashPad() {
     var g = new THREE.Group();
     var cpY = floorTopAt(CASH_PAD.z);
+    // matches the upgrade squares so the whole shop speaks one visual language
+    var halo = new THREE.Mesh(
+      new THREE.PlaneGeometry(CASH_PAD.half * 3.6, CASH_PAD.half * 3.6),
+      new THREE.MeshBasicMaterial({
+        map: glowTex, color: 0xffd75e, transparent: true,
+        opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = cpY + 0.005;
+    g.add(halo);
     var tint = new THREE.Mesh(
       new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
-      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.28, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.78, depthWrite: false })
     );
     tint.rotation.x = -Math.PI / 2;
     tint.position.y = cpY + 0.01;
     g.add(tint);
     var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
+      new THREE.PlaneGeometry(CASH_PAD.half * 2 + 0.5, CASH_PAD.half * 2 + 0.5),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
     );
     dash.rotation.x = -Math.PI / 2;
     dash.position.y = cpY + 0.02;
     g.add(dash);
-    var lbl = textSprite("$ COLLECT", "#ffe066");
-    lbl.scale.set(2.3, 0.6, 1);
-    lbl.position.set(0, cpY + 0.6, 0);
+    var lbl = textSprite("$ COLLECT", "#ffffff");
+    lbl.scale.set(3.6, 0.92, 1);
+    lbl.position.set(0, cpY + 1.5, 0);
     g.add(lbl);
     g.position.set(CASH_PAD.x, 0, CASH_PAD.z);
     scene.add(g);
@@ -2832,7 +2917,9 @@
     if (!pileMeshes.length) return false;
     var m = pileMeshes.shift();
     counterPile.remove(m);
-    payOutCash(m.userData.value || sellValue());
+    // Promotion multiplies at the till, not at drop-off, so running one pays
+    // off on stock you'd already grown rather than only on future harvests.
+    payOutCash((m.userData.value || sellValue()) * (promoActive() ? PROMO_MULT : 1));
     return true;
   }
 
@@ -3022,6 +3109,9 @@
 
   var boostChip = document.getElementById("boost-chip");
   var boostVal = document.getElementById("boost-val");
+  var promoChip = document.getElementById("promo-chip");
+  var promoVal = document.getElementById("promo-val");
+  var levelVal = document.getElementById("level-val");
 
   function renderHud() {
     cashEl.textContent = fmt(state.cash);
@@ -3036,6 +3126,13 @@
     } else {
       boostChip.classList.remove("on");
     }
+    if (promoActive()) {
+      promoChip.classList.add("on");
+      promoVal.textContent = promoSecsLeft() + "s";
+    } else {
+      promoChip.classList.remove("on");
+    }
+    levelVal.textContent = storeLevel();
   }
 
   // ---- Walk-up interaction: the player must stand at a station (or a locked
@@ -3126,6 +3223,22 @@
       },
     },
     {
+      id: "promo", label: "PROMOTION", icon: "\ud83d\udce3", x: PROMO_ZONE.x, z: PROMO_ZONE.z,
+      color: 0xffb63f, kiosk: false,
+      name: function () { return "Run a Promotion"; },
+      desc: function () {
+        return promoActive()
+          ? "Running \u2014 " + promoSecsLeft() + "s left \u00b7 buy again to extend"
+          : PROMO_MULT + "\u00d7 money on every sale for " + PROMO_SECONDS + "s";
+      },
+      cost: costPromo,
+      buy: function () {
+        var from = Math.max(Date.now(), state.promoUntil || 0);
+        state.promoUntil = from + PROMO_SECONDS * 1000;
+        toast("\ud83d\udce3 Promotion running \u2014 " + PROMO_MULT + "\u00d7 on every sale!");
+      },
+    },
+    {
       id: "value", label: "STRAIN", icon: "\ud83c\udf3f", x: PRICE_ZONE.x, z: PRICE_ZONE.z,
       color: 0xd6685b, kiosk: true,
       name: function () { return "Buy a New Strain"; },
@@ -3142,13 +3255,17 @@
       },
     },
     {
-      id: "expand", label: "EXPAND", icon: "\ud83c\udfd7\ufe0f", x: EXPAND_STATION.x, z: EXPAND_STATION.z,
+      id: "expand", label: "LEVEL UP", icon: "\u2b50", x: EXPAND_STATION.x, z: EXPAND_STATION.z,
       color: 0xb06fd6, kiosk: true,
-      name: function () { return "Expand Store"; },
+      name: function () {
+        return state.roomTier >= MAX_ROOM_TIER
+          ? "Max Level Reached"
+          : "Unlock Level " + (storeLevel() + 1);
+      },
       desc: function () {
         return state.roomTier >= MAX_ROOM_TIER
-          ? "The shop floor is fully expanded"
-          : "Tier " + state.roomTier + " \u2192 " + (state.roomTier + 1) + " \u00b7 push the storefront out";
+          ? "The shop is fully built out"
+          : LEVEL_REVEALS[state.roomTier + 1] || "A bigger shop floor";
       },
       cost: function () { return expandCost(state.roomTier + 1); },
       maxed: function () { return state.roomTier >= MAX_ROOM_TIER; },
@@ -3156,7 +3273,10 @@
         state.roomTier++;
         rebuildRoom();
         camDistTarget = camDistForTier(state.roomTier);
-        toast("\ud83c\udfd7\ufe0f The shop floor just got bigger!");
+        renderHud();
+        // land the level-up somewhere you can actually see it happen
+        addFloater(EXPAND_STATION.x, 3.2, EXPAND_STATION.z, "LEVEL " + storeLevel() + "!", "#ffd75e");
+        toast("\u2b50 Level " + storeLevel() + " \u2014 " + (LEVEL_REVEALS[state.roomTier] || "bigger shop floor") + "!");
       },
     },
   ];
@@ -3227,11 +3347,13 @@
         }
         setPaySquareProgress(sq, 0);
         sq.dash.visible = false;
-        sq.tint.material.opacity = 0.1;
+        sq.halo.visible = false;
+        sq.tint.material.opacity = 0.16;
         return;
       }
       sq.dash.visible = true;
-      sq.tint.material.opacity = 0.32;
+      sq.halo.visible = true;
+      sq.tint.material.opacity = 0.78;
       var cost = st.cost();
       var paid = state.stationPaid[st.id] || 0;
       var remain = Math.max(0, Math.ceil(cost - paid));
