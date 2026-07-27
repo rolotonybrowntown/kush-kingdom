@@ -344,13 +344,16 @@
   function expandCost(t) { return Math.round(200 * Math.pow(3.2, t - 1)); }
 
   // ---- back room fittings ----
-  var SEED_ZONE = { x: -6.5, z: -29.4, r: 3.0 };   // seed-pack shelf
+  var SEED_ZONE = { x: -6.5, z: -30.2, r: 3.0 };   // seed-pack shelf
   var HYDRO_ZONE = { x: 5.5, z: -30.2 };           // hydroponic feed station
                                                    // (kept clear of the back
                                                    // row's grow-light tile)
   var VEND_ZONE  = { x: 11.3, z: -22.0 };          // break-room vending machine
   var LOCKER_ZONE = { x: 11.3, z: -16.5 };         // break-room locker
-  var HIRE_ZONE  = { x: -11.3, z: -30.0 };         // potting bench: hire botanists
+  // Potting bench sits just right of the seed shelf. It used to be off in the
+  // left corner, which could only be reached by walking the row-tile aisle —
+  // so you'd buy a grow light on the way to hiring a botanist.
+  var HIRE_ZONE  = { x: 0.0, z: -30.0 };           // potting bench: hire botanists
   var MAX_BOTANISTS = 3;
 
   // ---- retail fittings ----
@@ -358,12 +361,17 @@
   var CASH_PAD  = { x: 0.7, z: -4.2, half: 1.45 }; // payout tray beside the till
   var PRICE_ZONE = { x: -9.0, z: -5.0 };           // pricing station
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
+  // Sits in the open floor between the door and the pricing kiosk. Kept off
+  // x=-9 because the strain kiosk's fitting hangs back into that lane.
+  var RUNNER_ZONE = { x: -5.0, z: -9.0 };          // dispatch point: hire runners
+  var MAX_RUNNERS = 3;
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
   // are never payment zones — standing on one only ever plants or harvests.
-  var PLOT_COLS = 4, PLOT_ROWS = 4, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 4.0, PLOT_SIZE = 3.0;
-  var PLOT_GRID_CZ = -19.5;
+  // Sits forward of the seed shelf with a walkable aisle between the two.
+  var PLOT_COLS = 4, PLOT_ROWS = 4, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 3.8, PLOT_SIZE = 3.0;
+  var PLOT_GRID_CZ = -19.1;
   var plotDefs = [];
   (function () {
     var w = (PLOT_COLS - 1) * PLOT_SPACING_X;
@@ -395,6 +403,7 @@
       cash: 25,
       capLv: 0, speedLv: 0, sellLv: 0,
       botanistLv: 0,          // hired botanists who plant seeds for you
+      runnerLv: 0,            // hired runners who haul buds to the counter
       tutSeen: {},            // one-shot "what to do next" prompts already shown
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
@@ -446,6 +455,7 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
+      merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
@@ -504,6 +514,7 @@
   function costSell()  { return Math.round(69 * Math.pow(1.5, state.sellLv)); }
   function costBoost() { return 100; }
   function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
+  function costRunner() { return Math.round(500 * Math.pow(2.2, state.runnerLv || 0)); }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -809,6 +820,8 @@
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
     pants:     mat(0x3b5b8a, { map: fabricTex, roughness: 0.9 }),
+    runnerVest:mat(0xd8562f, { map: fabricTex, roughness: 0.9 }),
+    runnerCap: mat(0x9c3a1c, { map: fabricTex, roughness: 0.9 }),
     energyCan: mat(0x1668c8, { roughness: 0.3, metalness: 0.55 }),
     energyBand:mat(0xf5d13b, { roughness: 0.35, metalness: 0.4 }),
     apron:     mat(0x2f7d4f, { map: fabricTex, roughness: 0.95 }),
@@ -2297,6 +2310,162 @@
   }
 
   // ===================================================================
+  //  RUNNERS — hired staff who harvest ready beds and run them out front
+  // ===================================================================
+  var runners = [];
+  var RUN_SPEED = 5.0;
+  var RUN_PICK_TIME = 0.35, RUN_DROP_TIME = 0.3;
+  var RUN_CARRY = 3;                 // buds carried per trip
+
+  (function buildRunners() {
+    for (var n = 0; n < MAX_RUNNERS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.runnerVest);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin : M.skin2);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      // backwards cap, so they read as a courier rather than a gardener
+      var cap = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.36, 0.24, 10), M.runnerCap);
+      cap.position.y = 2.24; g.add(cap);
+      var peak = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.32), M.runnerCap);
+      peak.position.set(0, 2.16, -0.42); g.add(peak);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // crate of buds they carry out front, one bud per unit hauled
+      var crate = new THREE.Group();
+      crate.position.set(0, 1.95, 0.34);
+      for (var c = 0; c < RUN_CARRY; c++) {
+        var bud = new THREE.Mesh(budGeo, M.bud);
+        bud.scale.setScalar(0.7);
+        bud.position.set((c - 1) * 0.3, 0, 0);
+        bud.visible = false;
+        crate.add(bud);
+      }
+      g.add(crate);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      runners.push({
+        obj: g, l1: l1, l2: l2, crate: crate,
+        pos: { x: RUNNER_ZONE.x + 1.4 + n * 0.9, z: RUNNER_ZONE.z + 1.2 },
+        phase: "toBed", timer: 0, bedIdx: -1, carrying: 0,
+        walkPhase: n * 2.1, slot: n,
+      });
+    }
+  })();
+
+  // Runners work both rooms, so they have to use the doorway — walking a
+  // straight line to the counter would take them through the partition wall.
+  function viaDoor(b, tx, tz) {
+    var sameSide = (b.pos.z < PARTITION_Z) === (tz < PARTITION_Z);
+    if (sameSide) return { x: tx, z: tz };
+    return { x: 0, z: PARTITION_Z + (b.pos.z < PARTITION_Z ? 1.0 : -1.0) };
+  }
+
+  // first ready bed nobody else is already running to
+  function runFreeBed(self) {
+    for (var i = 0; i < state.plotsUnlocked; i++) {
+      if (state.plots[i].state !== "ready") continue;
+      var taken = false;
+      for (var j = 0; j < runners.length; j++) {
+        var o = runners[j];
+        if (o !== self && o.obj.visible && o.bedIdx === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
+  function runStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(RUN_SPEED * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function updateRunners(now, dt) {
+    for (var i = 0; i < runners.length; i++) {
+      var b = runners[i];
+      var hired = i < (state.runnerLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.bedIdx = -1; b.carrying = 0; continue; }
+
+      var walking = false;
+      if (b.phase === "toBed") {
+        // full load, or nothing left to pick — take what we have out front
+        if (b.carrying >= RUN_CARRY) { b.phase = "toCounter"; b.bedIdx = -1; continue; }
+        if (b.bedIdx < 0 || b.bedIdx >= state.plotsUnlocked ||
+            state.plots[b.bedIdx].state !== "ready") {
+          b.bedIdx = runFreeBed(b);
+        }
+        if (b.bedIdx < 0) {
+          if (b.carrying > 0) { b.phase = "toCounter"; continue; }
+          b.phase = "waiting"; b.timer = 0.7; continue;
+        }
+        var bd = plotDefs[b.bedIdx];
+        var t1 = viaDoor(b, bd.x, bd.z);
+        walking = !runStepTo(b, t1.x, t1.z, dt);
+        if (!walking && t1.x === bd.x && t1.z === bd.z) {
+          b.phase = "pick"; b.timer = RUN_PICK_TIME;
+        }
+
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var bi = b.bedIdx;
+          if (bi >= 0 && bi < state.plotsUnlocked && state.plots[bi].state === "ready") {
+            state.plots[bi] = { state: "empty" };
+            b.carrying++;
+            addFloater(plotDefs[bi].x, 2.5, plotDefs[bi].z, "+BUD", "#a8f57a");
+          }
+          b.bedIdx = -1;
+          b.phase = "toBed";
+        }
+
+      } else if (b.phase === "waiting") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.7;
+          if (b.carrying > 0) b.phase = "toCounter";
+          else if (runFreeBed(b) >= 0) b.phase = "toBed";
+        }
+
+      } else if (b.phase === "toCounter") {
+        var cx = SELL_ZONE.x - 1.2 + b.slot * 1.2, cz = SELL_ZONE.z + 1.4;
+        var t2 = viaDoor(b, cx, cz);
+        walking = !runStepTo(b, t2.x, t2.z, dt);
+        if (!walking && t2.x === cx && t2.z === cz) {
+          b.phase = "drop"; b.timer = RUN_DROP_TIME;
+        }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          while (b.carrying > 0) { dropBudOnCounter(); b.carrying--; }
+          renderUpgrades();
+          b.phase = "toBed";
+        }
+      }
+
+      for (var c2 = 0; c2 < b.crate.children.length; c2++) {
+        b.crate.children[c2].visible = c2 < b.carrying;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  // ===================================================================
   //  FLOATING TEXT
   // ===================================================================
   var floaters = [];
@@ -2936,6 +3105,27 @@
       },
     },
     {
+      id: "runner", label: "RUNNER", icon: "\ud83c\udfc3", x: RUNNER_ZONE.x, z: RUNNER_ZONE.z,
+      color: 0xe0793f, kiosk: false,
+      name: function () {
+        return (state.runnerLv || 0) === 0 ? "Hire a Runner" : "Hire Another Runner";
+      },
+      desc: function () {
+        var n = state.runnerLv || 0;
+        return n >= MAX_RUNNERS
+          ? "Your full crew is on the floor"
+          : (n === 0
+              ? "They harvest ready beds and run the buds out to the counter"
+              : n + " on staff \u00b7 hire one more to haul faster");
+      },
+      cost: costRunner,
+      maxed: function () { return (state.runnerLv || 0) >= MAX_RUNNERS; },
+      buy: function () {
+        state.runnerLv = (state.runnerLv || 0) + 1;
+        toast("\ud83c\udfc3 Runner hired \u2014 they'll stock the counter for you!");
+      },
+    },
+    {
       id: "value", label: "STRAIN", icon: "\ud83c\udf3f", x: PRICE_ZONE.x, z: PRICE_ZONE.z,
       color: 0xd6685b, kiosk: true,
       name: function () { return "Buy a New Strain"; },
@@ -3003,7 +3193,13 @@
       icon.scale.set(0.95, 0.95, 1);
       icon.position.set(0, 2.55, 0.28);
       kiosk.add(icon);
-      kiosk.position.z = -(STATION_PAD_HALF + 1.1);
+      // Normally the fitting tucks in behind the square, but for a station
+      // parked near the partition that would bury it in the wall, so flip it
+      // out in front instead.
+      var back = STATION_PAD_HALF + 1.1;
+      var wouldClipWall = st.z > PARTITION_Z && (st.z - back - 1.2) < PARTITION_Z;
+      kiosk.position.z = wouldClipWall ? back : -back;
+      if (wouldClipWall) kiosk.rotation.y = Math.PI;
       g.add(kiosk);
     }
 
@@ -3265,6 +3461,7 @@
     updateCoins(dt);
     updateNpcs(now, dt);
     updateBotanists(now, dt);
+    updateRunners(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
