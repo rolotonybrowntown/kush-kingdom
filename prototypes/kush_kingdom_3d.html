@@ -2089,24 +2089,30 @@
     return 1 + Math.floor(Math.random() * (reach + 1));
   }
 
-  var NPC_CYCLE = 7.0, NPC_IN = 2.2, NPC_WAIT_END = 5.4;
+  // Walk speed is distance/time now, not a fixed-duration lerp — that let
+  // customers crawl across a fully expanded store. Pinned close to the
+  // player's own base speed so they read as just as quick as you are.
+  var NPC_SPEED = 6.6;        // BASE_SPEED is 7.2
+  var NPC_WAIT = 2.4;         // seconds standing at the counter
   var NPC_BUY_EVERY = 0.28;   // seconds between buds handed over
 
   function updateNpcs(now, dt) {
     npcs.forEach(function (npc, idx) {
       // walk up toward the gate, pause at the counter queue, loop back off-screen
-      var t = ((now / 1000) + npc.phase) % NPC_CYCLE;
       var queueX = SELL_ZONE.x - 0.4 + (idx - 1) * 1.5;
       var startZ = retailMaxZForTier(state.roomTier) - 1.5, queueZ = SELL_ZONE.z + 3.0;
+      var walkTime = Math.abs(startZ - queueZ) / NPC_SPEED;
+      var cycle = walkTime * 2 + NPC_WAIT;
+      var t = ((now / 1000) + npc.phase) % cycle;
       var walking, z, phase;
-      if (t < NPC_IN) {                       // walking in
-        z = startZ + (queueZ - startZ) * (t / NPC_IN);
+      if (t < walkTime) {                     // walking in
+        z = startZ + (queueZ - startZ) * (t / walkTime);
         walking = true; phase = "in";
-      } else if (t < NPC_WAIT_END) {          // at the counter
+      } else if (t < walkTime + NPC_WAIT) {   // at the counter
         z = queueZ;
         walking = false; phase = "wait";
       } else {                                // walking away
-        var p2 = (t - NPC_WAIT_END) / (NPC_CYCLE - NPC_WAIT_END);
+        var p2 = (t - walkTime - NPC_WAIT) / walkTime;
         z = queueZ + (startZ - queueZ) * p2;
         walking = true; phase = "out";
       }
@@ -2138,11 +2144,12 @@
       }
 
       npc.obj.position.set(queueX, 0, z);
-      npc.obj.rotation.y = t < NPC_WAIT_END ? Math.PI : 0;
-      var swing = walking ? Math.sin(now * 0.011 + idx) * 0.5 : 0;
+      npc.obj.rotation.y = t < walkTime + NPC_WAIT ? Math.PI : 0;
+      // faster legs to match the quicker walk, or the stride looks like a glide
+      var swing = walking ? Math.sin(now * 0.016 + idx) * 0.55 : 0;
       npc.l1.rotation.x = swing;
       npc.l2.rotation.x = -swing;
-      npc.obj.position.y = walking ? Math.abs(Math.sin(now * 0.011 + idx)) * 0.06 : 0;
+      npc.obj.position.y = walking ? Math.abs(Math.sin(now * 0.016 + idx)) * 0.07 : 0;
     });
   }
 
