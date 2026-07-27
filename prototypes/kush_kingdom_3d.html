@@ -375,8 +375,12 @@
     }
   })();
   var MAX_PLOTS = plotDefs.length; // 12
-  var STARTING_PLOTS = 3;
+  var STARTING_PLOTS = PLOT_COLS;  // one full row free to start
   var MAX_LIGHT_LV = 3;            // grow-light tiers per bed
+  // pay tile sits beside column 0, snug against the row it unlocks
+  var ROW_TILE_X = -((PLOT_COLS - 1) * PLOT_SPACING_X) / 2 - PLOT_SPACING_X + 1.3;
+  var ROW_TILE_HALF = (PLOT_SIZE + 0.5) / 2;
+  function rowCost(rowNum) { return Math.round(600 * Math.pow(3, rowNum - 1)); }
   var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
 
   // ===================================================================
@@ -390,8 +394,7 @@
       plots: plotDefs.map(function () { return { state: "locked" }; }),
       // grow-light level installed on each individual bed
       plotLight: plotDefs.map(function () { return 0; }),
-      // partial payments held per build pad / grow light / upgrade station
-      padPaid: plotDefs.map(function () { return 0; }),
+      // partial payments held per grow light / row unlock / upgrade station
       lightPaid: plotDefs.map(function () { return 0; }),
       stationPaid: {},
       roomTier: 0,
@@ -409,9 +412,9 @@
         merged.plots = plotDefs.map(function () { return { state: "locked" }; });
         merged.plotsUnlocked = STARTING_PLOTS;
       }
-      if (!Array.isArray(merged.padPaid) || merged.padPaid.length !== plotDefs.length) {
-        merged.padPaid = plotDefs.map(function () { return 0; });
-      }
+      // Beds now unlock a whole row at a time — round an older save's count
+      // up to the next full row so nobody loses a bed they already had.
+      merged.plotsUnlocked = Math.min(MAX_PLOTS, Math.ceil(merged.plotsUnlocked / PLOT_COLS) * PLOT_COLS);
       if (!Array.isArray(merged.plotLight) || merged.plotLight.length !== plotDefs.length) {
         merged.plotLight = plotDefs.map(function () { return 0; });
       }
@@ -461,8 +464,6 @@
     return Math.round(55 * Math.pow(1.85, lv));
   }
   function costBoost() { return 140; }
-  // price of the Nth pad (only the next locked pad is buyable)
-  function padCost(idx) { return Math.round(80 * Math.pow(1.5, idx - STARTING_PLOTS)); }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -651,6 +652,24 @@
     return finishTex(c, 4, 4, true);
   }
 
+  // top face of a cash brick: solid bill-green with a big printed "$", so a
+  // pile of them reads as stacked money at a glance rather than plain blocks
+  function makeCashTopTexture() {
+    var S = 128;
+    var c = document.createElement("canvas");
+    c.width = c.height = S;
+    var g = c.getContext("2d");
+    g.fillStyle = "#22c55e"; g.fillRect(0, 0, S, S);
+    g.strokeStyle = "rgba(255,255,255,0.55)";
+    g.lineWidth = 4;
+    g.strokeRect(6, 6, S - 12, S - 12);
+    g.fillStyle = "rgba(255,255,255,0.9)";
+    g.font = "bold 62px sans-serif";
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText("$", S / 2, S / 2 + 4);
+    return finishTex(c, 1, 1, true);
+  }
+
   // soft radial falloff, reused as an additive "glow" halo behind lights/signs
   function makeGlowTexture() {
     var c = document.createElement("canvas");
@@ -668,6 +687,7 @@
   var plasterTex = makePlasterTexture();
   var woodTex = makeWoodTexture();
   var soilTex = makeSoilTexture();
+  var cashTopTex = makeCashTopTexture();
   var fabricTex = makeFabricTexture();
   var glowTex = makeGlowTexture();
 
@@ -711,8 +731,8 @@
     packC:       mat(0x8f5fb8, { map: fabricTex, roughness: 0.45, metalness: 0.25 }),
     white2:      mat(0xf2efe6),
     growLight:   mat(0xe7c4ff, { emissive: 0xc98bff, emissiveIntensity: 1.6, roughness: 0.4 }),
-    cashNote:    mat(0x2fdc5e, { roughness: 0.75 }),
-    cashBand:    mat(0xffd75e, { roughness: 0.5, metalness: 0.35 }),
+    cashSide:    mat(0x1e9e4a, { roughness: 0.8 }),
+    cashTop:     mat(0x2fdc5e, { map: cashTopTex, roughness: 0.55 }),
     wallAccent:  mat(0x2e4a3a, { map: plasterTex, roughness: 0.85 }),
     wallTrim:    mat(0x9c7043, { map: woodTex, roughness: 0.5 }),
     windowGlass: mat(0xcfeef8, { transparent: true, opacity: 0.35, roughness: 0.04, metalness: 0.2 }),
@@ -1615,40 +1635,6 @@
     glow.visible = false;
     g.add(glow);
 
-    // ---- locked build pad (tinted fill + dashed outline + price sign) ----
-    var pad = new THREE.Group();
-    var padTint = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.2, depthWrite: false })
-    );
-    padTint.rotation.x = -Math.PI / 2;
-    padTint.position.y = 0.253;
-    pad.add(padTint);
-
-    var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
-    );
-    dash.rotation.x = -Math.PI / 2;
-    dash.position.y = 0.27;
-    pad.add(dash);
-
-    var fill = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
-      new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.6, depthWrite: false })
-    );
-    fill.rotation.x = -Math.PI / 2;
-    fill.position.y = 0.26;
-    fill.scale.z = 0.001;
-    pad.add(fill);
-
-    var priceSprite = textSprite("$0", "#ffe066");
-    priceSprite.scale.set(2.6, 0.98, 1);
-    priceSprite.position.y = 2.0;
-    pad.add(priceSprite);
-
-    g.add(pad);
-
     // ---- separate light-upgrade pad, shown only while the bed is empty and
     // not yet at max light level — this is what makes "standing here will
     // spend money on a grow light" visible, instead of a silent proximity check ----
@@ -1687,11 +1673,79 @@
     return {
       group: g, frame: frame, soil: soil, plant: plant, glow: glow,
       tray: tray, rack: rack,
-      pad: pad, padFill: fill, padPrice: priceSprite,
       lightPad: lightPad, lightFill: lightFill, lightPrice: lightPrice,
     };
   }
   for (var pi = 0; pi < plotDefs.length; pi++) plotObjects.push(makePlot(pi));
+
+  // ---- one pay tile per row, sitting snug against column 0 — stand here to
+  // unlock the whole row of beds at once, instead of paying per bed ----
+  var rowTiles = [];
+  function makeRowTile(rowIdx) {
+    var rz = plotDefs[rowIdx * PLOT_COLS].z;
+    var g = new THREE.Group();
+    var tint = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
+      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.2, depthWrite: false })
+    );
+    tint.rotation.x = -Math.PI / 2;
+    tint.position.y = 0.253;
+    g.add(tint);
+
+    var dash = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
+    );
+    dash.rotation.x = -Math.PI / 2;
+    dash.position.y = 0.27;
+    g.add(dash);
+
+    var fill = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
+      new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.6, depthWrite: false })
+    );
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.y = 0.26;
+    fill.scale.z = 0.001;
+    g.add(fill);
+
+    var priceSprite = textSprite("$0", "#ffe066");
+    priceSprite.scale.set(2.6, 0.98, 1);
+    priceSprite.position.y = 2.0;
+    g.add(priceSprite);
+
+    var lbl = textSprite("UNLOCK ROW", "#ffe066");
+    lbl.scale.set(2.4, 0.55, 1);
+    lbl.position.y = 2.7;
+    g.add(lbl);
+
+    g.position.set(ROW_TILE_X, 0, rz);
+    g.visible = false;
+    scene.add(g);
+    return { group: g, dash: dash, fill: fill, price: priceSprite };
+  }
+  for (var ri = 0; ri < PLOT_ROWS; ri++) rowTiles.push(makeRowTile(ri));
+
+  function updateRowTiles(now) {
+    var nextRow = Math.floor(state.plotsUnlocked / PLOT_COLS);
+    for (var ri2 = 0; ri2 < rowTiles.length; ri2++) {
+      var rt = rowTiles[ri2];
+      var show = (ri2 === nextRow && state.plotsUnlocked < MAX_PLOTS);
+      rt.group.visible = show;
+      if (!show) continue;
+      var cost = rowCost(nextRow);
+      var paid = state.stationPaid["row" + nextRow] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (rt.price.userData.last !== remain) {
+        updateSpriteText(rt.price, "$" + fmt(remain), "#ffe066");
+        rt.price.userData.last = remain;
+      }
+      var prog = Math.min(1, paid / cost);
+      rt.fill.scale.z = Math.max(0.001, prog);
+      rt.fill.position.z = -(PLOT_SIZE + 0.3) / 2 * (1 - prog);
+      rt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
 
   // ---- grow-light fixtures hanging over each bed, one bar per level ----
   var lightRigs = [];
@@ -2161,9 +2215,11 @@
   var BRICK_VALUE = 8;
   var BRICK_COLS = 4, BRICK_ROWS = 4;
   var BRICK_MAX_LAYERS = 24;
-  var BRICK_W = 0.72, BRICK_D = 0.5, BRICK_H = 0.2;
+  // solid chunky block with a printed "$" on top — reads as a brick of cash
+  // sitting on the floor, not a stack of thin sheets
+  var BRICK_W = 0.68, BRICK_D = 0.5, BRICK_H = 0.32;
   var brickGeo = new THREE.BoxGeometry(BRICK_W, BRICK_H, BRICK_D);
-  var brickBandGeo = new THREE.BoxGeometry(BRICK_W + 0.04, BRICK_H * 0.42, 0.12);
+  var brickMats = [M.cashSide, M.cashSide, M.cashTop, M.cashSide, M.cashSide, M.cashSide];
 
   function brickSpot(i) {
     var perLayer = BRICK_COLS * BRICK_ROWS;
@@ -2176,22 +2232,19 @@
     return {
       x: CASH_PAD.x - (CASH_PAD.half - margin) + col * stepX,
       z: CASH_PAD.z - (CASH_PAD.half - margin) + row * stepZ,
-      y: 0.42 + layer * BRICK_H,
+      y: BRICK_H / 2 + 0.03 + layer * BRICK_H,
     };
   }
 
   function addCashBrick() {
     var spot = brickSpot(cashBricks.length);
-    var g = new THREE.Group();
-    var body = new THREE.Mesh(brickGeo, M.cashNote);
+    var body = new THREE.Mesh(brickGeo, brickMats);
     body.castShadow = true;
-    g.add(body);
-    var band = new THREE.Mesh(brickBandGeo, M.cashBand);
-    g.add(band);
-    g.position.set(spot.x, spot.y + 2.2, spot.z);
-    g.rotation.y = (Math.random() - 0.5) * 0.08;
-    scene.add(g);
-    cashBricks.push({ obj: g, restY: spot.y, bornAt: performance.now() });
+    body.receiveShadow = true;
+    body.position.set(spot.x, spot.y + 2.2, spot.z);
+    body.rotation.y = (Math.random() - 0.5) * 0.08;
+    scene.add(body);
+    cashBricks.push({ obj: body, restY: spot.y, bornAt: performance.now() });
   }
 
   function removeCashBrick() {
@@ -2205,37 +2258,27 @@
     while (cashBricks.length > target) removeCashBrick();
   }
 
-  // ---- the payout tray itself: a marked square on the floor by the till ----
+  // ---- the payout spot itself: a marked floor square by the till, same
+  // tinted/dashed language as every other pay-here square in the shop ----
   (function buildCashPad() {
     var g = new THREE.Group();
-    var plate = new THREE.Mesh(
-      new THREE.BoxGeometry(CASH_PAD.half * 2, 0.12, CASH_PAD.half * 2), M.metalRack);
-    plate.position.y = 0.31; plate.receiveShadow = true;
-    g.add(plate);
-    // raised lip so it reads as a tray rather than a floor decal
-    [[0, -1], [0, 1]].forEach(function (d) {
-      var r = new THREE.Mesh(new THREE.BoxGeometry(CASH_PAD.half * 2 + 0.16, 0.16, 0.16), M.cashBand);
-      r.position.set(0, 0.42, d[1] * CASH_PAD.half);
-      g.add(r);
-    });
-    [[-1, 0], [1, 0]].forEach(function (d) {
-      var r = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, CASH_PAD.half * 2 + 0.16), M.cashBand);
-      r.position.set(d[0] * CASH_PAD.half, 0.42, 0);
-      g.add(r);
-    });
-    var mark = new THREE.Mesh(
-      new THREE.PlaneGeometry(CASH_PAD.half * 1.5, CASH_PAD.half * 1.5),
-      new THREE.MeshBasicMaterial({
-        map: glowTex, color: 0xffd75e, transparent: true,
-        opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false,
-      })
+    var tint = new THREE.Mesh(
+      new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
+      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.18, depthWrite: false })
     );
-    mark.rotation.x = -Math.PI / 2;
-    mark.position.y = 0.38;
-    g.add(mark);
-    var lbl = textSprite("$", "#ffe066");
-    lbl.scale.set(0.7, 0.7, 1);
-    lbl.position.set(0, 0.9, 0);
+    tint.rotation.x = -Math.PI / 2;
+    tint.position.y = 0.02;
+    g.add(tint);
+    var dash = new THREE.Mesh(
+      new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
+    );
+    dash.rotation.x = -Math.PI / 2;
+    dash.position.y = 0.03;
+    g.add(dash);
+    var lbl = textSprite("$ COLLECT", "#ffe066");
+    lbl.scale.set(2.3, 0.6, 1);
+    lbl.position.set(0, 0.6, 0);
     g.add(lbl);
     g.position.set(CASH_PAD.x, 0, CASH_PAD.z);
     scene.add(g);
@@ -2350,27 +2393,9 @@
       if (plot.state === "locked") {
         po.frame.visible = false; po.soil.visible = false;
         po.plant.visible = false; po.glow.visible = false;
-        var isNext = (i9 === state.plotsUnlocked);
-        po.pad.visible = isNext;   // only the next pad is shown/buyable
-        if (isNext) {
-          var cost = padCost(i9);
-          var paid = state.padPaid[i9] || 0;
-          var remain = Math.max(0, Math.ceil(cost - paid));
-          if (po.padPrice.userData.last !== remain) {
-            updateSpriteText(po.padPrice, "$" + fmt(remain), "#ffe066");
-            po.padPrice.userData.last = remain;
-          }
-          po.padPrice.position.y = 2.0 + Math.sin(now * 0.003) * 0.14;
-          // fill tracks how much has actually been paid into this pad
-          var prog = Math.min(1, paid / cost);
-          po.padFill.scale.z = Math.max(0.001, prog);
-          po.padFill.position.z = -(PLOT_SIZE + 0.3) / 2 * (1 - prog);
-          po.pad.children[1].material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25; // children[1] = dash (padTint is 0)
-        }
         continue;
       }
 
-      po.pad.visible = false;
       po.frame.visible = true; po.soil.visible = true;
 
       if (plot.state === "empty") {
@@ -2707,19 +2732,18 @@
     st.obj = g;
   });
 
+  // Row-unlock and upgrade-station payments share the same keyed bucket
+  // (state.stationPaid) since only one of each is ever "next" at a time.
   function zonePaid(z) {
-    if (z.kind === "plot")  return state.padPaid[z.idx] || 0;
     if (z.kind === "light") return state.lightPaid[z.idx] || 0;
     return state.stationPaid[z.key] || 0;
   }
   function zoneAddPaid(z, v) {
-    if (z.kind === "plot")       state.padPaid[z.idx] = (state.padPaid[z.idx] || 0) + v;
-    else if (z.kind === "light") state.lightPaid[z.idx] = (state.lightPaid[z.idx] || 0) + v;
+    if (z.kind === "light") state.lightPaid[z.idx] = (state.lightPaid[z.idx] || 0) + v;
     else state.stationPaid[z.key] = (state.stationPaid[z.key] || 0) + v;
   }
   function zoneResetPaid(z) {
-    if (z.kind === "plot")       state.padPaid[z.idx] = 0;
-    else if (z.kind === "light") state.lightPaid[z.idx] = 0;
+    if (z.kind === "light") state.lightPaid[z.idx] = 0;
     else state.stationPaid[z.key] = 0;
   }
 
@@ -2755,25 +2779,25 @@
   function inBox(px, pz, cx, cz, half) {
     return Math.abs(px - cx) <= half && Math.abs(pz - cz) <= half;
   }
-  var PLOT_PAD_HALF = (PLOT_SIZE + 0.5) / 2;
   var LIGHT_PAD_HALF = (PLOT_SIZE + 0.3) / 2;
   var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
   function currentZone() {
-    var idx = state.plotsUnlocked;
-    if (idx < MAX_PLOTS) {
-      var d = plotDefs[idx];
-      if (inBox(player.pos.x, player.pos.z, d.x, d.z, PLOT_PAD_HALF)) {
+    if (state.plotsUnlocked < MAX_PLOTS) {
+      var base = state.plotsUnlocked;
+      var nextRow = base / PLOT_COLS; // always a whole row boundary
+      var rz = plotDefs[base].z;
+      if (inBox(player.pos.x, player.pos.z, ROW_TILE_X, rz, ROW_TILE_HALF)) {
         return {
-          kind: "plot", idx: idx, key: "plot" + idx,
-          name: "Unlock Plot " + (idx + 1),
-          desc: "Open up another soil bed to plant in",
-          cost: padCost(idx), maxed: false,
-          x: d.x, z: d.z, y: 1.2,
+          kind: "row", key: "row" + nextRow,
+          name: "Unlock Row " + (nextRow + 1),
+          desc: "Open up " + PLOT_COLS + " more soil beds to plant in",
+          cost: rowCost(nextRow), maxed: false,
+          x: ROW_TILE_X, z: rz, y: 1.2,
           complete: function () {
-            state.plots[idx] = { state: "empty" };
-            state.plotsUnlocked++;
-            addFloater(d.x, 2.6, d.z, "UNLOCKED!", "#9df0a0");
-            toast("🌱 New plot unlocked!");
+            for (var k = 0; k < PLOT_COLS; k++) state.plots[base + k] = { state: "empty" };
+            state.plotsUnlocked = base + PLOT_COLS;
+            addFloater(ROW_TILE_X, 2.6, rz, "UNLOCKED!", "#9df0a0");
+            toast("🌱 New row of beds unlocked!");
           },
         };
       }
@@ -2970,6 +2994,7 @@
     handlePlots();
     handleSellZone();
     updatePlotVisuals(now);
+    updateRowTiles(now);
     updateStack(now);
     updateCounterPile(now, dt);
     updateCashDrops(now, dt);
