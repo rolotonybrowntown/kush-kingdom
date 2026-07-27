@@ -334,6 +334,13 @@
   var DOOR_HALF = 2.7;          // half-width of that doorway
   var WALL_H = 9;
 
+  // Walkable surface height, which differs by room: the back of house has a
+  // second slab laid over the main floor. Floor decals (pay squares, cash)
+  // must sit just above whichever surface they're on, or they get swallowed.
+  var FLOOR_TOP_RETAIL = 0.23;  // main floor box: y 0.08, height 0.30
+  var FLOOR_TOP_BACK   = 0.28;  // back-room slab: y 0.25, height 0.06
+  function floorTopAt(z) { return z < PARTITION_Z ? FLOOR_TOP_BACK : FLOOR_TOP_RETAIL; }
+
   var ROOM_TIERS = [
     { retailMaxZ: 2,  camDist: 22 },
     { retailMaxZ: 7,  camDist: 24 },
@@ -348,7 +355,9 @@
 
   // ---- back room fittings ----
   var SEED_ZONE = { x: -6.5, z: -29.4, r: 3.0 };   // seed-pack shelf
-  var HYDRO_ZONE = { x: 5.5, z: -29.4 };           // hydroponic feed station
+  var HYDRO_ZONE = { x: 5.5, z: -30.2 };           // hydroponic feed station
+                                                   // (kept clear of the back
+                                                   // row's grow-light tile)
   var VEND_ZONE  = { x: 11.3, z: -22.0 };          // break-room vending machine
   var LOCKER_ZONE = { x: 11.3, z: -16.5 };         // break-room locker
 
@@ -359,8 +368,13 @@
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
 
   // 3 wide x 4 deep grid of grow beds, filling the back room
-  var PLOT_COLS = 4, PLOT_ROWS = 3, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 4.4, PLOT_SIZE = 3.0;
-  var PLOT_GRID_CZ = -19.5;
+  // Rows are spaced wide enough to fit a grow-light pay tile in the aisle
+  // behind each one — the light can't be bought by standing on the bed
+  // itself, or planting a seed there would charge you for a light.
+  var PLOT_COLS = 4, PLOT_ROWS = 3, PLOT_SPACING_X = 5.0, PLOT_SPACING_Z = 5.4, PLOT_SIZE = 3.0;
+  var PLOT_GRID_CZ = -19.0;
+  var LIGHT_TILE_DZ = -2.5;     // tile sits in the aisle behind the bed
+  var LIGHT_TILE_HALF = 1.0;
   var plotDefs = [];
   (function () {
     var w = (PLOT_COLS - 1) * PLOT_SPACING_X;
@@ -1635,36 +1649,43 @@
     glow.visible = false;
     g.add(glow);
 
-    // ---- separate light-upgrade pad, shown only while the bed is empty and
-    // not yet at max light level — this is what makes "standing here will
-    // spend money on a grow light" visible, instead of a silent proximity check ----
+    // ---- light-upgrade pay tile, in the aisle behind the bed rather than on
+    // it: standing on the bed plants/harvests (always free), standing on this
+    // tile is the only thing that ever spends money on a grow light ----
     var lightPad = new THREE.Group();
+    var LT = LIGHT_TILE_HALF * 2;
+    var padY = floorTopAt(d.z + LIGHT_TILE_DZ);
     var lightTint = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
-      new THREE.MeshBasicMaterial({ color: 0xc98bff, transparent: true, opacity: 0.22, depthWrite: false })
+      new THREE.PlaneGeometry(LT, LT),
+      new THREE.MeshBasicMaterial({ color: 0xc98bff, transparent: true, opacity: 0.3, depthWrite: false })
     );
     lightTint.rotation.x = -Math.PI / 2;
-    lightTint.position.y = 0.253;
+    lightTint.position.y = padY + 0.01;
     lightPad.add(lightTint);
     var lightDash = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.7, depthWrite: false })
+      new THREE.PlaneGeometry(LT, LT),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
     );
     lightDash.rotation.x = -Math.PI / 2;
-    lightDash.position.y = 0.27;
+    lightDash.position.y = padY + 0.03;
     lightPad.add(lightDash);
     var lightFill = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.1, PLOT_SIZE + 0.1),
-      new THREE.MeshBasicMaterial({ color: 0xe7c4ff, transparent: true, opacity: 0.55, depthWrite: false })
+      new THREE.PlaneGeometry(LT - 0.16, LT - 0.16),
+      new THREE.MeshBasicMaterial({ color: 0xe7c4ff, transparent: true, opacity: 0.6, depthWrite: false })
     );
     lightFill.rotation.x = -Math.PI / 2;
-    lightFill.position.y = 0.26;
+    lightFill.position.y = padY + 0.02;
     lightFill.scale.z = 0.001;
     lightPad.add(lightFill);
     var lightPrice = textSprite("$0", "#e7c4ff");
     lightPrice.scale.set(2.0, 0.75, 1);
     lightPrice.position.y = 1.5;
     lightPad.add(lightPrice);
+    var lightLbl = textSprite("GROW LIGHT", "#e7c4ff");
+    lightLbl.scale.set(2.2, 0.5, 1);
+    lightLbl.position.y = 2.1;
+    lightPad.add(lightLbl);
+    lightPad.position.z = LIGHT_TILE_DZ;
     lightPad.visible = false;
     g.add(lightPad);
 
@@ -1684,28 +1705,30 @@
   function makeRowTile(rowIdx) {
     var rz = plotDefs[rowIdx * PLOT_COLS].z;
     var g = new THREE.Group();
+    var TW = ROW_TILE_HALF * 2;
+    var y0 = floorTopAt(rz);
     var tint = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.2, depthWrite: false })
+      new THREE.PlaneGeometry(TW, TW),
+      new THREE.MeshBasicMaterial({ color: 0xffd35c, transparent: true, opacity: 0.32, depthWrite: false })
     );
     tint.rotation.x = -Math.PI / 2;
-    tint.position.y = 0.253;
+    tint.position.y = y0 + 0.01;
     g.add(tint);
 
     var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.5, PLOT_SIZE + 0.5),
+      new THREE.PlaneGeometry(TW, TW),
       new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.95, depthWrite: false })
     );
     dash.rotation.x = -Math.PI / 2;
-    dash.position.y = 0.27;
+    dash.position.y = y0 + 0.03;
     g.add(dash);
 
     var fill = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLOT_SIZE + 0.3, PLOT_SIZE + 0.3),
+      new THREE.PlaneGeometry(TW - 0.2, TW - 0.2),
       new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.6, depthWrite: false })
     );
     fill.rotation.x = -Math.PI / 2;
-    fill.position.y = 0.26;
+    fill.position.y = y0 + 0.02;
     fill.scale.z = 0.001;
     g.add(fill);
 
@@ -1742,7 +1765,7 @@
       }
       var prog = Math.min(1, paid / cost);
       rt.fill.scale.z = Math.max(0.001, prog);
-      rt.fill.position.z = -(PLOT_SIZE + 0.3) / 2 * (1 - prog);
+      rt.fill.position.z = -(ROW_TILE_HALF * 2 - 0.2) / 2 * (1 - prog);
       rt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
     }
   }
@@ -2232,7 +2255,7 @@
     return {
       x: CASH_PAD.x - (CASH_PAD.half - margin) + col * stepX,
       z: CASH_PAD.z - (CASH_PAD.half - margin) + row * stepZ,
-      y: BRICK_H / 2 + 0.03 + layer * BRICK_H,
+      y: floorTopAt(CASH_PAD.z) + BRICK_H / 2 + 0.01 + layer * BRICK_H,
     };
   }
 
@@ -2262,23 +2285,24 @@
   // tinted/dashed language as every other pay-here square in the shop ----
   (function buildCashPad() {
     var g = new THREE.Group();
+    var cpY = floorTopAt(CASH_PAD.z);
     var tint = new THREE.Mesh(
       new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
-      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.18, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.28, depthWrite: false })
     );
     tint.rotation.x = -Math.PI / 2;
-    tint.position.y = 0.02;
+    tint.position.y = cpY + 0.01;
     g.add(tint);
     var dash = new THREE.Mesh(
       new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
       new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
     );
     dash.rotation.x = -Math.PI / 2;
-    dash.position.y = 0.03;
+    dash.position.y = cpY + 0.02;
     g.add(dash);
     var lbl = textSprite("$ COLLECT", "#ffe066");
     lbl.scale.set(2.3, 0.6, 1);
-    lbl.position.set(0, 0.6, 0);
+    lbl.position.set(0, cpY + 0.6, 0);
     g.add(lbl);
     g.position.set(CASH_PAD.x, 0, CASH_PAD.z);
     scene.add(g);
@@ -2398,26 +2422,27 @@
 
       po.frame.visible = true; po.soil.visible = true;
 
+      // The light tile is off the bed now, so it can stay up whatever the bed
+      // is doing — you can pay for a light while the crop is still growing.
+      var lightUpgradeable = (state.plotLight[i9] || 0) < MAX_LIGHT_LV;
+      po.lightPad.visible = lightUpgradeable;
+      if (lightUpgradeable) {
+        var lCost = costLight(i9);
+        var lPaid = state.lightPaid[i9] || 0;
+        var lRemain = Math.max(0, Math.ceil(lCost - lPaid));
+        if (po.lightPrice.userData.last !== lRemain) {
+          updateSpriteText(po.lightPrice, "$" + fmt(lRemain), "#e7c4ff");
+          po.lightPrice.userData.last = lRemain;
+        }
+        var lProg = Math.min(1, lPaid / lCost);
+        po.lightFill.scale.z = Math.max(0.001, lProg);
+        po.lightFill.position.z = -(LIGHT_TILE_HALF * 2 - 0.16) / 2 * (1 - lProg);
+        po.lightPad.children[1].material.opacity = 0.55 + Math.sin(now * 0.004 + i9) * 0.25;
+      }
+
       if (plot.state === "empty") {
         po.plant.visible = false; po.glow.visible = false;
-        var lightLv = state.plotLight[i9] || 0;
-        var lightUpgradeable = lightLv < MAX_LIGHT_LV;
-        po.lightPad.visible = lightUpgradeable;
-        if (lightUpgradeable) {
-          var lCost = costLight(i9);
-          var lPaid = state.lightPaid[i9] || 0;
-          var lRemain = Math.max(0, Math.ceil(lCost - lPaid));
-          if (po.lightPrice.userData.last !== lRemain) {
-            updateSpriteText(po.lightPrice, "$" + fmt(lRemain), "#e7c4ff");
-            po.lightPrice.userData.last = lRemain;
-          }
-          var lProg = Math.min(1, lPaid / lCost);
-          po.lightFill.scale.z = Math.max(0.001, lProg);
-          po.lightFill.position.z = -(PLOT_SIZE + 0.1) / 2 * (1 - lProg);
-          po.lightPad.children[1].material.opacity = 0.45 + Math.sin(now * 0.004 + i9) * 0.2;
-        }
       } else if (plot.state === "growing") {
-        po.lightPad.visible = false;
         var pct = Math.min(1, (Date.now() - plot.startedAt) / plot.duration);
         po.plant.visible = true;
         var sc = 0.2 + 0.8 * pct;
@@ -2426,7 +2451,6 @@
         po.plant.userData.bud.visible = false;
         po.glow.visible = false;
       } else {
-        po.lightPad.visible = false;
         po.plant.visible = true;
         var bob = 1 + Math.sin(now * 0.005 + i9) * 0.03;
         po.plant.scale.set(bob, bob, bob);
@@ -2693,8 +2717,9 @@
       new THREE.PlaneGeometry(STATION_R * 1.4, STATION_R * 1.4),
       new THREE.MeshBasicMaterial({ color: st.color, transparent: true, opacity: 0.22, depthWrite: false })
     );
+    var stY = floorTopAt(st.z);
     payTint.rotation.x = -Math.PI / 2;
-    payTint.position.y = 0.253;
+    payTint.position.y = stY + 0.01;
     g.add(payTint);
 
     var payDash = new THREE.Mesh(
@@ -2702,7 +2727,7 @@
       new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 0.9, depthWrite: false })
     );
     payDash.rotation.x = -Math.PI / 2;
-    payDash.position.y = 0.27;
+    payDash.position.y = stY + 0.03;
     g.add(payDash);
 
     // floor arc, sitting outside the kiosk base, that sweeps round as money
@@ -2712,7 +2737,7 @@
       new THREE.MeshBasicMaterial({ color: 0x0d2b18, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide })
     );
     track.rotation.x = -Math.PI / 2;
-    track.position.y = 0.28;
+    track.position.y = stY + 0.04;
     g.add(track);
 
     var ring = new THREE.Mesh(
@@ -2720,7 +2745,7 @@
       new THREE.MeshBasicMaterial({ color: 0x8fe08a, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide })
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.29;
+    ring.position.y = stY + 0.05;
     ring.visible = false;
     g.add(ring);
     st.ring = ring;
@@ -2779,7 +2804,6 @@
   function inBox(px, pz, cx, cz, half) {
     return Math.abs(px - cx) <= half && Math.abs(pz - cz) <= half;
   }
-  var LIGHT_PAD_HALF = (PLOT_SIZE + 0.3) / 2;
   var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
   function currentZone() {
     if (state.plotsUnlocked < MAX_PLOTS) {
@@ -2802,16 +2826,13 @@
         };
       }
     }
-    // A grow light is bought at the bed itself. Only offered while the bed is
-    // sitting empty, so it can't quietly eat your cash right after planting.
-    // Uses a tighter radius than planting/harvesting (which is deliberately
-    // generous) — otherwise just walking down the aisle past an empty bed,
-    // e.g. on the way to the seed shelf, would count as "standing at" it.
+    // A grow light is bought from its own tile in the aisle behind the bed,
+    // never from the bed itself — otherwise standing there to plant a seed
+    // would quietly charge you for a light.
     for (var gi = 0; gi < state.plotsUnlocked; gi++) {
       var gd = plotDefs[gi];
-      if (state.plots[gi].state !== "empty") continue;
       if ((state.plotLight[gi] || 0) >= MAX_LIGHT_LV) continue;
-      if (inBox(player.pos.x, player.pos.z, gd.x, gd.z, LIGHT_PAD_HALF)) {
+      if (inBox(player.pos.x, player.pos.z, gd.x, gd.z + LIGHT_TILE_DZ, LIGHT_TILE_HALF)) {
         return (function (bi, bd) {
           var lv = state.plotLight[bi] || 0;
           return {
