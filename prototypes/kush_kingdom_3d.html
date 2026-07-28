@@ -264,6 +264,56 @@
   #loading.hidden { display: none; }
   #fallback { display: none; font-size: 13px; line-height: 1.6; opacity: 0.75; max-width: 320px; }
 
+  /* ---------------- HR panel: buttons, not a walk-up money dump ------------ */
+  #hr-overlay {
+    position: fixed; inset: 0;
+    background: rgba(4, 14, 9, 0.62);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 21; padding: 24px;
+  }
+  #hr-overlay.show { display: flex; }
+  #hr-card {
+    width: 100%; max-width: 350px;
+    background: linear-gradient(180deg, #123024, #0b1f16);
+    border: 2px solid var(--panel-line);
+    border-radius: 22px;
+    padding: 20px 18px 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55);
+  }
+  #hr-card h2 {
+    margin: 0 0 2px; font-size: 20px; text-align: center;
+    color: var(--green-light);
+  }
+  .hr-sub {
+    margin: 0 0 14px; font-size: 11.5px; text-align: center;
+    opacity: 0.7; line-height: 1.45;
+  }
+  .hr-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid rgba(143,224,138,0.14);
+  }
+  .hr-info { flex: 1; display: flex; flex-direction: column; text-align: left; }
+  .hr-info b { font-size: 14px; color: #eafff2; }
+  .hr-info span { font-size: 11.5px; opacity: 0.72; margin-top: 2px; line-height: 1.4; }
+  .hr-buy {
+    flex-shrink: 0;
+    min-width: 84px; padding: 10px 12px;
+    border-radius: 12px;
+    border: 1.5px solid #6fd68a;
+    background: linear-gradient(180deg, #48b465, #2b7a44);
+    color: #fff; font-weight: 800; font-size: 13px;
+    font-family: inherit; cursor: pointer;
+  }
+  .hr-buy:disabled {
+    background: rgba(255,255,255,0.07);
+    border-color: rgba(143,224,138,0.2);
+    color: rgba(234,255,242,0.45);
+    cursor: default;
+  }
+
   /* ---------------- menu (the shop keeps running behind it) ---------------- */
   #menu-btn {
     position: absolute;
@@ -348,6 +398,28 @@
   </div>
 
   <button id="menu-btn" aria-label="Menu">☰</button>
+
+  <div id="hr-overlay">
+    <div id="hr-card">
+      <h2>HR Office</h2>
+      <p class="hr-sub">Applies to every botanist, runner and extractor.</p>
+      <div class="hr-row">
+        <div class="hr-info">
+          <b>Better Boots</b>
+          <span id="hr-speed-desc">—</span>
+        </div>
+        <button class="hr-buy" id="hr-speed-buy">$0</button>
+      </div>
+      <div class="hr-row">
+        <div class="hr-info">
+          <b>Bigger Crates</b>
+          <span id="hr-load-desc">—</span>
+        </div>
+        <button class="hr-buy" id="hr-load-buy">$0</button>
+      </div>
+      <button class="menu-action primary" id="hr-close">Done</button>
+    </div>
+  </div>
 
   <div id="menu-overlay">
     <div id="menu-card">
@@ -558,6 +630,36 @@
   function pressCost(n) { return Math.round(700 * Math.pow(1.9, n)); }
   function hopperCost(lv) { return Math.round(900 * Math.pow(2.2, lv)); }
 
+  // ---- kitchen: ovens that bake dabs into edibles, unlocked at level 3 ----
+  // Same shape as the press line, one bay further back: buy ovens one at a
+  // time, load them with dabs, collect edibles.
+  var OVEN_COLS = 3, OVEN_ROWS = 2, OVEN_SPACING_X = 6.0, OVEN_SIZE = 3.2;
+  var MAX_OVENS = OVEN_COLS * OVEN_ROWS;
+  var ovenDefs = [];
+  (function () {
+    var w = (OVEN_COLS - 1) * OVEN_SPACING_X;
+    var near = backDividerZ(2), far = backDividerZ(3);   // room 2 = level 3
+    for (var r = 0; r < OVEN_ROWS; r++) {
+      var zc = far + (near - far) * (r + 1) / (OVEN_ROWS + 1);
+      for (var c = 0; c < OVEN_COLS; c++) {
+        ovenDefs.push({ x: -w / 2 + c * OVEN_SPACING_X, z: zc });
+      }
+    }
+  })();
+  var OVEN_PAD_HALF = (OVEN_SIZE + 0.5) / 2;
+  var BASE_BAKE_TIME = 9;                          // seconds per edible
+  var OVEN_CAP = 5;                                // dabs an oven holds
+  var BASE_EDIBLE_VALUE = 140;
+  function ediblesUnlocked() { return (state.roomTier || 0) >= 2; }
+  function edibleValue() { return BASE_EDIBLE_VALUE * (sellValue() / BASE_SELL_VALUE); }
+  function bakeTimeFor() {
+    var t = BASE_BAKE_TIME;
+    if (boostActive()) t *= 0.5;
+    return Math.max(1, t);
+  }
+  function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
+  function ovenCost(n) { return Math.round(4000 * Math.pow(1.9, n)); }
+
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
   // are never payment zones — standing on one only ever plants or harvests.
@@ -623,6 +725,8 @@
       presses: pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; }),
       hopperLv: 0,            // how much bud a press holds at once
       dabLv: 0,               // purity: what a dab fetches at the counter
+      ovenCount: 0,           // ovens bought in the kitchen
+      ovens: [],              // { dabs, cooked, acc } per oven
       lastSaveTime: Date.now(),
     };
   }
@@ -680,6 +784,10 @@
       }
       merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
       merged.dabLv = Math.max(0, Math.min(MAX_DAB_LV, merged.dabLv || 0));
+      merged.ovenCount = Math.max(0, Math.min(MAX_OVENS, merged.ovenCount || 0));
+      if (!Array.isArray(merged.ovens) || merged.ovens.length !== ovenDefs.length) {
+        merged.ovens = ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; });
+      }
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
@@ -1094,6 +1202,9 @@
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
     pants:     mat(0x3b5b8a, { map: fabricTex, roughness: 0.9 }),
+    edible:    mat(0x7a4a2c, { roughness: 0.8 }),
+    ovenBody:  mat(0x53606d, { roughness: 0.35, metalness: 0.65 }),
+    ovenGlow:  mat(0xff7a2f, { emissive: 0xff5a10, emissiveIntensity: 1.4, roughness: 0.4 }),
     dab:       mat(0xf0a12c, { roughness: 0.15, metalness: 0.1,
                                emissive: 0x8a4f00, emissiveIntensity: 0.5 }),
     pressBody: mat(0x4a5560, { roughness: 0.35, metalness: 0.7 }),
@@ -1643,6 +1754,38 @@
     scene.add(g);
   })();
 
+  // ---- HR desk. Walking up opens a panel with buttons rather than the
+  // walk-up pour-in used everywhere else: these are shop-wide staff perks,
+  // and picking which one to buy is easier from a menu. ----
+  (function hrDesk() {
+    var g = new THREE.Group();
+    var desk = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 1.6), M.plank);
+    desk.position.y = 0.95; desk.castShadow = true; desk.receiveShadow = true;
+    g.add(desk);
+    var top = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.16, 1.9), M.counterTop);
+    top.position.y = 1.78; top.castShadow = true;
+    g.add(top);
+    var chair = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.18, 14), M.couch);
+    chair.position.set(0, 1.0, 1.6); chair.castShadow = true;
+    g.add(chair);
+    var monitor = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 0.1), M.dark);
+    monitor.position.set(-0.7, 2.24, -0.3); monitor.rotation.x = -0.12; monitor.castShadow = true;
+    g.add(monitor);
+    var screen = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.55), M.lightPanel);
+    screen.position.set(-0.7, 2.24, -0.24); screen.rotation.x = -0.12;
+    g.add(screen);
+    var files = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.5), M.packB);
+    files.position.set(1.0, 2.1, -0.2); files.castShadow = true;
+    g.add(files);
+    addGlow(g, 0, 2.1, 0.2, 3.4, 0x9fd4ff, 0.28);
+    var lbl = textSprite("HR OFFICE", "#bfe8ff");
+    lbl.scale.set(2.8, 0.62, 1);
+    lbl.position.set(0, 3.2, 0);
+    g.add(lbl);
+    g.position.set(HR_ZONE.x, 0, HR_ZONE.z);
+    scene.add(g);
+  })();
+
   // ---- potting bench in the back corner: where botanists are taken on ----
   (function pottingBench() {
     var g = new THREE.Group();
@@ -1692,6 +1835,7 @@
   var seedGeo = new THREE.BoxGeometry(0.52, 0.66, 0.15);   // seed packet
   var budGeo = new THREE.ConeGeometry(0.34, 0.62, 6);       // bud, back to a cone
   var dabGeo = new THREE.IcosahedronGeometry(0.27, 0);      // dab, a glassy blob
+  var edibleGeo = new THREE.BoxGeometry(0.42, 0.24, 0.42);  // edible, a little brownie
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   var dabPile = new THREE.Group();       // dabs, on the other half of the same top
   (function dispensaryCounter() {
@@ -2282,6 +2426,91 @@
   }
   for (var qi = 0; qi < pressDefs.length; qi++) pressObjects.push(makePress(qi));
 
+  // ---- one oven per kitchen slot, same build as a press ----
+  var ovenObjects = [];
+  function makeOven(i) {
+    var d = ovenDefs[i];
+    var g = new THREE.Group();
+    g.position.set(d.x, 0, d.z);
+
+    var body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.6, 2.2), M.ovenBody);
+    body.position.y = 1.4; body.castShadow = true; body.receiveShadow = true;
+    g.add(body);
+    // glass door with a hot glow behind it
+    var door = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.4, 0.1), M.counterGlass);
+    door.position.set(0, 1.5, 1.15);
+    g.add(door);
+    var inner = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 1.2), M.ovenGlow);
+    inner.position.set(0, 1.5, 1.08);
+    inner.visible = false;
+    g.add(inner);
+    var hob = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.16, 2.3), M.metal);
+    hob.position.y = 2.78; hob.castShadow = true;
+    g.add(hob);
+    var flue = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 2.4, 10), M.metalRack);
+    flue.position.set(1.1, 4.0, -0.7); flue.castShadow = true;
+    g.add(flue);
+    // cooling rack on top where finished edibles sit
+    var out = new THREE.Mesh(edibleGeo, M.edible);
+    out.position.set(0, 2.98, 0.3); out.visible = false; out.castShadow = true;
+    g.add(out);
+    var readyGlow = new THREE.Mesh(
+      new THREE.RingGeometry(0.9, 1.25, 22),
+      new THREE.MeshBasicMaterial({ color: 0xffb03f, transparent: true, opacity: 0.75, side: THREE.DoubleSide })
+    );
+    readyGlow.rotation.x = -Math.PI / 2;
+    readyGlow.position.y = 2.9;
+    readyGlow.visible = false;
+    g.add(readyGlow);
+
+    var barIn = makeStatusBar(2.6, 0xffb03f);
+    barIn.position.set(0, 5.4, 0);
+    g.add(barIn); statusBars.push(barIn);
+    var barOut = makeStatusBar(2.6, 0xd98a4a);
+    barOut.position.set(0, 5.0, 0);
+    g.add(barOut); statusBars.push(barOut);
+
+    g.visible = false;
+    scene.add(g);
+    return { group: g, inner: inner, out: out, glow: readyGlow, barIn: barIn, barOut: barOut };
+  }
+  for (var oi = 0; oi < ovenDefs.length; oi++) ovenObjects.push(makeOven(oi));
+
+  var ovenPads = [];
+  function makeOvenPad(i) {
+    var d = ovenDefs[i];
+    var sq = makePaySquare(OVEN_PAD_HALF, 0xff8a3f, "#ffc36a", "BUY OVEN", d.z);
+    sq.group.position.set(d.x, 0, d.z);
+    sq.group.visible = false;
+    scene.add(sq.group);
+    return sq;
+  }
+  for (var opi = 0; opi < MAX_OVENS; opi++) ovenPads.push(makeOvenPad(opi));
+
+  function nextOvenSlot() {
+    var owned = state.ovenCount || 0;
+    return owned < ovenSlotsAvailable() ? owned : -1;
+  }
+
+  function updateOvenPads(now) {
+    var next = nextOvenSlot();
+    for (var i = 0; i < ovenPads.length; i++) {
+      var op = ovenPads[i];
+      var show = (i === next);
+      op.group.visible = show;
+      if (!show) continue;
+      var cost = ovenCost(i);
+      var paid = state.stationPaid["oven" + i] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (op.price.userData.last !== remain) {
+        updateSpriteText(op.price, "$" + fmt(remain), "#ffc36a");
+        op.price.userData.last = remain;
+      }
+      setPaySquareProgress(op, Math.min(1, paid / cost));
+      op.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
+
   // ---- a buy pad on each empty press slot; only the next one is offered ----
   var pressPads = [];
   function makePressPad(i) {
@@ -2495,8 +2724,10 @@
       var want = player.backpack[i3].type;
       var mm = stackMeshes[i3];
       if (mm.userData.type !== want) {
-        mm.geometry = want === "seed" ? seedGeo : (want === "dab" ? dabGeo : budGeo);
-        mm.material = want === "seed" ? M.packA : (want === "dab" ? M.dab : M.bud);
+        mm.geometry = want === "seed" ? seedGeo
+          : want === "dab" ? dabGeo : want === "edible" ? edibleGeo : budGeo;
+        mm.material = want === "seed" ? M.packA
+          : want === "dab" ? M.dab : want === "edible" ? M.edible : M.bud;
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
       }
@@ -2581,7 +2812,7 @@
       // Dab shoppers never enter the bud room: they stop at the dab bar in
       // room two. Bud shoppers walk on through the dab-room doorway, which is
       // why that doorway is lined up with the bud counter.
-      var dabber = npc.kind === "dab";
+      var dabber = npc.kind === "dab", eater = npc.kind === "edible";
       var counter = SELL_ZONE;
       // three abreast, then further rows queue up behind them
       var lane = idx % 3, rank = Math.floor(idx / 3);
@@ -2608,9 +2839,11 @@
       // before they reach the counter
       if (phase === "in" && npc.lastPhase !== "in") {
         // roughly a third come in for dabs once the dab bar is open
-        npc.kind = (dabsUnlocked() && Math.random() < 0.35) ? "dab" : "bud";
+        var roll = Math.random();
+        npc.kind = (ediblesUnlocked() && roll < 0.2) ? "edible"
+                 : (dabsUnlocked() && roll < 0.5) ? "dab" : "bud";
         npc.want = rollOrder();
-        if (npc.kind === "dab") npc.want = Math.max(1, Math.ceil(npc.want / 2));
+        if (npc.kind !== "bud") npc.want = Math.max(1, Math.ceil(npc.want / 2));
         npc.shown = -1;
         npc.buyAcc = 0;
       }
@@ -2621,7 +2854,8 @@
         npc.buyAcc += dt;
         while (npc.want > 0 && npc.buyAcc >= NPC_BUY_EVERY) {
           npc.buyAcc -= NPC_BUY_EVERY;
-          if (!(dabber ? customerBuyDab() : customerBuyBud())) break;
+          var got = eater ? customerBuyEdible() : dabber ? customerBuyDab() : customerBuyBud();
+          if (!got) break;
           npc.want--;
         }
       }
@@ -2631,8 +2865,8 @@
       npc.bubble.visible = showBubble;
       if (showBubble && npc.shown !== npc.want) {
         updateSpriteText(npc.bubble,
-          (dabber ? "🍯 x" : "🌿 x") + npc.want,
-          dabber ? "#ffc36a" : "#ffe98a");
+          (eater ? "🍪 x" : dabber ? "🍯 x" : "🌿 x") + npc.want,
+          eater ? "#e0a06a" : dabber ? "#ffc36a" : "#ffe98a");
         npc.shown = npc.want;
       }
 
@@ -3441,17 +3675,91 @@
     }
   }
 
+  // ---- ovens: load with dabs, bake, collect edibles ----
+  function ovenOwned() { return Math.min(state.ovenCount || 0, MAX_OVENS); }
+
+  function handleOvens() {
+    if (!ediblesUnlocked()) return;
+    var owned = ovenOwned();
+    for (var i = 0; i < owned; i++) {
+      var d = ovenDefs[i], o = state.ovens[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > OVEN_SIZE * 0.7 + PLAYER_RADIUS) continue;
+
+      var fed = 0;
+      for (var b = player.backpack.length - 1; b >= 0; b--) {
+        if (o.dabs + fed >= OVEN_CAP) break;
+        if (player.backpack[b].type === "dab") { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed) {
+        o.dabs += fed;
+        addFloater(d.x, 3.6, d.z, "+" + fed + " DAB", "#ffc36a");
+        markTut("bake");
+      }
+      var took = 0;
+      while (o.cooked > 0 && player.backpack.length < backpackCap()) {
+        o.cooked--; player.backpack.push({ type: "edible" }); took++;
+      }
+      if (took) {
+        addFloater(d.x, 4.0, d.z, "+" + took + " EDIBLE", "#e0a06a");
+        markTut("ediblegrab");
+      }
+      if (fed || took) { syncStack(); renderUpgrades(); }
+    }
+  }
+
+  function updateOvenStates(dt) {
+    var owned = ovenOwned();
+    for (var i = 0; i < owned; i++) {
+      var o = state.ovens[i];
+      if (o.dabs <= 0) { o.acc = 0; continue; }
+      o.acc = (o.acc || 0) + dt;
+      var need = bakeTimeFor();
+      while (o.acc >= need && o.dabs > 0) {
+        o.acc -= need;
+        o.dabs--;
+        o.cooked++;
+      }
+    }
+  }
+
+  function updateOvenVisuals(now) {
+    var owned = ovenOwned();
+    for (var i = 0; i < ovenObjects.length; i++) {
+      var oo = ovenObjects[i];
+      var live = ediblesUnlocked() && i < owned;
+      oo.group.visible = live;
+      if (!live) continue;
+      var o = state.ovens[i];
+      var baking = o.dabs > 0;
+      oo.inner.visible = baking;
+      oo.out.visible = o.cooked > 0;
+      oo.glow.visible = o.cooked > 0;
+      if (o.cooked > 0) {
+        oo.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
+        oo.out.rotation.y = now * 0.0015;
+      }
+      setBar(oo.barIn, o.dabs / OVEN_CAP);
+      setBar(oo.barOut, o.cooked / OVEN_CAP);
+    }
+  }
+
   // ---- dab bar drop-off, mirroring the bud counter ----
   function handleDabSellZone() {
-    if (!dabsUnlocked()) return;
     if (d2(player.pos.x, player.pos.z, SELL_ZONE.x, SELL_ZONE.z) > SELL_ZONE.r + PLAYER_RADIUS) return;
-    var dabs = 0;
-    for (var i = 0; i < player.backpack.length; i++) if (player.backpack[i].type === "dab") dabs++;
-    if (!dabs) return;
-    player.backpack = player.backpack.filter(function (it) { return it.type !== "dab"; });
+    var dabs = 0, edibles = 0;
+    for (var i = 0; i < player.backpack.length; i++) {
+      if (player.backpack[i].type === "dab") dabs++;
+      else if (player.backpack[i].type === "edible") edibles++;
+    }
+    if (!dabs && !edibles) return;
+    player.backpack = player.backpack.filter(function (it) {
+      return it.type !== "dab" && it.type !== "edible";
+    });
     syncStack();
     for (var d = 0; d < dabs; d++) dropDabOnBar();
-    markTut("dabsell");
+    for (var e = 0; e < edibles; e++) dropEdibleOnBar();
+    if (dabs) markTut("dabsell");
+    if (edibles) markTut("ediblesell");
     renderUpgrades();
   }
 
@@ -3732,6 +4040,40 @@
     }
   }
 
+  var edibleMeshes = [];
+  function dropEdibleOnBar() {
+    var m;
+    if (edibleMeshes.length >= 10) { m = edibleMeshes.shift(); dabPile.remove(m); }
+    m = new THREE.Mesh(edibleGeo, M.edible);
+    m.castShadow = true;
+    dabPile.add(m);
+    var i = edibleMeshes.length;
+    m.userData.restY = 0.5 + Math.floor(i / 3) * 0.26;
+    m.userData.bornAt = performance.now();
+    m.userData.value = edibleValue();
+    m.position.set(-0.6 + (i % 3) * 0.6, m.userData.restY + 2.2, 0.3);
+    m.rotation.y = Math.random() * 3;
+    edibleMeshes.push(m);
+  }
+
+  function updateEdiblePile(now) {
+    for (var i = 0; i < edibleMeshes.length; i++) {
+      var m = edibleMeshes[i];
+      var t = (now - (m.userData.bornAt || now)) / 260;
+      m.position.y = t < 1
+        ? m.userData.restY + 2.2 * (1 - (1 - Math.pow(1 - t, 3)))
+        : m.userData.restY + Math.sin(now * 0.004 + i) * 0.03;
+    }
+  }
+
+  function customerBuyEdible() {
+    if (!edibleMeshes.length) return false;
+    var m = edibleMeshes.shift();
+    dabPile.remove(m);
+    payOutCash((m.userData.value || edibleValue()) * (promoActive() ? PROMO_MULT : 1));
+    return true;
+  }
+
   function customerBuyDab() {
     if (!dabMeshes.length) return false;
     var m = dabMeshes.shift();
@@ -3901,7 +4243,10 @@
   // all of them the bar goes away for good.
   var TUT_STEPS = [
     { key: "collect", text: "💵 Grab your cash by the till" },
-    { key: "dabsell", text: "🍯 Take your dabs out to the display case" },
+    { key: "ediblesell", text: "🍪 Take your edibles out to the counter" },
+    { key: "ediblegrab", text: "🍪 An oven is done — grab the edible" },
+    { key: "bake",    text: "🔥 Load an oven with dabs in the kitchen" },
+    { key: "dabsell", text: "🍯 Take your dabs out to the counter" },
     { key: "dabgrab", text: "🍯 A press is done — grab the dab" },
     { key: "press",   text: "⚙️ Load a press with bud out in the lab" },
     { key: "sell",    text: "🏪 Take your buds out to the counter" },
@@ -3936,8 +4281,20 @@
       if (state.presses[c1].dabs > 0) anyPressReady = true;
       if (state.presses[c1].buds < hopperCap()) anyPressIdle = true;
     }
+    var hasEdible = false, anyOvenReady = false, anyOvenRoom = false;
+    for (var e0 = 0; e0 < player.backpack.length; e0++) {
+      if (player.backpack[e0].type === "edible") hasEdible = true;
+    }
+    var builtO = ovenOwned();
+    for (var e1 = 0; e1 < builtO; e1++) {
+      if (state.ovens[e1].cooked > 0) anyOvenReady = true;
+      if (state.ovens[e1].dabs < OVEN_CAP) anyOvenRoom = true;
+    }
     var applies = {
       collect: pendingCash > 0,
+      ediblesell: hasEdible,
+      ediblegrab: anyOvenReady,
+      bake: anyOvenRoom && hasDab,
       dabsell: hasDab,
       dabgrab: anyPressReady,
       press:   anyPressIdle && hasBud,
@@ -4055,33 +4412,6 @@
       buy: function () {
         state.runnerLv = (state.runnerLv || 0) + 1;
         toast("\ud83c\udfc3 Runner hired \u2014 they'll stock the counter for you!");
-      },
-    },
-    {
-      id: "hr", label: "HR OFFICE", icon: "\ud83d\udccb", x: HR_ZONE.x, z: HR_ZONE.z,
-      color: 0x7fc4ff, kiosk: false,
-      // One desk, two tracks. It offers whichever is behind, so the crew
-      // improves evenly instead of needing a pad each in a cramped room.
-      name: function () {
-        var o = hrOffer();
-        return o ? o.name : "Crew Fully Trained";
-      },
-      desc: function () {
-        var o = hrOffer();
-        return o ? o.desc : "Nothing left to teach them";
-      },
-      cost: function () { var o = hrOffer(); return o ? o.cost : 0; },
-      maxed: function () { return !hrOffer(); },
-      buy: function () {
-        var o = hrOffer();
-        if (!o) return;
-        if (o.which === "speed") {
-          state.staffSpeedLv = (state.staffSpeedLv || 0) + 1;
-          toast("\ud83d\udc5f Crew kitted out \u2014 everyone moves quicker!");
-        } else {
-          state.staffLoadLv = (state.staffLoadLv || 0) + 1;
-          toast("\ud83e\uddf3 Bigger crates \u2014 the crew hauls more per trip!");
-        }
       },
     },
     {
@@ -4348,6 +4678,28 @@
         })(nps, npd);
       }
     }
+    // the next oven slot in the kitchen
+    var nos = nextOvenSlot();
+    if (nos >= 0) {
+      var nod = ovenDefs[nos];
+      if (inBox(player.pos.x, player.pos.z, nod.x, nod.z, OVEN_PAD_HALF)) {
+        return (function (idx, dd) {
+          return {
+            kind: "oven", key: "oven" + idx, slot: "ovenpad" + idx,
+            name: "Buy an Oven",
+            desc: "Oven " + (idx + 1) + " \u00b7 bakes dabs into edibles worth $" + fmt(edibleValue()),
+            cost: ovenCost(idx), maxed: false,
+            x: dd.x, z: dd.z, y: 1.6,
+            complete: function () {
+              state.ovenCount = idx + 1;
+              state.ovens[idx] = { dabs: 0, cooked: 0, acc: 0 };
+              addFloater(dd.x, 3.4, dd.z, "OVEN IN!", "#ffc36a");
+              toast("\ud83c\udf6a Oven installed \u2014 bake those dabs into edibles!");
+            },
+          };
+        })(nos, nod);
+      }
+    }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
       if (st.hidden && st.hidden()) continue;
@@ -4521,16 +4873,22 @@
     handlePlots();
     handleSellZone();
     handlePresses();
+    handleOvens();
     handleDabSellZone();
     updatePlotVisuals(now);
     updateRowTiles(now);
     updatePressPads(now);
+    updateOvenPads(now);
     updateSoilBag(now, dt);
+    updateHrProximity();
     updateStack(now);
     updateCounterPile(now, dt);
     updateDabPile(now);
     updatePressStates(dt);
     updatePressVisuals(now);
+    updateOvenStates(dt);
+    updateOvenVisuals(now);
+    updateEdiblePile(now);
     updateCashDrops(now, dt);
     payIntoZone(dt);
     updateCoins(dt);
@@ -4581,6 +4939,68 @@
     window.removeEventListener("beforeunload", saveState);
     location.reload();
   });
+
+  // ---- HR panel ----
+  var hrOverlay = document.getElementById("hr-overlay");
+  var hrSpeedDesc = document.getElementById("hr-speed-desc");
+  var hrLoadDesc = document.getElementById("hr-load-desc");
+  var hrSpeedBuy = document.getElementById("hr-speed-buy");
+  var hrLoadBuy = document.getElementById("hr-load-buy");
+
+  function renderHrPanel() {
+    var sp = state.staffSpeedLv || 0, ld = state.staffLoadLv || 0;
+    if (sp >= MAX_STAFF_SPEED_LV) {
+      hrSpeedDesc.textContent = "Maxed — your crew is as quick as it gets";
+      hrSpeedBuy.textContent = "MAX";
+      hrSpeedBuy.disabled = true;
+    } else {
+      hrSpeedDesc.textContent = "Lv." + sp + "/" + MAX_STAFF_SPEED_LV + " · walk " +
+        Math.round((staffSpeedMult() - 1) * 100) + "% → " +
+        Math.round((staffSpeedMult() + 0.18 - 1) * 100) + "% faster";
+      hrSpeedBuy.textContent = "$" + fmt(costStaffSpeed());
+      hrSpeedBuy.disabled = state.cash < costStaffSpeed();
+    }
+    if (ld >= MAX_STAFF_LOAD_LV) {
+      hrLoadDesc.textContent = "Maxed — your crew carries all it can";
+      hrLoadBuy.textContent = "MAX";
+      hrLoadBuy.disabled = true;
+    } else {
+      hrLoadDesc.textContent = "Lv." + ld + "/" + MAX_STAFF_LOAD_LV + " · haul " +
+        (3 + staffCarryBonus()) + " → " + (4 + staffCarryBonus()) + " per trip";
+      hrLoadBuy.textContent = "$" + fmt(costStaffLoad());
+      hrLoadBuy.disabled = state.cash < costStaffLoad();
+    }
+  }
+  function openHr() { renderHrPanel(); hrOverlay.classList.add("show"); }
+  function closeHr() { hrOverlay.classList.remove("show"); }
+  document.getElementById("hr-close").addEventListener("click", closeHr);
+  hrOverlay.addEventListener("click", function (e) { if (e.target === hrOverlay) closeHr(); });
+  hrSpeedBuy.addEventListener("click", function () {
+    var c = costStaffSpeed();
+    if (state.cash < c || (state.staffSpeedLv || 0) >= MAX_STAFF_SPEED_LV) return;
+    state.cash -= c;
+    state.staffSpeedLv = (state.staffSpeedLv || 0) + 1;
+    toast("👟 Crew kitted out — everyone moves quicker!");
+    renderHud(); renderHrPanel(); saveState();
+  });
+  hrLoadBuy.addEventListener("click", function () {
+    var c = costStaffLoad();
+    if (state.cash < c || (state.staffLoadLv || 0) >= MAX_STAFF_LOAD_LV) return;
+    state.cash -= c;
+    state.staffLoadLv = (state.staffLoadLv || 0) + 1;
+    toast("🧳 Bigger crates — the crew hauls more per trip!");
+    renderHud(); renderHrPanel(); saveState();
+  });
+
+  // walking onto the desk opens it; walking away closes it again
+  var hrWasNear = false;
+  function updateHrProximity() {
+    var near = d2(player.pos.x, player.pos.z, HR_ZONE.x, HR_ZONE.z) <= 3.0 + PLAYER_RADIUS;
+    if (near && !hrWasNear) openHr();
+    if (!near && hrWasNear) closeHr();
+    hrWasNear = near;
+    if (near && hrOverlay.classList.contains("show")) renderHrPanel();
+  }
 
   renderUpgrades();
   renderHud();
