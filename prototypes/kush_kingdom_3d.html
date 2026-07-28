@@ -2734,7 +2734,10 @@
       if (d < bestD) { bestD = d; best = bz; }
     }
     if (best === null) return { x: tx, z: tz };
-    return { x: 0, z: best + (b.pos.z > best ? 1.0 : -1.0) };
+    // Step to just *past* the doorway on the target's side. Offsetting by
+    // current position instead put the waypoint short of the door, so staff
+    // walked up to it, re-detected the crossing, and stalled there forever.
+    return { x: 0, z: best + (tz > best ? 1.0 : -1.0) };
   }
 
   // first ready bed nobody else is already running to
@@ -2878,19 +2881,21 @@
       extractors.push({
         obj: g, l1: l1, l2: l2, tote: tote,
         pos: { x: EXTRACT_ZONE.x + 1.4 + n * 0.9, z: EXTRACT_ZONE.z + 1.2 },
-        phase: "toBud", timer: 0, target: -1, carrying: 0, holdingBud: 0,
+        phase: "toBud", timer: 0, target: -1, bedTarget: -1, carrying: 0, holdingBud: 0,
         walkPhase: n * 1.3, slot: n,
       });
     }
   })();
 
-  function extFreeThing(self, list, key, want) {
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].state !== want) continue;
+  // Beds are claimed on their own field. Sharing one `target` with presses
+  // meant an extractor walking to press 2 blocked another from taking bed 2.
+  function extFreeBed(self) {
+    for (var i = 0; i < state.plotsUnlocked; i++) {
+      if (state.plots[i].state !== "ready") continue;
       var taken = false;
       for (var j = 0; j < extractors.length; j++) {
         var o = extractors[j];
-        if (o !== self && o.obj.visible && o[key] === i) { taken = true; break; }
+        if (o !== self && o.obj.visible && o.bedTarget === i) { taken = true; break; }
       }
       if (!taken) return i;
     }
@@ -2930,22 +2935,22 @@
       var b = extractors[i];
       var hired = dabsUnlocked() && i < (state.extractorLv || 0);
       b.obj.visible = hired;
-      if (!hired) { b.target = -1; b.carrying = 0; b.holdingBud = 0; continue; }
+      if (!hired) { b.target = -1; b.bedTarget = -1; b.carrying = 0; b.holdingBud = 0; continue; }
 
       var walking = false;
 
       if (b.phase === "toBud") {
         // harvest a ready bed to feed the presses
         if (b.holdingBud >= EXT_CARRY + staffCarryBonus()) { b.phase = "toPress"; b.target = -1; continue; }
-        if (b.target < 0 || b.target >= state.plotsUnlocked ||
-            state.plots[b.target].state !== "ready") {
-          b.target = extFreeThing(b, state.plots.slice(0, state.plotsUnlocked), "target", "ready");
+        if (b.bedTarget < 0 || b.bedTarget >= state.plotsUnlocked ||
+            state.plots[b.bedTarget].state !== "ready") {
+          b.bedTarget = extFreeBed(b);
         }
-        if (b.target < 0) {
+        if (b.bedTarget < 0) {
           if (b.holdingBud > 0) { b.phase = "toPress"; continue; }
           b.phase = "idle"; b.timer = 0.8; continue;
         }
-        var bd = plotDefs[b.target];
+        var bd = plotDefs[b.bedTarget];
         var t1 = viaDoor(b, bd.x, bd.z);
         walking = !extStepTo(b, t1.x, t1.z, dt);
         if (!walking && t1.x === bd.x && t1.z === bd.z) { b.phase = "pick"; b.timer = EXT_ACT_TIME; }
@@ -2953,11 +2958,11 @@
       } else if (b.phase === "pick") {
         b.timer -= dt;
         if (b.timer <= 0) {
-          if (b.target >= 0 && state.plots[b.target].state === "ready") {
-            state.plots[b.target] = { state: "empty" };
+          if (b.bedTarget >= 0 && state.plots[b.bedTarget].state === "ready") {
+            state.plots[b.bedTarget] = { state: "empty" };
             b.holdingBud++;
           }
-          b.target = -1;
+          b.bedTarget = -1;
           b.phase = "toBud";
         }
 
@@ -3181,17 +3186,14 @@
     if (d2(player.pos.x, player.pos.z, SEED_ZONE.x, SEED_ZONE.z) > SEED_ZONE.r + PLAYER_RADIUS) return;
     if (player.backpack.length >= backpackCap()) return;
     if (now - player.lastSeed < SEED_COOLDOWN) return;
-    // Only take as many seeds as there are beds waiting for one. Filling the
-    // whole bag with seeds used to lock you out of harvesting — no room for
-    // the buds — which stalled earnings completely.
-    var seeds = 0, openBeds = 0;
+    // Keep one slot free so a full bag of seeds can never lock you out of
+    // harvesting. Capping to currently-empty beds instead was too strict —
+    // with botanists planting for you it often left you unable to take any.
+    var seeds = 0;
     for (var s0 = 0; s0 < player.backpack.length; s0++) {
       if (player.backpack[s0].type === "seed") seeds++;
     }
-    for (var b0 = 0; b0 < state.plotsUnlocked; b0++) {
-      if (state.plots[b0].state === "empty") openBeds++;
-    }
-    if (seeds >= openBeds) return;
+    if (seeds >= Math.max(1, backpackCap() - 1)) return;
     player.backpack.push({ type: "seed" });
     player.lastSeed = now;
     syncStack();
