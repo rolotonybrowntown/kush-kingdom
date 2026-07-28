@@ -111,6 +111,28 @@
     margin-top: 4px;
   }
 
+  /* the takings from the last collection, floating up off the cash chip */
+  #cash-gain {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-size: 19px;
+    font-weight: 900;
+    color: #7dffa8;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.75);
+    opacity: 0;
+    pointer-events: none;
+  }
+  #cash-gain.pop { animation: cashgain 1.15s ease-out forwards; }
+  @keyframes cashgain {
+    0%   { opacity: 0; transform: translateY(-50%) scale(0.7); }
+    18%  { opacity: 1; transform: translateY(-58%) scale(1.14); }
+    45%  { opacity: 1; transform: translateY(-52%) scale(1); }
+    100% { opacity: 0; transform: translateY(-125%) scale(1); }
+  }
+
   #objective {
     position: absolute;
     top: calc(var(--safe-t) + 118px);
@@ -390,6 +412,7 @@
       <div class="chip cash">
         <div class="icon">💵</div><span id="cash-val">0</span>
         <div id="level-star"><span id="level-val">1</span></div>
+        <div id="cash-gain"></div>
       </div>
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
@@ -402,7 +425,7 @@
   <div id="hr-overlay">
     <div id="hr-card">
       <h2>HR Office</h2>
-      <p class="hr-sub">Applies to every botanist, runner and extractor.</p>
+      <p class="hr-sub">Applies to every botanist, runner, extractor and baker.</p>
       <div class="hr-row">
         <div class="hr-info">
           <b>Better Boots</b>
@@ -543,15 +566,12 @@
   var LEVEL_REVEALS = [
     "",
     "Builds the extraction lab out back",
-    "Adds a second lab bay for more presses",
-    "Adds a third lab bay for more presses",
+    "Opens the kitchen — bake dabs into edibles",
+    "Adds another room behind the kitchen",
   ];
 
   // ---- back room fittings ----
   var SEED_ZONE = { x: -6.5, z: -30.2, r: 3.0 };   // seed-pack shelf
-  var HYDRO_ZONE = { x: 5.5, z: -30.2 };           // hydroponic feed station
-                                                   // (kept clear of the back
-                                                   // row's grow-light tile)
   var VEND_ZONE  = { x: 11.3, z: -22.0 };          // break-room vending machine
   var LOCKER_ZONE = { x: 11.3, z: -16.5 };         // break-room locker
   // Potting bench sits just right of the seed shelf. It used to be off in the
@@ -562,10 +582,11 @@
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
-  // Tucked in behind the till on the staff side. Kept clear of the side
-  // cabinet run the counter grows at Street Value Lv.2, which used to sit
-  // right on top of this pad.
-  var CASH_PAD  = { x: 2.0, z: -7.8, half: 1.45 }; // payout tray beside the till
+  // Right beside the counter and in line with its front edge. It used to sit
+  // further back, where it disappeared into the menu-board partition behind
+  // the register. The counter's left cabinet run reaches x=0.35 at Street
+  // Value Lv.2, so this stops just short of that.
+  var CASH_PAD  = { x: -1.6, z: -3.6, half: 1.45 }; // payout tray beside the till
   var PRICE_ZONE = { x: -9.0, z: -5.0 };           // pricing station
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
   // Sits in the open floor between the door and the pricing kiosk. Kept off
@@ -580,6 +601,9 @@
   var HR_ZONE = { x: 11.0, z: -28.5 };
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
   var MAX_EXTRACTORS = 3;
+  // kitchen pass: hire bakers to run the oven line
+  var BAKER_ZONE = { x: -10.0, z: -52.5 };
+  var MAX_BAKERS = 2;
 
   // dab display case, on the fixed retail floor beside the bud counter
   var BASE_DAB_VALUE = 40;                         // a dab starts at $40
@@ -596,20 +620,19 @@
   // ---- extraction lab: rosin presses bought one machine at a time ----
   // The lab opens empty. Each slot has its own pay square, and only the next
   // one in line is offered, so you build the room up machine by machine.
-  var PRESS_COLS = 3, PRESS_ROWS_PER_BAY = 2;
+  // The press line lives entirely in room 1. It used to spill a bay into each
+  // room the player unlocked, which meant BUY PRESS pads turning up in the
+  // middle of the kitchen — so the lab now packs three rows of its own instead.
+  var PRESS_COLS = 3, PRESS_ROWS = 3;
   var PRESS_SPACING_X = 6.0, PRESS_SIZE = 3.2;
-  var MAX_PRESS_ROWS = PRESS_ROWS_PER_BAY * (ROOM_TIERS.length - 1);
   var pressDefs = [];
   (function () {
     var w = (PRESS_COLS - 1) * PRESS_SPACING_X;
-    for (var r = 0; r < MAX_PRESS_ROWS; r++) {
-      var bay = Math.floor(r / PRESS_ROWS_PER_BAY);
-      var within = r % PRESS_ROWS_PER_BAY;
-      // bay b is room b+1, spanning its far wall to its front wall
-      var near = backDividerZ(bay + 1), far = backDividerZ(bay + 2);
-      var zc = far + (near - far) * (within + 1) / (PRESS_ROWS_PER_BAY + 1);
+    var near = backDividerZ(1), far = backDividerZ(2);   // room 1 = level 2
+    for (var r = 0; r < PRESS_ROWS; r++) {
+      var zc = far + (near - far) * (r + 1) / (PRESS_ROWS + 1);
       for (var c = 0; c < PRESS_COLS; c++) {
-        pressDefs.push({ x: -w / 2 + c * PRESS_SPACING_X, z: zc, row: r, bay: bay });
+        pressDefs.push({ x: -w / 2 + c * PRESS_SPACING_X, z: zc, row: r });
       }
     }
   })();
@@ -625,8 +648,8 @@
     if (boostActive()) t *= 0.5;
     return Math.max(t, 0.8);
   }
-  // how many press slots the built rooms expose
-  function pressSlotsAvailable() { return (state.roomTier || 0) * PRESS_ROWS_PER_BAY * PRESS_COLS; }
+  // the whole line opens with the lab; you just have to afford the machines
+  function pressSlotsAvailable() { return dabsUnlocked() ? MAX_PRESSES : 0; }
   function pressCost(n) { return Math.round(700 * Math.pow(1.9, n)); }
   function hopperCost(lv) { return Math.round(900 * Math.pow(2.2, lv)); }
 
@@ -658,7 +681,9 @@
     return Math.max(1, t);
   }
   function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
-  function ovenCost(n) { return Math.round(4000 * Math.pow(1.9, n)); }
+  // An oven is a level-3 purchase, by which point the shop is turning over
+  // real money — the old $4K opener was pocket change.
+  function ovenCost(n) { return Math.round(20000 * Math.pow(1.75, n)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -726,7 +751,10 @@
       hopperLv: 0,            // how much bud a press holds at once
       dabLv: 0,               // purity: what a dab fetches at the counter
       ovenCount: 0,           // ovens bought in the kitchen
-      ovens: [],              // { dabs, cooked, acc } per oven
+      bakerLv: 0,             // bakers hired to work the oven line
+      // sized up front — a fresh game skips the save migration that would
+      // otherwise be the only thing filling this in
+      ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       lastSaveTime: Date.now(),
     };
   }
@@ -813,9 +841,10 @@
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) {}
   }
 
-  // Five levels instead of ten, each worth twice as much, so the top of the
-  // track lands near where the old level 10 sat rather than sailing past it.
-  function moveSpeed()   { return BASE_SPEED * (1 + 0.2 * state.speedLv); }
+  // Five levels instead of ten, but each one is worth double what it used to
+  // be, so Lv.5 lands exactly where the old Lv.10 did (3x base). The prices
+  // climb steeply to match — maxing out should be a late-game milestone.
+  function moveSpeed()   { return BASE_SPEED * (1 + 0.4 * state.speedLv); }
   function backpackCap() { return BASE_CAP + state.capLv; }
 
   // Each strain adds a flat $4 a bud, and every tenth one is a step change
@@ -853,16 +882,20 @@
     return Math.max(t, 0.8);
   }
 
-  function costCap()   { return Math.round(45 * Math.pow(1.55, state.capLv)); }
-  function costSpeed() { return Math.round(40 * Math.pow(1.55, state.speedLv)); }
+  // Personal upgrades are the ones you buy over the whole game, so they climb
+  // hard: five speed levels run $40 · $144 · $518 · $1.9K · $6.7K.
+  function costCap()   { return Math.round(45 * Math.pow(2.1, state.capLv)); }
+  function costSpeed() { return Math.round(40 * Math.pow(3.6, state.speedLv)); }
   function costSell()  { return Math.round(69 * Math.pow(1.5, state.sellLv)); }
-  function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
-  function costRunner() { return Math.round(500 * Math.pow(2.2, state.runnerLv || 0)); }
-  function costExtractor() { return Math.round(1200 * Math.pow(2.2, state.extractorLv || 0)); }
-  function costStaffSpeed() { return Math.round(600 * Math.pow(2.1, state.staffSpeedLv || 0)); }
-  function costStaffLoad() { return Math.round(800 * Math.pow(2.3, state.staffLoadLv || 0)); }
-  // one multiplier and one carry bonus, shared by botanists, runners and extractors
-  function staffSpeedMult() { return 1 + 0.18 * (state.staffSpeedLv || 0); }
+  function costBotanist() { return Math.round(350 * Math.pow(2.6, state.botanistLv || 0)); }
+  function costRunner() { return Math.round(500 * Math.pow(2.6, state.runnerLv || 0)); }
+  function costExtractor() { return Math.round(1200 * Math.pow(2.6, state.extractorLv || 0)); }
+  function costBaker() { return Math.round(6000 * Math.pow(2.6, state.bakerLv || 0)); }
+  function costStaffSpeed() { return Math.round(600 * Math.pow(2.9, state.staffSpeedLv || 0)); }
+  function costStaffLoad() { return Math.round(800 * Math.pow(3.0, state.staffLoadLv || 0)); }
+  // one multiplier and one carry bonus, shared by every hired hand. Four
+  // levels taking staff up to a bit over twice their starting pace.
+  function staffSpeedMult() { return 1 + 0.32 * (state.staffSpeedLv || 0); }
   function staffCarryBonus() { return state.staffLoadLv || 0; }
   function hrOffer() {
     var sp = state.staffSpeedLv || 0, ld = state.staffLoadLv || 0;
@@ -872,12 +905,12 @@
       return { which: "speed", cost: costStaffSpeed(),
         name: "Better Boots",
         desc: "Every hired hand walks " + Math.round((staffSpeedMult() - 1) * 100) +
-              "% \u2192 " + Math.round((staffSpeedMult() + 0.18 - 1) * 100) + "% faster" };
+              "% \u2192 " + Math.round((staffSpeedMult() + 0.32 - 1) * 100) + "% faster" };
     }
     if (canLd) {
       return { which: "load", cost: costStaffLoad(),
         name: "Bigger Crates",
-        desc: "Runners and extractors haul " + (3 + staffCarryBonus()) + " \u2192 " +
+        desc: "Runners, extractors and bakers haul " + (3 + staffCarryBonus()) + " \u2192 " +
               (4 + staffCarryBonus()) + " at a time" };
     }
     return null;
@@ -987,6 +1020,43 @@
       y += h; row++;
     }
     return finishTex(c, 6, 6, true);
+  }
+
+  // Walnut boards for the back of house: narrower than the shop-floor planks,
+  // with heavier figuring and near-black seams, so the same tint reads as a
+  // much darker, more industrial timber.
+  function makeWalnutTexture() {
+    var S = 512;
+    var c = document.createElement("canvas");
+    c.width = c.height = S;
+    var g = c.getContext("2d");
+    g.fillStyle = "#cbb69f"; g.fillRect(0, 0, S, S);
+    var y = 0, row = 0;
+    while (y < S) {
+      var h = 34 + (row % 4) * 9;
+      var base = 196 + ((row * 53) % 34);
+      g.fillStyle = "rgb(" + base + "," + (base - 20) + "," + (base - 44) + ")";
+      g.fillRect(0, y, S, h);
+      // walnut's swirlier, higher-contrast grain
+      for (var i = 0; i < 34; i++) {
+        var sh = base - 40 - Math.random() * 50;
+        g.strokeStyle = "rgba(" + Math.max(0, sh) + "," + Math.max(0, sh - 16) + "," +
+                        Math.max(0, sh - 30) + ",0.55)";
+        g.lineWidth = 0.5 + Math.random() * 2.2;
+        var gy = y + 3 + Math.random() * (h - 6);
+        g.beginPath();
+        g.moveTo(0, gy);
+        g.bezierCurveTo(S * 0.3, gy + (Math.random() - 0.5) * 9,
+                        S * 0.7, gy + (Math.random() - 0.5) * 9, S, gy);
+        g.stroke();
+      }
+      g.fillStyle = "rgba(38,24,14,0.7)"; g.fillRect(0, y + h - 2, S, 2);
+      g.fillStyle = "rgba(255,238,214,0.16)"; g.fillRect(0, y, S, 1);
+      var jx = ((row * 197) % S);
+      g.fillStyle = "rgba(38,24,14,0.6)"; g.fillRect(jx, y, 2, h);
+      y += h; row++;
+    }
+    return finishTex(c, 5, 5, true);
   }
 
   // painted plaster: subtle mottling, no hard features
@@ -1105,6 +1175,7 @@
   }
 
   var plankTex = makePlankTexture();
+  var walnutTex = makeWalnutTexture();
   var plasterTex = makePlasterTexture();
   var woodTex = makeWoodTexture();
   var soilTex = makeSoilTexture();
@@ -1150,13 +1221,18 @@
     floorDark:   mat(0x835c37, { map: plankTex, roughness: 0.42 }),
     wallPaint:   mat(0xbfae92, { map: plasterTex, roughness: 0.92 }),
     wallBack:    mat(0x8d9086, { map: plasterTex, roughness: 0.96 }),
-    backFloor:   mat(0x6f6f68, { map: plasterTex, roughness: 0.9 }),
+    // one walnut stain per back room — the only thing separating them now
+    // that the interior walls are gone
+    growFloor:   mat(0x7a4f2e, { map: walnutTex, roughness: 0.52 }),   // warm
+    labFloor:    mat(0x40474d, { map: walnutTex, roughness: 0.44 }),   // cool grey
+    kitchenFloor: mat(0x8d7259, { map: walnutTex, roughness: 0.42 }),  // pale
+    vaultFloor:  mat(0x35251f, { map: walnutTex, roughness: 0.52 }),   // near-black
+    threshold:   mat(0xb99248, { roughness: 0.3, metalness: 0.7 }),
     pavement:    mat(0x9a9a94, { map: plasterTex, roughness: 0.95 }),
     kerb:        mat(0x7d7d78, { map: plasterTex, roughness: 0.95 }),
     metalRack:   mat(0x7f8894, { roughness: 0.4, metalness: 0.7 }),
     vending:     mat(0x2b4a6b, { roughness: 0.35, metalness: 0.35 }),
     locker:      mat(0x496b57, { roughness: 0.45, metalness: 0.4 }),
-    hydro:       mat(0x2f6d7a, { roughness: 0.35, metalness: 0.3 }),
     water:       mat(0x63d8e8, { transparent: true, opacity: 0.65, roughness: 0.1 }),
     trayWater:   mat(0x1f6f80, { roughness: 0.2, metalness: 0.1 }),
     packA:       mat(0x3f9e5a, { map: fabricTex, roughness: 0.45, metalness: 0.25 }),
@@ -1224,7 +1300,20 @@
     npc1:      mat(0x5b8ad6, { map: fabricTex, roughness: 0.9 }),
     npc2:      mat(0xd6685b, { map: fabricTex, roughness: 0.9 }),
     npc3:      mat(0xb06fd6, { map: fabricTex, roughness: 0.9 }),
+    // stainless steel fit-out for the kitchen
+    // Brushed rather than mirror-polished: at full metalness these read as
+    // black boxes, because there is almost nothing back here to reflect.
+    steel:     mat(0xdde5ea, { roughness: 0.4, metalness: 0.35 }),
+    steelDk:   mat(0xa9b4bd, { roughness: 0.5, metalness: 0.3 }),
+    fridgeSeal:mat(0x2b3138, { roughness: 0.7 }),
+    tile:      mat(0xe6eef2, { roughness: 0.25 }),
   };
+
+  // Back-of-house rooms are told apart by their floor rather than by walls.
+  // Index is the room number counting the grow room as 0.
+  var ROOM_FLOOR_MATS = [M.growFloor, M.labFloor, M.kitchenFloor, M.vaultFloor];
+  var ROOM_NAMES = ["GROW ROOM", "EXTRACTION LAB", "KITCHEN", "BACK ROOM"];
+  var ROOM_SIGN_COLORS = ["#8ef0a4", "#ffc36a", "#9fdcff", "#e6c8ff"];
 
   // ===================================================================
   //  ROOM SHELL — rebuilt whenever the player buys "Expand Store"
@@ -1288,13 +1377,33 @@
     roomGroup.add(floor);
     ground = floor;
 
-    // plainer utility floor behind the partition, so the back of house reads
-    // as a different space even though it's one slab
-    var backFloor = new THREE.Mesh(
-      new THREE.BoxGeometry(w - 0.4, 0.06, PARTITION_Z - minZ - 0.4), M.backFloor);
-    backFloor.position.set(0, 0.25, (minZ + PARTITION_Z) / 2);
-    backFloor.receiveShadow = true;
-    roomGroup.add(backFloor);
+    // ---- one walnut slab per back room ----
+    // There are no interior walls any more, so the floor is what tells the
+    // rooms apart: a different walnut stain for each, laid over the main slab
+    // and stopping short of the retail floor's light planking.
+    for (var rm = 0; rm < tier + 1; rm++) {
+      var rNear = rm === 0 ? PARTITION_Z : backDividerZ(rm);
+      var rFar  = rm === 0 ? GROW_ROOM_MIN_Z : backDividerZ(rm + 1);
+      // full interior width: with the dividers gone there is no wall footing
+      // to leave clear, and a short slab left a pale rim under the row tiles
+      var slab = new THREE.Mesh(
+        new THREE.BoxGeometry(w, 0.06, rNear - rFar - 0.3), ROOM_FLOOR_MATS[rm]);
+      slab.position.set(0, 0.25, (rNear + rFar) / 2);
+      slab.receiveShadow = true;
+      roomGroup.add(slab);
+
+      // a brass threshold strip where one room hands over to the next, so the
+      // change of colour reads as deliberate rather than as a seam
+      var strip = new THREE.Mesh(new THREE.BoxGeometry(w - 0.4, 0.07, 0.5), M.threshold);
+      strip.position.set(0, 0.27, rNear - 0.15);
+      roomGroup.add(strip);
+
+      // room name floating overhead in place of the old doorway sign
+      var rmSign = textSprite(ROOM_NAMES[rm], ROOM_SIGN_COLORS[rm]);
+      rmSign.scale.set(5.2, 1.1, 1);
+      rmSign.position.set(0, 5.6, rNear - 1.2);
+      roomGroup.add(rmSign);
+    }
 
     // checker variation, retail side only
     var tileGeo = new THREE.PlaneGeometry(3.5, 3.5);
@@ -1333,68 +1442,12 @@
     wallSlab(wallThick, maxZ - PARTITION_Z, -HALF_X, (PARTITION_Z + maxZ) / 2);
     wallSlab(wallThick, maxZ - PARTITION_Z, HALF_X, (PARTITION_Z + maxZ) / 2);
 
-    // ---- partition between back of house and the shop floor ----
-    (function partition() {
-      partitionGroup = new THREE.Group();
-      roomGroup.add(partitionGroup);
-      var segW = HALF_X - DOOR_HALF;
-      [-1, 1].forEach(function (sgn) {
-        var seg = new THREE.Mesh(new THREE.BoxGeometry(segW, WALL_H, 0.45), M.wallAccent);
-        seg.position.set(sgn * (DOOR_HALF + segW / 2), WALL_H / 2, PARTITION_Z);
-        seg.castShadow = true; seg.receiveShadow = true;
-        partitionGroup.add(seg);
-      });
-      var headerH = 1.8;
-      var header = new THREE.Mesh(new THREE.BoxGeometry(DOOR_HALF * 2 + 0.6, headerH, 0.5), M.wallAccent);
-      header.position.set(0, WALL_H - headerH / 2, PARTITION_Z);
-      partitionGroup.add(header);
-      [-1, 1].forEach(function (sgn) {
-        var jamb = new THREE.Mesh(new THREE.BoxGeometry(0.3, WALL_H - headerH, 0.62), M.wallTrim);
-        jamb.position.set(sgn * DOOR_HALF, (WALL_H - headerH) / 2, PARTITION_Z);
-        jamb.castShadow = true;
-        partitionGroup.add(jamb);
-      });
-      var sign = textSprite("STAFF ONLY", "#ffd27a");
-      sign.scale.set(2.6, 0.62, 1);
-      sign.position.set(0, WALL_H - 0.9, PARTITION_Z + 0.4);
-      partitionGroup.add(sign);
-    })();
-
-    // ---- dividers between the back rooms. One per level, each with a
-    // doorway down the middle so the whole building is walkable end to end.
+    // There is no partition and there are no dividers between the back rooms
+    // any more. They kept vanishing as the camera swung past them, and you
+    // could walk straight through the remains — so the rooms are now told
+    // apart by their floor colour and the sign hanging over each threshold.
+    partitionGroup = null;
     backDividers = [];
-    for (var bd = 1; bd <= tier; bd++) {
-      var dz = backDividerZ(bd);
-      var dw = new THREE.Group();
-      dw.userData.z = dz;
-      roomGroup.add(dw);
-      backDividers.push(dw);
-      [-1, 1].forEach(function (sgn) {
-        var edge = sgn < 0 ? -HALF_X : HALF_X;
-        var inner = BACK_DOOR_X + sgn * BACK_DOOR_HALF;
-        var segW2 = Math.abs(edge - inner);
-        if (segW2 < 0.1) return;
-        var seg2 = new THREE.Mesh(new THREE.BoxGeometry(segW2, WALL_H, 0.45), M.wallBack);
-        seg2.position.set((edge + inner) / 2, WALL_H / 2, dz);
-        seg2.castShadow = true; seg2.receiveShadow = true;
-        dw.add(seg2);
-      });
-      var hdrH = 1.8;
-      var hdr = new THREE.Mesh(
-        new THREE.BoxGeometry(BACK_DOOR_HALF * 2 + 0.6, hdrH, 0.5), M.wallBack);
-      hdr.position.set(BACK_DOOR_X, WALL_H - hdrH / 2, dz);
-      dw.add(hdr);
-      [-1, 1].forEach(function (sgn) {
-        var jamb2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, WALL_H - hdrH, 0.62), M.wallTrim);
-        jamb2.position.set(BACK_DOOR_X + sgn * BACK_DOOR_HALF, (WALL_H - hdrH) / 2, dz);
-        jamb2.castShadow = true;
-        dw.add(jamb2);
-      });
-      var labSign = textSprite(bd === 1 ? "EXTRACTION LAB" : "LAB BAY " + bd, "#ffc36a");
-      labSign.scale.set(3.4, 0.66, 1);
-      labSign.position.set(BACK_DOOR_X, WALL_H - 0.9, dz + 0.4);
-      dw.add(labSign);
-    }
 
     // ---- baseboard + crown molding around the retail floor ----
     function trim(sizeX, sizeZ, x, z, y, h) {
@@ -1470,7 +1523,6 @@
     ceilingPanel(roomGroup, -5.0, PLOT_GRID_CZ, 12, 0xdaeaff, 0.1);
     ceilingPanel(roomGroup, 5.0, PLOT_GRID_CZ, 12, 0xdaeaff, 0.1);
     spotFixture(roomGroup, SEED_ZONE.x, SEED_ZONE.z + 1.6, 0xffe6b0);
-    spotFixture(roomGroup, HYDRO_ZONE.x, HYDRO_ZONE.z + 1.6, 0xbfe8ff);
     spotFixture(roomGroup, VEND_ZONE.x, (VEND_ZONE.z + LOCKER_ZONE.z) / 2, 0xffe2b0);
 
     ceilingPanel(roomGroup, -4.5, (PARTITION_Z + maxZ) / 2, Math.max(6, maxZ - PARTITION_Z - 6));
@@ -1627,45 +1679,6 @@
     scene.add(g);
   })();
 
-  // ---- hydroponics station: tanks + pump feeding the beds ----
-  var hydroTank;
-  (function hydroStation() {
-    var g = new THREE.Group();
-    var base = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.7, 2.2), M.metalRack);
-    base.position.y = 0.6; base.castShadow = true; base.receiveShadow = true;
-    g.add(base);
-
-    hydroTank = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 2.6, 20), M.water);
-    hydroTank.position.set(-0.7, 2.25, 0); hydroTank.castShadow = true;
-    g.add(hydroTank);
-    var tankCap = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1.02, 0.22, 20), M.hydro);
-    tankCap.position.set(-0.7, 3.62, 0);
-    g.add(tankCap);
-    var tankFoot = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1.02, 0.22, 20), M.hydro);
-    tankFoot.position.set(-0.7, 0.99, 0);
-    g.add(tankFoot);
-    addGlow(g, -0.7, 2.25, 0.9, 3.4, 0x63d8e8, 0.3);
-
-    // pump housing + pipework running off toward the beds
-    var pump = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.5, 1.2), M.hydro);
-    pump.position.set(1.2, 1.7, 0); pump.castShadow = true;
-    g.add(pump);
-    var gauge = new THREE.Mesh(new THREE.CircleGeometry(0.28, 14), M.lightPanel);
-    gauge.position.set(1.2, 2.0, 0.62);
-    g.add(gauge);
-    var pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 3.0, 10), M.metalRack);
-    pipe.position.set(1.2, 3.0, 1.4); pipe.rotation.x = Math.PI / 2;
-    g.add(pipe);
-
-    var label = textSprite("HYDROPONICS", "#9fe8ff");
-    label.scale.set(3.0, 0.66, 1);
-    label.position.set(0, 4.6, 0);
-    g.add(label);
-
-    g.position.set(HYDRO_ZONE.x, 0, HYDRO_ZONE.z);
-    scene.add(g);
-  })();
-
   // ---- break room: vending machine, lockers, table and chairs ----
   (function breakRoom() {
     var g = new THREE.Group();
@@ -1752,6 +1765,101 @@
     g.add(tbl);
 
     scene.add(g);
+  })();
+
+  // ---- commercial kitchen fit-out around the ovens, revealed with level 3.
+  // Stainless prep runs down both sides and a bank of upright fridges at the
+  // back, so the room reads as a restaurant line rather than a bare slab. ----
+  var kitchenFit = new THREE.Group();
+  kitchenFit.visible = false;
+  scene.add(kitchenFit);
+  (function buildKitchen() {
+    var g = kitchenFit;
+
+    // a stainless prep bench: cabinet body, a lipped top, and an undershelf
+    function prepBench(x, z, lenZ) {
+      var b = new THREE.Group();
+      var body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.6, lenZ), M.steelDk);
+      body.position.y = 0.9; body.castShadow = true; body.receiveShadow = true;
+      b.add(body);
+      var top = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.14, lenZ + 0.3), M.steel);
+      top.position.y = 1.77; top.castShadow = true;
+      b.add(top);
+      var lip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, lenZ + 0.3), M.steel);
+      lip.position.set(-1.05, 1.95, 0);
+      b.add(lip);
+      var shelf = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, lenZ - 0.4), M.steelDk);
+      shelf.position.y = 0.42;
+      b.add(shelf);
+      b.position.set(x, 0, z);
+      g.add(b);
+      return b;
+    }
+
+    // an upright reach-in fridge with a sealed door and a pull handle
+    function fridge(x, z) {
+      var f = new THREE.Group();
+      var body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5.4, 3.0), M.steel);
+      body.position.y = 2.7; body.castShadow = true; body.receiveShadow = true;
+      f.add(body);
+      var seal = new THREE.Mesh(new THREE.BoxGeometry(0.12, 4.8, 2.6), M.fridgeSeal);
+      seal.position.set(-1.12, 2.8, 0);
+      f.add(seal);
+      var door = new THREE.Mesh(new THREE.BoxGeometry(0.14, 4.5, 2.35), M.steelDk);
+      door.position.set(-1.2, 2.8, 0);
+      f.add(door);
+      var handle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.2, 0.16), M.metal);
+      handle.position.set(-1.36, 2.9, 0.85);
+      f.add(handle);
+      var vent = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 2.8), M.steelDk);
+      vent.position.y = 5.65;
+      f.add(vent);
+      f.position.set(x, 0, z);
+      g.add(f);
+    }
+
+    // wall shelving with a row of stock pans on it
+    function panShelf(x, z, lenZ, faceSign) {
+      var s = new THREE.Group();
+      var board = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, lenZ), M.steel);
+      board.position.y = 3.4; board.castShadow = true;
+      s.add(board);
+      for (var i = 0; i < 4; i++) {
+        var bracket = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.1, 0.12), M.steelDk);
+        bracket.position.set(0, 3.3, -lenZ / 2 + 0.9 + i * (lenZ - 1.8) / 3);
+        s.add(bracket);
+        var pan = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.3, 0.42, 12), M.metal);
+        pan.position.set(0, 3.68, -lenZ / 2 + 0.9 + i * (lenZ - 1.8) / 3);
+        pan.castShadow = true;
+        s.add(pan);
+      }
+      s.position.set(x, 0, z);
+      s.rotation.y = faceSign > 0 ? Math.PI : 0;
+      g.add(s);
+    }
+
+    // splashback tiling behind each run, laid flat against the side walls
+    function splash(x, z, lenZ, faceSign) {
+      var p = new THREE.Mesh(new THREE.PlaneGeometry(lenZ, 4.2), M.tile);
+      p.position.set(x, 2.4, z);
+      p.rotation.y = faceSign * Math.PI / 2;
+      g.add(p);
+    }
+
+    var KZ_FAR = backDividerZ(3), KZ_NEAR = backDividerZ(2);   // -68 .. -50
+
+    // left-hand prep line
+    splash(-12.6, (KZ_FAR + KZ_NEAR) / 2, KZ_NEAR - KZ_FAR - 1.0, 1);
+    prepBench(-11.4, KZ_FAR + 3.0, 5.0);
+    prepBench(-11.4, KZ_FAR + 9.0, 5.0);
+    panShelf(-12.2, KZ_FAR + 6.0, 9.0, -1);
+
+    // right-hand line: fridges at the back, prep bench toward the front
+    splash(12.6, (KZ_FAR + KZ_NEAR) / 2, KZ_NEAR - KZ_FAR - 1.0, -1);
+    fridge(11.3, KZ_FAR + 2.8);
+    fridge(11.3, KZ_FAR + 6.2);
+    prepBench(11.4, KZ_FAR + 11.5, 5.0);
+    panShelf(12.2, KZ_FAR + 11.5, 5.0, 1);
   })();
 
   // ---- HR desk. Walking up opens a panel with buttons rather than the
@@ -2047,6 +2155,65 @@
     g.lineJoin = "round";
     g.strokeText(text, c.width / 2, c.height / 2);
     g.fillStyle = color; g.fillText(text, c.width / 2, c.height / 2);
+    spr.material.map.needsUpdate = true;
+  }
+
+  // ---- customer order bubble: a proper rounded speech balloon with a tail,
+  // drawn straight into the sprite canvas. Plain floating text was too easy
+  // to lose against the shop floor at this camera angle. ----
+  function drawBubble(c, text, tint) {
+    var g = c.getContext("2d");
+    g.clearRect(0, 0, c.width, c.height);
+    var W = c.width, H = c.height;
+    var bw = W - 24, bh = H - 62, bx = 12, by = 10, r = 34;
+    // balloon body
+    g.beginPath();
+    g.moveTo(bx + r, by);
+    g.arcTo(bx + bw, by, bx + bw, by + bh, r);
+    g.arcTo(bx + bw, by + bh, bx, by + bh, r);
+    g.arcTo(bx, by + bh, bx, by, r);
+    g.arcTo(bx, by, bx + bw, by, r);
+    g.closePath();
+    // tail, drawn as part of the same path so the outline wraps both
+    g.moveTo(W / 2 - 30, by + bh - 4);
+    g.lineTo(W / 2 - 2, H - 12);
+    g.lineTo(W / 2 + 34, by + bh - 4);
+    g.closePath();
+    g.fillStyle = "rgba(255,253,244,0.97)";
+    g.strokeStyle = "rgba(14,32,22,0.95)";
+    g.lineWidth = 11; g.lineJoin = "round";
+    g.stroke();
+    g.fill();
+    // a colour band along the bottom keyed to the product being asked for
+    g.save();
+    g.beginPath();
+    g.rect(bx + 10, by + bh - 16, bw - 20, 9);
+    g.fillStyle = tint;
+    g.fill();
+    g.restore();
+    // the order itself, as big as the balloon will allow
+    var size = 78;
+    do {
+      g.font = "bold " + size + "px Trebuchet MS, sans-serif";
+      size -= 2;
+    } while (g.measureText(text).width > bw - 40 && size > 20);
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillStyle = "#12241a";
+    g.fillText(text, W / 2, by + bh / 2 - 4);
+  }
+  function makeBubbleSprite() {
+    var c = document.createElement("canvas");
+    c.width = 320; c.height = 220;
+    drawBubble(c, "x1", "#ffe98a");
+    var spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
+    }));
+    spr.scale.set(1.95, 1.34, 1);
+    spr.renderOrder = 6;
+    return spr;
+  }
+  function updateBubbleSprite(spr, text, tint) {
+    drawBubble(spr.material.map.image, text, tint);
     spr.material.map.needsUpdate = true;
   }
 
@@ -2766,10 +2933,11 @@
       var l1 = new THREE.Mesh(lgeo, M.pants); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
       var l2 = new THREE.Mesh(lgeo, M.pants); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
       g.add(l1); g.add(l2);
-      // order bubble above their head: how many buds they still want
-      var bubble = textSprite("x1", "#ffe98a");
-      bubble.scale.set(1.5, 0.62, 1);
-      bubble.position.y = 3.05;
+      // Order bubble above their head. Customers queue three abreast, so the
+      // middle of each rank floats its bubble higher — otherwise neighbouring
+      // balloons overlap into an unreadable pile.
+      var bubble = makeBubbleSprite();
+      bubble.position.y = n % 3 === 1 ? 4.15 : 3.35;
       bubble.visible = false;
       g.add(bubble);
       g.scale.setScalar(0.95);
@@ -2864,9 +3032,9 @@
       var showBubble = npc.want > 0 && phase !== "out";
       npc.bubble.visible = showBubble;
       if (showBubble && npc.shown !== npc.want) {
-        updateSpriteText(npc.bubble,
-          (eater ? "🍪 x" : dabber ? "🍯 x" : "🌿 x") + npc.want,
-          eater ? "#e0a06a" : dabber ? "#ffc36a" : "#ffe98a");
+        updateBubbleSprite(npc.bubble,
+          (eater ? "🍪" : dabber ? "🍯" : "🌿") + " x" + npc.want,
+          eater ? "#c9743a" : dabber ? "#e09a2c" : "#4faa62");
         npc.shown = npc.want;
       }
 
@@ -3072,28 +3240,10 @@
 
   // Runners work both rooms, so they have to use the doorway — walking a
   // straight line to the counter would take them through the partition wall.
-  // Every doorway in the building sits at x=0, so routing between rooms is
-  // just "walk to the nearest doorway between here and there, then carry on".
-  function roomBoundaries() {
-    var list = [PARTITION_Z];
-    for (var i = 1; i <= (state.roomTier || 0); i++) list.push(backDividerZ(i));
-    return list;
-  }
-  function viaDoor(b, tx, tz) {
-    var bs = roomBoundaries(), best = null, bestD = Infinity;
-    for (var i = 0; i < bs.length; i++) {
-      var bz = bs[i];
-      var crosses = (b.pos.z > bz && tz < bz) || (b.pos.z < bz && tz > bz);
-      if (!crosses) continue;
-      var d = Math.abs(bz - b.pos.z);
-      if (d < bestD) { bestD = d; best = bz; }
-    }
-    if (best === null) return { x: tx, z: tz };
-    // Step to just *past* the doorway on the target's side. Offsetting by
-    // current position instead put the waypoint short of the door, so staff
-    // walked up to it, re-detected the crossing, and stalled there forever.
-    return { x: 0, z: best + (tz > best ? 1.0 : -1.0) };
-  }
+  // Routing used to funnel staff through the doorway at x=0 between rooms.
+  // With the interior walls gone there is nothing to walk around, so every
+  // errand is now a straight line. Kept as a seam so the callers read the same.
+  function viaDoor(b, tx, tz) { return { x: tx, z: tz }; }
 
   // first ready bed nobody else is already running to
   function runFreeBed(self) {
@@ -3395,6 +3545,222 @@
           if (b.carrying > 0) b.phase = "toCase";
           else if (b.holdingBud > 0) b.phase = "toPress";
           else b.phase = "toBud";
+        }
+      }
+
+      for (var c2 = 0; c2 < b.tote.children.length; c2++) {
+        b.tote.children[c2].visible = c2 < b.carrying;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  // ===================================================================
+  //  BAKERS — the kitchen's answer to extractors: they carry dabs off the
+  //  press line into the ovens, then run the finished edibles out front.
+  // ===================================================================
+  // Deliberately a small crew. The kitchen is the narrowest room in the
+  // building and three more bodies in it made the whole back of house feel
+  // like a crowd scene.
+  var bakers = [];
+  var BAK_SPEED = 5.0;
+  var BAK_ACT_TIME = 0.4;
+  var BAK_CARRY = 3;
+
+  (function buildBakers() {
+    for (var n = 0; n < MAX_BAKERS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.labCoat);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      // chef's whites: an apron over the front and a toque on top
+      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.82, 0.1), M.tile);
+      apron.position.set(0, 1.0, 0.3); apron.castShadow = true; g.add(apron);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin : M.skin2);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var toqueBand = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.34, 0.18, 10), M.tile);
+      toqueBand.position.y = 2.26; g.add(toqueBand);
+      var toque = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.34, 0.5, 10), M.tile);
+      toque.position.y = 2.6; toque.castShadow = true; g.add(toque);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.dark); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.dark); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // a tray of edibles, shown only on the way out to the counter
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.95, 0.34);
+      for (var c = 0; c < BAK_CARRY; c++) {
+        var it = new THREE.Mesh(edibleGeo, M.edible);
+        it.position.set((c - 1) * 0.34, 0, 0);
+        it.visible = false;
+        tote.add(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      bakers.push({
+        obj: g, l1: l1, l2: l2, tote: tote,
+        pos: { x: BAKER_ZONE.x + 1.4 + n * 0.9, z: BAKER_ZONE.z + 1.2 },
+        phase: "toDab", timer: 0, target: -1, pressTarget: -1,
+        carrying: 0, holdingDab: 0, walkPhase: n * 1.3, slot: n,
+      });
+    }
+  })();
+
+  function bakStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(BAK_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  // Presses and ovens are claimed on separate fields, the same way extractors
+  // keep beds and presses apart — one shared field means a baker heading for
+  // oven 2 locks another out of press 2.
+  function bakFreePress(self) {
+    var owned = pressOwned();
+    for (var i = 0; i < owned; i++) {
+      if (state.presses[i].dabs <= 0) continue;
+      var taken = false;
+      for (var j = 0; j < bakers.length; j++) {
+        var o = bakers[j];
+        if (o !== self && o.obj.visible && o.pressTarget === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+  function bakFreeOven(self, ok) {
+    var owned = ovenOwned();
+    for (var i = 0; i < owned; i++) {
+      if (!ok(state.ovens[i])) continue;
+      var taken = false;
+      for (var j = 0; j < bakers.length; j++) {
+        var o = bakers[j];
+        if (o !== self && o.obj.visible && o.target === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
+  function updateBakers(now, dt) {
+    var builtOvens = ovenOwned();
+    for (var i = 0; i < bakers.length; i++) {
+      var b = bakers[i];
+      var hired = ediblesUnlocked() && i < (state.bakerLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.target = -1; b.pressTarget = -1; b.carrying = 0; b.holdingDab = 0; continue; }
+
+      var walking = false;
+
+      if (b.phase === "toDab") {
+        // collect dabs off the press line to feed the ovens
+        if (b.holdingDab >= BAK_CARRY + staffCarryBonus()) { b.phase = "toOven"; b.pressTarget = -1; continue; }
+        if (b.pressTarget < 0 || b.pressTarget >= pressOwned() ||
+            state.presses[b.pressTarget].dabs <= 0) {
+          b.pressTarget = bakFreePress(b);
+        }
+        if (b.pressTarget < 0) {
+          if (b.holdingDab > 0) { b.phase = "toOven"; continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        var pd = pressDefs[b.pressTarget];
+        walking = !bakStepTo(b, pd.x, pd.z, dt);
+        if (!walking) { b.phase = "take"; b.timer = BAK_ACT_TIME; }
+
+      } else if (b.phase === "take") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var ti = b.pressTarget;
+          if (ti >= 0 && ti < pressOwned() && state.presses[ti].dabs > 0) {
+            state.presses[ti].dabs--;
+            b.holdingDab++;
+          }
+          b.pressTarget = -1;
+          b.phase = "toDab";
+        }
+
+      } else if (b.phase === "toOven") {
+        if (b.holdingDab <= 0) { b.phase = "toDab"; b.target = -1; continue; }
+        if (b.target < 0 || b.target >= builtOvens || state.ovens[b.target].dabs >= OVEN_CAP) {
+          b.target = bakFreeOven(b, function (oo) { return oo.dabs < OVEN_CAP; });
+        }
+        if (b.target < 0) { b.phase = "toBaked"; continue; }
+        var od = ovenDefs[b.target];
+        walking = !bakStepTo(b, od.x, od.z, dt);
+        if (!walking) { b.phase = "load"; b.timer = BAK_ACT_TIME; }
+
+      } else if (b.phase === "load") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var li = b.target;
+          if (li >= 0 && li < builtOvens && b.holdingDab > 0 &&
+              state.ovens[li].dabs < OVEN_CAP) {
+            state.ovens[li].dabs++;
+            b.holdingDab--;
+          }
+          b.target = -1;
+          b.phase = b.holdingDab > 0 ? "toOven" : "toBaked";
+        }
+
+      } else if (b.phase === "toBaked") {
+        // gather what's finished baking, then run it out to the counter
+        if (b.carrying >= BAK_CARRY + staffCarryBonus()) { b.phase = "toCounter"; b.target = -1; continue; }
+        if (b.target < 0 || b.target >= builtOvens || state.ovens[b.target].cooked <= 0) {
+          b.target = bakFreeOven(b, function (oo) { return oo.cooked > 0; });
+        }
+        if (b.target < 0) {
+          if (b.carrying > 0) { b.phase = "toCounter"; continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        var bd2 = ovenDefs[b.target];
+        walking = !bakStepTo(b, bd2.x, bd2.z, dt);
+        if (!walking) { b.phase = "collect"; b.timer = BAK_ACT_TIME; }
+
+      } else if (b.phase === "collect") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var ci = b.target;
+          if (ci >= 0 && ci < builtOvens && state.ovens[ci].cooked > 0) {
+            state.ovens[ci].cooked--;
+            b.carrying++;
+          }
+          b.target = -1;
+          b.phase = "toBaked";
+        }
+
+      } else if (b.phase === "toCounter") {
+        // stand off to the far side of the till so they don't jostle the
+        // extractors already dropping dabs there
+        var cx = SELL_ZONE.x + 1.6 + b.slot * 1.0, cz = SELL_ZONE.z + 2.2;
+        walking = !bakStepTo(b, cx, cz, dt);
+        if (!walking) { b.phase = "drop"; b.timer = BAK_ACT_TIME; }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          while (b.carrying > 0) { dropEdibleOnBar(); b.carrying--; }
+          renderUpgrades();
+          b.phase = "toDab";
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.8;
+          if (b.carrying > 0) b.phase = "toCounter";
+          else if (b.holdingDab > 0) b.phase = "toOven";
+          else b.phase = "toDab";
         }
       }
 
@@ -3937,6 +4303,7 @@
       pendingCash = 0;
       refreshCashPile();
       addFloater(CASH_PAD.x, 2.6, CASH_PAD.z, "+$" + fmt(claimed), "#8ff5a8");
+      showCashGain(claimed);
       renderHud();
       refreshStationTags();
       saveState();
@@ -4198,23 +4565,11 @@
     scene.fog.far = camDist * 4.2;
 
     // The camera trails the player in +Z, so near the storefront it ends up
-    // outside the building, and in the back room it ends up on the far side of
-    // the partition. Hide whichever wall is between the camera and the player.
+    // outside the building looking in. That's the only wall left that can get
+    // between the camera and the player, so it's the only one to hide.
     var camZ = camera.position.z;
     if (frontWallGroup) {
       frontWallGroup.visible = camZ < retailMaxZForTier(state.roomTier) - 0.2;
-    }
-    if (partitionGroup) {
-      partitionGroup.visible = !(player.pos.z < PARTITION_Z && camZ > PARTITION_Z);
-    }
-    // Same trick for every back-room divider the camera might be behind, plus
-    // a proximity fade: tap-to-move raycasts against the floor, so a solid
-    // wall in the way means you can't tap the room beyond it to walk there.
-    for (var bwi = 0; bwi < backDividers.length; bwi++) {
-      var bw = backDividers[bwi], bz = bw.userData.z;
-      var behind = player.pos.z < bz && camZ > bz;
-      var approaching = player.pos.z > bz && player.pos.z < bz + 11;
-      bw.visible = !(behind || approaching);
     }
   }
 
@@ -4315,6 +4670,21 @@
   var promoChip = document.getElementById("promo-chip");
   var promoVal = document.getElementById("promo-val");
   var levelVal = document.getElementById("level-val");
+
+  // Collections come in bursts, so batch anything landing within the same
+  // second into one number rather than restarting the animation each time.
+  var cashGainEl = document.getElementById("cash-gain");
+  var cashGainTotal = 0, cashGainTimer = 0;
+  function showCashGain(amount) {
+    if (amount <= 0) return;
+    cashGainTotal += amount;
+    cashGainEl.textContent = "+$" + fmt(cashGainTotal);
+    cashGainEl.classList.remove("pop");
+    void cashGainEl.offsetWidth;   // restart the animation from the top
+    cashGainEl.classList.add("pop");
+    clearTimeout(cashGainTimer);
+    cashGainTimer = setTimeout(function () { cashGainTotal = 0; }, 1150);
+  }
 
   function renderHud() {
     cashEl.textContent = fmt(state.cash);
@@ -4470,6 +4840,28 @@
       buy: function () {
         state.extractorLv = (state.extractorLv || 0) + 1;
         toast("\u2697\ufe0f Extractor hired \u2014 they'll work the press line!");
+      },
+    },
+    {
+      id: "baker", label: "KITCHEN", icon: "\ud83d\udc68\u200d\ud83c\udf73", x: BAKER_ZONE.x, z: BAKER_ZONE.z,
+      color: 0xffd9a8, kiosk: false,
+      hidden: function () { return !ediblesUnlocked(); },
+      name: function () {
+        return (state.bakerLv || 0) === 0 ? "Hire a Baker" : "Hire Another Baker";
+      },
+      desc: function () {
+        var n = state.bakerLv || 0;
+        return n >= MAX_BAKERS
+          ? "The kitchen is fully staffed"
+          : (n === 0
+              ? "They carry dabs from the presses into the ovens, then run edibles out front"
+              : n + " on shift \u00b7 hire one more to bake faster");
+      },
+      cost: costBaker,
+      maxed: function () { return (state.bakerLv || 0) >= MAX_BAKERS; },
+      buy: function () {
+        state.bakerLv = (state.bakerLv || 0) + 1;
+        toast("\ud83d\udc68\u200d\ud83c\udf73 Baker hired \u2014 they'll run the oven line!");
       },
     },
     {
@@ -4832,6 +5224,7 @@
     if (counterTopMesh) {
       counterTopMesh.material = state.sellLv >= 4 ? M.counterStone : M.counterTop;
     }
+    kitchenFit.visible = ediblesUnlocked();
   }
 
   // kept as the single "refresh all the shop-facing UI" entry point
@@ -4896,6 +5289,7 @@
     updateBotanists(now, dt);
     updateRunners(now, dt);
     updateExtractors(now, dt);
+    updateBakers(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
