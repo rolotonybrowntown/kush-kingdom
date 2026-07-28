@@ -312,6 +312,7 @@
 
 </script>
 <script>
+
 (function () {
   "use strict";
 
@@ -416,18 +417,19 @@
   var MAX_RUNNERS = 3;
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
   var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
+  var HOPPER_ZONE  = { x: -10.0, z: -35.0 };       // bigger press hoppers
   var MAX_EXTRACTORS = 3;
 
   // dab display case, on the fixed retail floor beside the bud counter
   var DAB_SELL_ZONE = { x: 10.6, z: -1.5, r: 2.2 };
-  var DAB_MULT = 4;                                // a dab is worth 4 buds
+  var BASE_DAB_VALUE = 25;                         // a dab starts at $25
   function dabsUnlocked() { return (state.roomTier || 0) >= 1; }
-  function dabValue() { return sellValue() * DAB_MULT; }
+  // tracks the strain you are selling, so dabs keep pace with bud upgrades
+  function dabValue() { return BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE); }
 
-  // ---- extraction lab: rows of rosin presses out back, one bay per level ----
-  // Laid out exactly like the grow beds: a grid you unlock a row at a time
-  // from a tile beside that row, then upgrade that row's speed from the same
-  // tile. Two rows live in each lab bay.
+  // ---- extraction lab: rosin presses bought one machine at a time ----
+  // The lab opens empty. Each slot has its own pay square, and only the next
+  // one in line is offered, so you build the room up machine by machine.
   var PRESS_COLS = 3, PRESS_ROWS_PER_BAY = 2;
   var PRESS_SPACING_X = 6.0, PRESS_SIZE = 3.2;
   var MAX_PRESS_ROWS = PRESS_ROWS_PER_BAY * (ROOM_TIERS.length - 1);
@@ -446,21 +448,21 @@
     }
   })();
   var MAX_PRESSES = pressDefs.length;
-  var PRESS_TILE_X = -((PRESS_COLS - 1) * PRESS_SPACING_X) / 2 - PRESS_SPACING_X + 1.6;
-  var PRESS_TILE_HALF = (PRESS_SIZE + 0.5) / 2;
-  var MAX_PRESS_LV = 3;                            // speed tiers per row
+  var PRESS_PAD_HALF = (PRESS_SIZE + 0.5) / 2;
   var BASE_PRESS_TIME = 7;                         // seconds to squeeze one bud
-  function pressRowOf(i) { return pressDefs[i].row; }
-  function pressLvOf(i) { return (state.pressLv && state.pressLv[pressRowOf(i)]) || 0; }
-  function pressTimeFor(i) {
-    var t = BASE_PRESS_TIME * Math.pow(0.72, pressLvOf(i));
+  var BASE_HOPPER = 7;                             // buds a press holds at once
+  var MAX_HOPPER_LV = 4;
+  var MAX_SPEED_LV = 5;            // read by the save migration below
+  function hopperCap() { return BASE_HOPPER + 3 * (state.hopperLv || 0); }
+  function pressTimeFor() {
+    var t = BASE_PRESS_TIME;
     if (boostActive()) t *= 0.5;
     return Math.max(t, 0.8);
   }
-  // a row can only be bought once its bay has been built
-  function pressRowsAvailable() { return (state.roomTier || 0) * PRESS_ROWS_PER_BAY; }
-  function pressRowCost(rowNum) { return Math.round(900 * Math.pow(2.6, rowNum)); }
-  function pressUpgradeCost(lv) { return Math.round(700 * Math.pow(2.0, lv)); }
+  // how many press slots the built rooms expose
+  function pressSlotsAvailable() { return (state.roomTier || 0) * PRESS_ROWS_PER_BAY * PRESS_COLS; }
+  function pressCost(n) { return Math.round(700 * Math.pow(1.9, n)); }
+  function hopperCost(lv) { return Math.round(900 * Math.pow(2.2, lv)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -513,9 +515,9 @@
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
       promoUntil: 0,          // promotion expiry (epoch ms)
-      pressRows: 0,           // press rows built in the extraction lab
-      presses: pressDefs.map(function () { return { state: "idle" }; }),
-      pressLv: [],            // press-plate speed level per row
+      pressCount: 0,          // rosin presses bought, one machine at a time
+      presses: pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; }),
+      hopperLv: 0,            // how much bud a press holds at once
       lastSaveTime: Date.now(),
     };
   }
@@ -558,18 +560,22 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       if (typeof merged.promoUntil !== "number") merged.promoUntil = 0;
-      delete merged.pressBuds; delete merged.pressDabs;   // pre-grid fields
-      if (!Array.isArray(merged.presses) || merged.presses.length !== pressDefs.length) {
-        merged.presses = pressDefs.map(function () { return { state: "idle" }; });
+      delete merged.pressBuds; delete merged.pressDabs; delete merged.pressLv;
+      // presses used to come in rows; carry that over as a machine count
+      if (typeof merged.pressCount !== "number") {
+        merged.pressCount = (merged.pressRows || 0) * PRESS_COLS;
       }
-      if (!Array.isArray(merged.pressLv) || merged.pressLv.length !== MAX_PRESS_ROWS) {
-        merged.pressLv = [];
-        for (var pr = 0; pr < MAX_PRESS_ROWS; pr++) merged.pressLv.push(0);
+      delete merged.pressRows;
+      merged.pressCount = Math.max(0, Math.min(MAX_PRESSES, merged.pressCount));
+      if (!Array.isArray(merged.presses) || merged.presses.length !== pressDefs.length ||
+          !merged.presses[0] || typeof merged.presses[0].buds !== "number") {
+        merged.presses = pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; });
       }
-      merged.pressRows = Math.max(0, Math.min(MAX_PRESS_ROWS, merged.pressRows || 0));
+      merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
+      merged.speedLv = Math.max(0, Math.min(MAX_SPEED_LV, merged.speedLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
@@ -589,7 +595,9 @@
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) {}
   }
 
-  function moveSpeed()   { return BASE_SPEED * (1 + 0.11 * state.speedLv); }
+  // Five levels instead of ten, each worth twice as much, so the top of the
+  // track lands near where the old level 10 sat rather than sailing past it.
+  function moveSpeed()   { return BASE_SPEED * (1 + 0.2 * state.speedLv); }
   function backpackCap() { return BASE_CAP + state.capLv; }
 
   // Each strain adds a flat $4 a bud, and every tenth one is a step change
@@ -2054,66 +2062,40 @@
   }
   for (var qi = 0; qi < pressDefs.length; qi++) pressObjects.push(makePress(qi));
 
-  // ---- one pay tile per press row, same widget as the grow-bed rows ----
-  var pressTiles = [];
-  function makePressTile(rowIdx) {
-    var rz = pressDefs[rowIdx * PRESS_COLS].z;
-    var sq = makePaySquare(PRESS_TILE_HALF, 0xffb03f, "#ffc36a", "ADD PRESSES", rz);
-    sq.group.position.set(PRESS_TILE_X, 0, rz);
+  // ---- a buy pad on each empty press slot; only the next one is offered ----
+  var pressPads = [];
+  function makePressPad(i) {
+    var d = pressDefs[i];
+    var sq = makePaySquare(PRESS_PAD_HALF, 0xffb03f, "#ffc36a", "BUY PRESS", d.z);
+    sq.group.position.set(d.x, 0, d.z);
     sq.group.visible = false;
     scene.add(sq.group);
     return sq;
   }
-  for (var pti = 0; pti < MAX_PRESS_ROWS; pti++) pressTiles.push(makePressTile(pti));
+  for (var pti = 0; pti < MAX_PRESSES; pti++) pressPads.push(makePressPad(pti));
 
-  // What a press row's tile is selling: build the row, then speed it up.
-  var PRESS_ADD_COLOR = 0xffb03f, PRESS_UP_COLOR = 0x8fd0ff;
-  function pressRowOffer(r) {
-    if (r >= pressRowsAvailable()) return null;      // bay not built yet
-    var built = state.pressRows || 0;
-    if (r > built) return null;                      // can't skip ahead
-    if (r === built) {
-      return {
-        kind: "pressrow", row: r, key: "prow" + r,
-        label: "ADD PRESSES", color: PRESS_ADD_COLOR, hex: "#ffc36a",
-        name: "Add Press Row " + (r + 1),
-        desc: "Install " + PRESS_COLS + " more rosin presses",
-        cost: pressRowCost(r),
-      };
-    }
-    var lv = (state.pressLv && state.pressLv[r]) || 0;
-    if (lv >= MAX_PRESS_LV) return null;
-    var idx0 = r * PRESS_COLS;
-    return {
-      kind: "pressup", row: r, key: "pup" + r,
-      label: "FASTER PRESS", color: PRESS_UP_COLOR, hex: "#bfe8ff",
-      name: lv === 0 ? "Upgrade Press Plates" : "Upgrade Press Plates Lv." + (lv + 1),
-      desc: "Row " + (r + 1) + " · " + pressTimeFor(idx0).toFixed(1) + "s → " +
-            (BASE_PRESS_TIME * Math.pow(0.72, lv + 1) * (boostActive() ? 0.5 : 1)).toFixed(1) + "s per dab",
-      cost: pressUpgradeCost(lv),
-    };
+  // the slot you're allowed to buy right now, or -1 when there isn't one
+  function nextPressSlot() {
+    var owned = state.pressCount || 0;
+    return owned < pressSlotsAvailable() ? owned : -1;
   }
 
-  function updatePressTiles(now) {
-    for (var i = 0; i < pressTiles.length; i++) {
-      var pt = pressTiles[i];
-      var off = pressRowOffer(i);
-      pt.group.visible = !!off;
-      if (!off) continue;
-      if (pt.lbl.userData.last !== off.label) {
-        updateSpriteText(pt.lbl, off.label, off.hex);
-        pt.tint.material.color.setHex(off.color);
-        pt.lbl.userData.last = off.label;
-        pt.price.userData.last = null;
+  function updatePressPads(now) {
+    var next = nextPressSlot();
+    for (var i = 0; i < pressPads.length; i++) {
+      var pp = pressPads[i];
+      var show = (i === next);
+      pp.group.visible = show;
+      if (!show) continue;
+      var cost = pressCost(i);
+      var paid = state.stationPaid["press" + i] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (pp.price.userData.last !== remain) {
+        updateSpriteText(pp.price, "$" + fmt(remain), "#ffc36a");
+        pp.price.userData.last = remain;
       }
-      var paid = state.stationPaid[off.key] || 0;
-      var remain = Math.max(0, Math.ceil(off.cost - paid));
-      if (pt.price.userData.last !== remain) {
-        updateSpriteText(pt.price, "$" + fmt(remain), off.hex);
-        pt.price.userData.last = remain;
-      }
-      setPaySquareProgress(pt, Math.min(1, paid / off.cost));
-      pt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+      setPaySquareProgress(pp, Math.min(1, paid / cost));
+      pp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
     }
   }
 
@@ -2812,8 +2794,23 @@
     return false;
   }
 
+  // pick the first press nobody else is walking to that satisfies `ok`
+  function extFreePress(self, ok) {
+    var owned = pressOwned();
+    for (var i = 0; i < owned; i++) {
+      if (!ok(state.presses[i])) continue;
+      var taken = false;
+      for (var j = 0; j < extractors.length; j++) {
+        var o = extractors[j];
+        if (o !== self && o.obj.visible && o.target === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
   function updateExtractors(now, dt) {
-    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
+    var builtPresses = pressOwned();
     for (var i = 0; i < extractors.length; i++) {
       var b = extractors[i];
       var hired = dabsUnlocked() && i < (state.extractorLv || 0);
@@ -2852,8 +2849,9 @@
       } else if (b.phase === "toPress") {
         // load an idle press with a bud we're carrying
         if (b.holdingBud <= 0) { b.phase = "toBud"; b.target = -1; continue; }
-        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].state !== "idle") {
-          b.target = extFreeThing(b, state.presses.slice(0, builtPresses), "target", "idle");
+        var cap = hopperCap();
+        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].buds >= cap) {
+          b.target = extFreePress(b, function (pp) { return pp.buds < cap; });
         }
         if (b.target < 0) { b.phase = "toReady"; continue; }
         var pd = pressDefs[b.target];
@@ -2865,10 +2863,9 @@
         b.timer -= dt;
         if (b.timer <= 0) {
           var li = b.target;
-          if (li >= 0 && li < builtPresses && state.presses[li].state === "idle" && b.holdingBud > 0) {
-            state.presses[li] = {
-              state: "pressing", startedAt: Date.now(), duration: pressTimeFor(li) * 1000,
-            };
+          if (li >= 0 && li < builtPresses && b.holdingBud > 0 &&
+              state.presses[li].buds < hopperCap()) {
+            state.presses[li].buds++;
             b.holdingBud--;
           }
           b.target = -1;
@@ -2878,8 +2875,8 @@
       } else if (b.phase === "toReady") {
         // collect finished dabs, then run them out front
         if (b.carrying >= EXT_CARRY) { b.phase = "toCase"; b.target = -1; continue; }
-        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].state !== "ready") {
-          b.target = extFreeThing(b, state.presses.slice(0, builtPresses), "target", "ready");
+        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].dabs <= 0) {
+          b.target = extFreePress(b, function (pp) { return pp.dabs > 0; });
         }
         if (b.target < 0) {
           if (b.carrying > 0) { b.phase = "toCase"; continue; }
@@ -2894,8 +2891,8 @@
         b.timer -= dt;
         if (b.timer <= 0) {
           var gi = b.target;
-          if (gi >= 0 && gi < builtPresses && state.presses[gi].state === "ready") {
-            state.presses[gi] = { state: "idle" };
+          if (gi >= 0 && gi < builtPresses && state.presses[gi].dabs > 0) {
+            state.presses[gi].dabs--;
             b.carrying++;
           }
           b.target = -1;
@@ -3133,60 +3130,70 @@
     renderUpgrades();
   }
 
-  // ---- presses work like beds: load one with bud, wait, collect the dab ----
+  // ---- presses hold a hopper of bud and turn it into dabs one at a time ----
+  function pressOwned() { return Math.min(state.pressCount || 0, MAX_PRESSES); }
+
   function handlePresses() {
     if (!dabsUnlocked()) return;
-    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
-    for (var i = 0; i < builtPresses; i++) {
+    var owned = pressOwned();
+    for (var i = 0; i < owned; i++) {
       var d = pressDefs[i], p = state.presses[i];
       if (d2(player.pos.x, player.pos.z, d.x, d.z) > PRESS_SIZE * 0.7 + PLAYER_RADIUS) continue;
 
-      if (p.state === "idle") {
-        for (var b = player.backpack.length - 1; b >= 0; b--) {
-          if (player.backpack[b].type === "bud") {
-            player.backpack.splice(b, 1);
-            syncStack();
-            state.presses[i] = {
-              state: "pressing", startedAt: Date.now(), duration: pressTimeFor(i) * 1000,
-            };
-            addFloater(d.x, 3.0, d.z, "PRESSING", "#ffc36a");
-            markTut("press");
-            break;
-          }
-        }
-      } else if (p.state === "ready" && player.backpack.length < backpackCap()) {
-        player.backpack.push({ type: "dab" });
-        syncStack();
-        state.presses[i] = { state: "idle" };
-        addFloater(d.x, 3.2, d.z, "+DAB", "#ffc36a");
+      // tip in as much bud as the hopper will still take
+      var fed = 0, cap = hopperCap();
+      for (var b = player.backpack.length - 1; b >= 0; b--) {
+        if (p.buds + fed >= cap) break;
+        if (player.backpack[b].type === "bud") { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed) {
+        p.buds += fed;
+        addFloater(d.x, 3.0, d.z, "+" + fed + " BUD", "#a8f57a");
+        markTut("press");
+      }
+      // and take back whatever it has finished
+      var took = 0;
+      while (p.dabs > 0 && player.backpack.length < backpackCap()) {
+        p.dabs--; player.backpack.push({ type: "dab" }); took++;
+      }
+      if (took) {
+        addFloater(d.x, 3.4, d.z, "+" + took + " DAB", "#ffc36a");
         markTut("dabgrab");
+      }
+      if (fed || took) { syncStack(); renderUpgrades(); }
+    }
+  }
+
+  function updatePressStates(dt) {
+    var owned = pressOwned();
+    for (var i = 0; i < owned; i++) {
+      var p = state.presses[i];
+      if (p.buds <= 0) { p.acc = 0; continue; }
+      p.acc = (p.acc || 0) + dt;
+      var need = pressTimeFor();
+      while (p.acc >= need && p.buds > 0) {
+        p.acc -= need;
+        p.buds--;
+        p.dabs++;
       }
     }
   }
 
-  function updatePressStates() {
-    for (var i = 0; i < state.presses.length; i++) {
-      var p = state.presses[i];
-      if (p.state === "pressing" && Date.now() - p.startedAt >= p.duration) p.state = "ready";
-    }
-  }
-
   function updatePressVisuals(now) {
-    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
+    var owned = pressOwned();
     for (var i = 0; i < pressObjects.length; i++) {
       var po = pressObjects[i];
-      var live = dabsUnlocked() && i < builtPresses;
+      var live = dabsUnlocked() && i < owned;
       po.group.visible = live;
       if (!live) continue;
       var p = state.presses[i];
-      var working = p.state === "pressing";
-      // ram pumps while squeezing, sits down when idle or finished
+      var working = p.buds > 0;
       var pump = working ? Math.abs(Math.sin(now * 0.007 + i)) : 1;
       po.ram.position.y = 1.85 + pump * 0.85;
       po.loaded.visible = working;
-      po.done.visible = p.state === "ready";
-      po.glow.visible = p.state === "ready";
-      if (p.state === "ready") {
+      po.done.visible = p.dabs > 0;
+      po.glow.visible = p.dabs > 0;
+      if (p.dabs > 0) {
         po.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
         po.done.rotation.y = now * 0.002;
       }
@@ -3623,10 +3630,10 @@
     for (var c0 = 0; c0 < player.backpack.length; c0++) {
       if (player.backpack[c0].type === "dab") hasDab = true;
     }
-    var builtP = (state.pressRows || 0) * PRESS_COLS;
+    var builtP = pressOwned();
     for (var c1 = 0; c1 < builtP; c1++) {
-      if (state.presses[c1].state === "ready") anyPressReady = true;
-      if (state.presses[c1].state === "idle") anyPressIdle = true;
+      if (state.presses[c1].dabs > 0) anyPressReady = true;
+      if (state.presses[c1].buds < hopperCap()) anyPressIdle = true;
     }
     var applies = {
       collect: pendingCash > 0,
@@ -3698,8 +3705,13 @@
       id: "speed", label: "ENERGY", icon: "\u26a1", x: VEND_ZONE.x, z: VEND_ZONE.z,
       color: 0x7fc4ff, kiosk: false,
       name: function () { return "Energy Drink"; },
-      desc: function () { return "Lv." + state.speedLv + " \u00b7 +11% move speed, permanently"; },
+      desc: function () {
+        return state.speedLv >= MAX_SPEED_LV
+          ? "You're as quick as you're getting"
+          : "Lv." + state.speedLv + "/" + MAX_SPEED_LV + " \u00b7 +20% move speed, permanently";
+      },
       cost: costSpeed,
+      maxed: function () { return state.speedLv >= MAX_SPEED_LV; },
       buy: function () { state.speedLv++; },
     },
     {
@@ -3758,6 +3770,23 @@
       buy: function () {
         state.runnerLv = (state.runnerLv || 0) + 1;
         toast("\ud83c\udfc3 Runner hired \u2014 they'll stock the counter for you!");
+      },
+    },
+    {
+      id: "hopper", label: "HOPPER", icon: "\ud83e\uded9", x: HOPPER_ZONE.x, z: HOPPER_ZONE.z,
+      color: 0xffb03f, kiosk: false,
+      hidden: function () { return !dabsUnlocked(); },
+      name: function () { return "Bigger Press Hoppers"; },
+      desc: function () {
+        return (state.hopperLv || 0) >= MAX_HOPPER_LV
+          ? "Hoppers are as big as they get"
+          : "Every press holds " + hopperCap() + " \u2192 " + (hopperCap() + 3) + " bud at a time";
+      },
+      cost: function () { return hopperCost(state.hopperLv || 0); },
+      maxed: function () { return (state.hopperLv || 0) >= MAX_HOPPER_LV; },
+      buy: function () {
+        state.hopperLv = (state.hopperLv || 0) + 1;
+        toast("\ud83e\uded9 Hoppers enlarged \u2014 presses hold " + hopperCap() + " bud now!");
       },
     },
     {
@@ -3966,30 +3995,27 @@
         };
       })(off, rz);
     }
-    // press rows work identically, from their own tile out in the lab
-    for (var pr = 0; pr < MAX_PRESS_ROWS; pr++) {
-      var pz = pressDefs[pr * PRESS_COLS].z;
-      if (!inBox(player.pos.x, player.pos.z, PRESS_TILE_X, pz, PRESS_TILE_HALF)) continue;
-      var poff = pressRowOffer(pr);
-      if (!poff) break;
-      return (function (o, zz) {
-        return {
-          kind: o.kind, key: o.key, slot: "presstile" + o.row,
-          name: o.name, desc: o.desc,
-          cost: o.cost, maxed: false,
-          x: PRESS_TILE_X, z: zz, y: 1.2,
-          complete: function () {
-            if (o.kind === "pressrow") {
-              state.pressRows = o.row + 1;
-              addFloater(PRESS_TILE_X, 2.6, zz, "PRESSES IN!", "#ffc36a");
-              toast("⚙️ New row of presses installed!");
-            } else {
-              state.pressLv[o.row] = (state.pressLv[o.row] || 0) + 1;
-              addFloater(PRESS_TILE_X, 2.6, zz, "FASTER!", "#bfe8ff");
-            }
-          },
-        };
-      })(poff, pz);
+    // the next press slot, bought one machine at a time
+    var nps = nextPressSlot();
+    if (nps >= 0) {
+      var npd = pressDefs[nps];
+      if (inBox(player.pos.x, player.pos.z, npd.x, npd.z, PRESS_PAD_HALF)) {
+        return (function (idx, dd) {
+          return {
+            kind: "press", key: "press" + idx, slot: "presspad" + idx,
+            name: "Buy a Rosin Press",
+            desc: "Machine " + (idx + 1) + " · holds " + hopperCap() + " bud at a time",
+            cost: pressCost(idx), maxed: false,
+            x: dd.x, z: dd.z, y: 1.6,
+            complete: function () {
+              state.pressCount = idx + 1;
+              state.presses[idx] = { buds: 0, dabs: 0, acc: 0 };
+              addFloater(dd.x, 3.0, dd.z, "PRESS IN!", "#ffc36a");
+              toast("⚙️ Rosin press installed!");
+            },
+          };
+        })(nps, npd);
+      }
     }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
@@ -4167,11 +4193,11 @@
     handleDabSellZone();
     updatePlotVisuals(now);
     updateRowTiles(now);
-    updatePressTiles(now);
+    updatePressPads(now);
     updateStack(now);
     updateCounterPile(now, dt);
     updateDabPile(now);
-    updatePressStates();
+    updatePressStates(dt);
     updatePressVisuals(now);
     updateCashDrops(now, dt);
     payIntoZone(dt);
