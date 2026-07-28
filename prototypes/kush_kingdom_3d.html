@@ -925,13 +925,18 @@
   function moveSpeed()   { return BASE_SPEED * (1 + 0.4 * state.speedLv); }
   function backpackCap() { return BASE_CAP + state.capLv; }
 
-  // Each strain adds a flat $4 a bud, and every tenth one is a step change
-  // that doubles the lot — so there's always a big one to save toward.
-  //   Lv.0 $6 · Lv.1 $10 · Lv.9 $42 · Lv.10 $92 · Lv.20 $344
-  function sellValue() {
-    var lv = state.sellLv || 0;
-    return (BASE_SELL_VALUE + 4 * lv) * Math.pow(2, Math.floor(lv / 10));
+  // A strain adds $4 a bud within its decade, and every tenth one moves the
+  // whole scale up 8x — so the $4 step is worth 8x more in the next decade too.
+  //   Lv.0 $6 · Lv.1 $10 · Lv.9 $42 · Lv.10 $48 · Lv.20 $384 · Lv.30 $3,072
+  //
+  // The old curve added a flat $4 forever and only doubled per decade, so by
+  // Lv.30 an upgrade was +$4 on a $1,008 bud — literally a rounding error —
+  // while the price had run away to $13M. Scaling the step with the decade
+  // keeps every purchase worth making.
+  function sellValueAt(lv) {
+    return (BASE_SELL_VALUE + 4 * (lv % 10)) * Math.pow(8, Math.floor(lv / 10));
   }
+  function sellValue() { return sellValueAt(state.sellLv || 0); }
   var STRAIN_NAMES = [
     "Bag Seed", "Green Crack", "Sour Diesel", "Blue Dream", "Gelato",
     "Wedding Cake", "Purple Punch", "Zkittlez", "Runtz", "Gorilla Glue",
@@ -964,7 +969,10 @@
   // hard: five speed levels run $40 · $144 · $518 · $1.9K · $6.7K.
   function costCap()   { return Math.round(45 * Math.pow(2.1, state.capLv)); }
   function costSpeed() { return Math.round(40 * Math.pow(3.6, state.speedLv)); }
-  function costSell()  { return Math.round(69 * Math.pow(1.5, state.sellLv)); }
+  // Tracks the value curve (8x a decade, ~1.23x a level) a little faster than
+  // it grows, so strains stay affordable but never trivially so. At 1.5x a
+  // level the price outran the payoff by Lv.20 and the upgrade became a trap.
+  function costSell()  { return Math.round(69 * Math.pow(1.36, state.sellLv)); }
   function costBotanist() { return Math.round(350 * Math.pow(2.6, state.botanistLv || 0)); }
   function costRunner() { return Math.round(500 * Math.pow(2.6, state.runnerLv || 0)); }
   function costExtractor() { return Math.round(1200 * Math.pow(2.6, state.extractorLv || 0)); }
@@ -996,6 +1004,15 @@
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
   function costPromo() { return Math.round(sellValue() * 22); }
+
+  // Both ends of an upgrade have to look different even when they round to the
+  // same abbreviation. "$1.0K → $1.0K" reads as a broken upgrade even when
+  // the underlying numbers really did change.
+  function fmtStep(a, b) {
+    var fa = fmt(a), fb = fmt(b);
+    if (fa !== fb) return [fa, fb];
+    return [Math.round(a).toLocaleString(), Math.round(b).toLocaleString()];
+  }
 
   function fmt(n) {
     n = Math.floor(n);
@@ -5933,9 +5950,9 @@
       name: function () { return "Buy a New Strain"; },
       desc: function () {
         var lv = state.sellLv || 0;
-        var next = (BASE_SELL_VALUE + 4 * (lv + 1)) * Math.pow(2, Math.floor((lv + 1) / 10));
+        var step = fmtStep(sellValue(), sellValueAt(lv + 1));
         return strainName(lv) + " → " + strainName(lv + 1) +
-               " · $" + fmt(sellValue()) + " → $" + fmt(next) + " per bud";
+               " · $" + step[0] + " → $" + step[1] + " per bud";
       },
       cost: costSell,
       buy: function () {
