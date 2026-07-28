@@ -357,12 +357,22 @@
   var FLOOR_TOP_BACK   = 0.28;  // back-room slab: y 0.25, height 0.06
   function floorTopAt(z) { return z < PARTITION_Z ? FLOOR_TOP_BACK : FLOOR_TOP_RETAIL; }
 
+  // Level 2 doesn't just push the front wall out — it walls off a whole
+  // second room in front of the shop floor, which is where dabs are made
+  // and sold. Levels 3 and 4 then grow that room.
   var ROOM_TIERS = [
     { retailMaxZ: 2,  camDist: 22 },
-    { retailMaxZ: 7,  camDist: 24 },
-    { retailMaxZ: 12, camDist: 26 },
-    { retailMaxZ: 17, camDist: 28 },
+    { retailMaxZ: 14, camDist: 31 },
+    { retailMaxZ: 19, camDist: 34 },
+    { retailMaxZ: 24, camDist: 37 },
   ];
+  var DAB_WALL_Z = 2;              // divider between the bud shop and dab room
+  // Wide archway rather than a door. It has to cover two things at once: the
+  // bud customers' lanes (x 3.1-6.1) so they can walk through to their
+  // counter, and a lane left of the bud counter's pickup radius (x 2-8) so
+  // you can carry bud to the press without the counter taking it off you.
+  var DAB_DOOR_X = 2;
+  var DAB_DOOR_HALF = 6.0;
   var MAX_ROOM_TIER = ROOM_TIERS.length - 1;
   function retailMaxZForTier(t) { return ROOM_TIERS[t].retailMaxZ; }
   function camDistForTier(t)    { return ROOM_TIERS[t].camDist; }
@@ -392,7 +402,9 @@
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
-  var CASH_PAD  = { x: 0.7, z: -4.2, half: 1.45 }; // payout tray beside the till
+  // Kept left of x=0.35: the Street Value Lv.2 counter grows a side cabinet
+  // run that reaches that far and used to sit right on top of this pad.
+  var CASH_PAD  = { x: -1.6, z: -4.2, half: 1.45 }; // payout tray beside the till
   var PRICE_ZONE = { x: -9.0, z: -5.0 };           // pricing station
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
   // Sits in the open floor between the door and the pricing kiosk. Kept off
@@ -400,6 +412,17 @@
   var RUNNER_ZONE = { x: -5.0, z: -9.0 };          // dispatch point: hire runners
   var MAX_RUNNERS = 3;
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
+
+  // ---- dab room (room two, unlocked at store level 2) ----
+  // Press sits nearest the doorway (you arrive carrying bud), the bar further
+  // forward so dab customers coming in the front have room to walk to it.
+  var PRESS_ZONE = { x: -7.0, z: 4.5, r: 2.8 };    // rosin press: bud -> dabs
+  var DAB_SELL_ZONE = { x: -7.0, z: 8.0, r: 3.0 }; // dab bar
+  var DAB_MULT = 4;                                // a dab is worth 4 buds
+  var PRESS_SECONDS = 2.2;                         // per bud pressed
+  var PRESS_MAX = 12;                              // hopper + output capacity
+  function dabsUnlocked() { return (state.roomTier || 0) >= 1; }
+  function dabValue() { return sellValue() * DAB_MULT; }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -451,6 +474,8 @@
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
       promoUntil: 0,          // promotion expiry (epoch ms)
+      pressBuds: 0,           // bud waiting in the rosin press hopper
+      pressDabs: 0,           // dabs pressed and waiting to be collected
       lastSaveTime: Date.now(),
     };
   }
@@ -493,6 +518,8 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       if (typeof merged.promoUntil !== "number") merged.promoUntil = 0;
+      merged.pressBuds = Math.max(0, Math.min(PRESS_MAX, merged.pressBuds || 0));
+      merged.pressDabs = Math.max(0, Math.min(PRESS_MAX, merged.pressDabs || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
@@ -878,6 +905,10 @@
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
     pants:     mat(0x3b5b8a, { map: fabricTex, roughness: 0.9 }),
+    dab:       mat(0xf0a12c, { roughness: 0.15, metalness: 0.1,
+                               emissive: 0x8a4f00, emissiveIntensity: 0.5 }),
+    pressBody: mat(0x4a5560, { roughness: 0.35, metalness: 0.7 }),
+    pressPlate:mat(0xd9552f, { roughness: 0.4, metalness: 0.5 }),
     runnerVest:mat(0xd8562f, { map: fabricTex, roughness: 0.9 }),
     runnerCap: mat(0x9c3a1c, { map: fabricTex, roughness: 0.9 }),
     energyCan: mat(0x1668c8, { roughness: 0.3, metalness: 0.55 }),
@@ -900,7 +931,7 @@
   var ground; // hit-tested by the tap-to-move raycaster below
   var roomGroup = new THREE.Group();
   scene.add(roomGroup);
-  var frontWallGroup = null, partitionGroup = null;
+  var frontWallGroup = null, partitionGroup = null, dabWallGroup = null;
 
   // The camera looks straight down into the room, so ceiling fixtures can't be
   // modelled as geometry — they'd occlude the whole scene. Lights are emitted
@@ -1027,6 +1058,41 @@
       partitionGroup.add(sign);
     })();
 
+    // ---- divider that turns the level-2 extension into a real second room.
+    // Its doorway lines up with the bud counter so customers heading for the
+    // bud side walk straight through rather than clipping the wall. ----
+    dabWallGroup = null;
+    if (tier >= 1) {
+      var dabWall = new THREE.Group();
+      dabWallGroup = dabWall;
+      roomGroup.add(dabWall);
+      [-1, 1].forEach(function (sgn) {
+        var edge = sgn < 0 ? -HALF_X : HALF_X;
+        var inner = DAB_DOOR_X + sgn * DAB_DOOR_HALF;
+        var segW2 = Math.abs(edge - inner);
+        if (segW2 < 0.1) return;
+        var seg2 = new THREE.Mesh(new THREE.BoxGeometry(segW2, WALL_H, 0.45), M.wallAccent);
+        seg2.position.set((edge + inner) / 2, WALL_H / 2, DAB_WALL_Z);
+        seg2.castShadow = true; seg2.receiveShadow = true;
+        dabWall.add(seg2);
+      });
+      var hdrH = 1.8;
+      var hdr = new THREE.Mesh(
+        new THREE.BoxGeometry(DAB_DOOR_HALF * 2 + 0.6, hdrH, 0.5), M.wallAccent);
+      hdr.position.set(DAB_DOOR_X, WALL_H - hdrH / 2, DAB_WALL_Z);
+      dabWall.add(hdr);
+      [-1, 1].forEach(function (sgn) {
+        var jamb2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, WALL_H - hdrH, 0.62), M.wallTrim);
+        jamb2.position.set(DAB_DOOR_X + sgn * DAB_DOOR_HALF, (WALL_H - hdrH) / 2, DAB_WALL_Z);
+        jamb2.castShadow = true;
+        dabWall.add(jamb2);
+      });
+      var dabSign = textSprite("DAB BAR", "#ffc36a");
+      dabSign.scale.set(2.8, 0.66, 1);
+      dabSign.position.set(DAB_DOOR_X, WALL_H - 0.9, DAB_WALL_Z + 0.4);
+      dabWall.add(dabSign);
+    }
+
     // ---- baseboard + crown molding around the retail floor ----
     function trim(sizeX, sizeZ, x, z, y, h) {
       var b = new THREE.Mesh(new THREE.BoxGeometry(sizeX, h, sizeZ), M.wallTrim);
@@ -1131,10 +1197,11 @@
           g1.add(lid);
         }
       });
-      g1.position.set(-8.2, 0, band1);
-      g1.rotation.y = Math.PI / 2;
+      // right wall: the left side of the dab room is the press and dab bar
+      g1.position.set(11.6, 0, band1);
+      g1.rotation.y = -Math.PI / 2;
       roomGroup.add(g1);
-      spotFixture(roomGroup, -7.4, band1, 0xfff1c9);
+      spotFixture(roomGroup, 10.8, band1, 0xfff1c9);
     }
 
     if (tier >= 2) {
@@ -1168,7 +1235,7 @@
       var rug = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.06, 4.4), M.rug);
       rug.position.set(0, 0.26, 1.0); rug.receiveShadow = true;
       g2.add(rug);
-      g2.position.set(8.0, 0, band2);
+      g2.position.set(9.8, 0, band2);
       g2.rotation.y = -Math.PI / 2;
       roomGroup.add(g2);
       spotFixture(roomGroup, 7.4, band2, 0xffd9a0);
@@ -1597,6 +1664,81 @@
     g.add(tray);
 
     g.position.set(SELL_ZONE.x, 0, SELL_ZONE.z);
+    scene.add(g);
+  })();
+
+  // ---- rosin press: bud goes in the hopper, dabs come out the tray ----
+  var pressGroup = new THREE.Group();
+  var pressRam, pressHopper = new THREE.Group(), pressOut = new THREE.Group();
+  (function buildPress() {
+    var g = pressGroup;
+    var base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.2, 2.4), M.pressBody);
+    base.position.y = 0.85; base.castShadow = true; base.receiveShadow = true;
+    g.add(base);
+    // two uprights and a crossbeam, so it reads as a press
+    [-1.3, 1.3].forEach(function (ux) {
+      var post = new THREE.Mesh(new THREE.BoxGeometry(0.34, 3.2, 0.34), M.metalRack);
+      post.position.set(ux, 3.0, 0); post.castShadow = true;
+      g.add(post);
+    });
+    var beam = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.5, 1.0), M.pressBody);
+    beam.position.y = 4.5; beam.castShadow = true;
+    g.add(beam);
+    // the ram that pumps down each time a bud is squeezed
+    pressRam = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.55, 1.5), M.pressPlate);
+    pressRam.position.y = 3.1; pressRam.castShadow = true;
+    g.add(pressRam);
+    var bed = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.3, 1.6), M.metal);
+    bed.position.y = 1.6; bed.receiveShadow = true;
+    g.add(bed);
+    // hopper of waiting bud on the left, finished dabs on the tray at the front
+    pressHopper.position.set(-1.85, 1.75, 0.9);
+    g.add(pressHopper);
+    pressOut.position.set(0, 1.85, 1.5);
+    g.add(pressOut);
+    var outTray = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.08, 0.8), M.metal);
+    outTray.position.set(0, 1.78, 1.5); outTray.receiveShadow = true;
+    g.add(outTray);
+    addGlow(g, 0, 2.0, 1.5, 3.0, 0xffb03f, 0.3);
+    var lbl = textSprite("ROSIN PRESS", "#ffc36a");
+    lbl.scale.set(3.2, 0.7, 1);
+    lbl.position.set(0, 5.4, 0);
+    g.add(lbl);
+    g.position.set(PRESS_ZONE.x, 0, PRESS_ZONE.z);
+    scene.add(g);
+  })();
+
+  // ---- dab bar: where finished dabs are set out for customers ----
+  var dabPile = new THREE.Group();
+  var dabBarGroup = new THREE.Group();
+  (function buildDabBar() {
+    var g = dabBarGroup;
+    var body = new THREE.Mesh(new THREE.BoxGeometry(6.0, 1.9, 1.7), M.counter);
+    body.position.y = 1.05; body.castShadow = true; body.receiveShadow = true;
+    g.add(body);
+    var top2 = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.18, 2.0), M.counterStone);
+    top2.position.y = 2.05; top2.castShadow = true; top2.receiveShadow = true;
+    g.add(top2);
+    var glass = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.9, 0.06), M.counterGlass);
+    glass.position.set(0, 1.5, 0.88);
+    g.add(glass);
+    // Deliberately low: you approach this bar from the press side, so the
+    // camera is looking at it from behind you. A tall back panel here hid the
+    // player completely.
+    var backBar = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.1, 0.3), M.wallAccent);
+    backBar.position.set(0, 0.75, -1.3); backBar.castShadow = true;
+    g.add(backBar);
+    addGlow(g, 0, 2.3, -0.6, 4.0, 0xffb03f, 0.3);
+    var sign = textSprite("DABS", "#ffc36a");
+    sign.scale.set(2.4, 0.8, 1);
+    sign.position.set(0, 3.4, -0.4);
+    g.add(sign);
+    dabPile.position.set(0, 2.14, 0.2);
+    g.add(dabPile);
+    var tray2 = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.07, 0.9), M.metal);
+    tray2.position.set(0, 2.12, 0.2); tray2.receiveShadow = true;
+    g.add(tray2);
+    g.position.set(DAB_SELL_ZONE.x, 0, DAB_SELL_ZONE.z);
     scene.add(g);
   })();
 
@@ -2102,6 +2244,7 @@
   var stackMeshes = [];
   var seedGeo = new THREE.BoxGeometry(0.52, 0.66, 0.15);   // seed packet
   var budGeo = new THREE.ConeGeometry(0.34, 0.62, 6);       // bud, back to a cone
+  var dabGeo = new THREE.IcosahedronGeometry(0.27, 0);      // dab, a glassy blob
 
   function syncStack() {
     while (stackMeshes.length > player.backpack.length) stackAnchor.remove(stackMeshes.pop());
@@ -2116,8 +2259,8 @@
       var want = player.backpack[i3].type;
       var mm = stackMeshes[i3];
       if (mm.userData.type !== want) {
-        mm.geometry = want === "seed" ? seedGeo : budGeo;
-        mm.material = want === "seed" ? M.packA : M.bud;
+        mm.geometry = want === "seed" ? seedGeo : (want === "dab" ? dabGeo : budGeo);
+        mm.material = want === "seed" ? M.packA : (want === "dab" ? M.dab : M.bud);
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
       }
@@ -2164,7 +2307,7 @@
       npcs.push({
         obj: g, l1: l1, l2: l2, bubble: bubble,
         phase: n * 1.9,
-        slot: n,
+        slot: n, kind: "bud",
         want: 0, shown: -1, buyAcc: 0,
       });
     }
@@ -2185,9 +2328,14 @@
 
   function updateNpcs(now, dt) {
     npcs.forEach(function (npc, idx) {
-      // walk up toward the gate, pause at the counter queue, loop back off-screen
-      var queueX = SELL_ZONE.x - 0.4 + (idx - 1) * 1.5;
-      var startZ = retailMaxZForTier(state.roomTier) - 1.5, queueZ = SELL_ZONE.z + 3.0;
+      // Dab shoppers never enter the bud room: they stop at the dab bar in
+      // room two. Bud shoppers walk on through the dab-room doorway, which is
+      // why that doorway is lined up with the bud counter.
+      var dabber = npc.kind === "dab";
+      var counter = dabber ? DAB_SELL_ZONE : SELL_ZONE;
+      var queueX = counter.x - 0.4 + (idx - 1) * 1.5;
+      var startZ = retailMaxZForTier(state.roomTier) - 1.5;
+      var queueZ = counter.z + 3.0;
       var walkTime = Math.abs(startZ - queueZ) / NPC_SPEED;
       var cycle = walkTime * 2 + NPC_WAIT;
       var t = ((now / 1000) + npc.phase) % cycle;
@@ -2207,17 +2355,21 @@
       // a fresh order is decided on the way in, so the bubble is readable
       // before they reach the counter
       if (phase === "in" && npc.lastPhase !== "in") {
+        // roughly a third come in for dabs once the dab bar is open
+        npc.kind = (dabsUnlocked() && Math.random() < 0.35) ? "dab" : "bud";
         npc.want = rollOrder();
+        if (npc.kind === "dab") npc.want = Math.max(1, Math.ceil(npc.want / 2));
+        npc.shown = -1;
         npc.buyAcc = 0;
       }
-      // at the counter they take buds off the pile one at a time — if the
-      // pile runs dry the rest of the order goes unfilled, which is the
-      // signal to go grow more
+      // at the counter they take stock off their own pile one at a time — if
+      // it runs dry the rest of the order goes unfilled, which is the signal
+      // to go make more
       if (phase === "wait") {
         npc.buyAcc += dt;
         while (npc.want > 0 && npc.buyAcc >= NPC_BUY_EVERY) {
           npc.buyAcc -= NPC_BUY_EVERY;
-          if (!customerBuyBud()) break;
+          if (!(dabber ? customerBuyDab() : customerBuyBud())) break;
           npc.want--;
         }
       }
@@ -2226,7 +2378,9 @@
       var showBubble = npc.want > 0 && phase !== "out";
       npc.bubble.visible = showBubble;
       if (showBubble && npc.shown !== npc.want) {
-        updateSpriteText(npc.bubble, "🌿 x" + npc.want, "#ffe98a");
+        updateSpriteText(npc.bubble,
+          (dabber ? "🍯 x" : "🌿 x") + npc.want,
+          dabber ? "#ffc36a" : "#ffe98a");
         npc.shown = npc.want;
       }
 
@@ -2735,6 +2889,91 @@
     renderUpgrades();
   }
 
+  // ---- the press: drop bud into the hopper, pick finished dabs back up ----
+  var pressAcc = 0;
+  function handlePressZone() {
+    if (!dabsUnlocked()) return;
+    if (d2(player.pos.x, player.pos.z, PRESS_ZONE.x, PRESS_ZONE.z) > PRESS_ZONE.r + PLAYER_RADIUS) return;
+
+    // feed it whatever bud you're carrying
+    var fed = 0;
+    for (var i = player.backpack.length - 1; i >= 0; i--) {
+      if (state.pressBuds + fed >= PRESS_MAX) break;
+      if (player.backpack[i].type === "bud") { player.backpack.splice(i, 1); fed++; }
+    }
+    if (fed) {
+      state.pressBuds += fed;
+      addFloater(PRESS_ZONE.x, 3.4, PRESS_ZONE.z, "+" + fed + " BUD", "#a8f57a");
+    }
+    // and take back anything it has finished
+    var taken = 0;
+    while (state.pressDabs > 0 && player.backpack.length < backpackCap()) {
+      state.pressDabs--;
+      player.backpack.push({ type: "dab" });
+      taken++;
+    }
+    if (taken) {
+      addFloater(PRESS_ZONE.x, 3.9, PRESS_ZONE.z, "+" + taken + " DAB", "#ffc36a");
+      markTut("press");
+    }
+    if (fed || taken) { syncStack(); renderUpgrades(); }
+  }
+
+  function updatePress(now, dt) {
+    pressGroup.visible = dabsUnlocked();
+    dabBarGroup.visible = dabsUnlocked();
+    if (!dabsUnlocked()) return;
+
+    if (state.pressBuds > 0 && state.pressDabs < PRESS_MAX) {
+      pressAcc += dt;
+      if (pressAcc >= PRESS_SECONDS) {
+        pressAcc -= PRESS_SECONDS;
+        state.pressBuds--;
+        state.pressDabs++;
+        addFloater(PRESS_ZONE.x, 3.0, PRESS_ZONE.z, "DAB!", "#ffc36a");
+      }
+    } else {
+      pressAcc = 0;
+    }
+    // ram pumps while there's work, rests when the hopper is empty
+    var working = state.pressBuds > 0 && state.pressDabs < PRESS_MAX;
+    var pump = working ? Math.abs(Math.sin(now * 0.006)) : 1;
+    pressRam.position.y = 2.15 + pump * 0.95;
+
+    syncPileGroup(pressHopper, state.pressBuds, budGeo, M.bud, 0.34, 0.42);
+    syncPileGroup(pressOut, state.pressDabs, dabGeo, M.dab, 0.3, 0.36);
+  }
+
+  // keeps a little heap of meshes in sync with a count, laid out in rows
+  function syncPileGroup(grp, count, geo, matl, step, lift) {
+    while (grp.children.length > count) grp.remove(grp.children[grp.children.length - 1]);
+    while (grp.children.length < count) {
+      var m = new THREE.Mesh(geo, matl);
+      m.castShadow = true;
+      grp.add(m);
+    }
+    for (var i = 0; i < grp.children.length; i++) {
+      var per = 4;
+      var row = Math.floor(i / per), col = i % per;
+      grp.children[i].position.set((col - (per - 1) / 2) * step, row * lift, 0);
+      grp.children[i].rotation.y = i * 0.7;
+    }
+  }
+
+  // ---- dab bar drop-off, mirroring the bud counter ----
+  function handleDabSellZone() {
+    if (!dabsUnlocked()) return;
+    if (d2(player.pos.x, player.pos.z, DAB_SELL_ZONE.x, DAB_SELL_ZONE.z) > DAB_SELL_ZONE.r + PLAYER_RADIUS) return;
+    var dabs = 0;
+    for (var i = 0; i < player.backpack.length; i++) if (player.backpack[i].type === "dab") dabs++;
+    if (!dabs) return;
+    player.backpack = player.backpack.filter(function (it) { return it.type !== "dab"; });
+    syncStack();
+    for (var d = 0; d < dabs; d++) dropDabOnBar();
+    markTut("dabsell");
+    renderUpgrades();
+  }
+
   // ---- one continuously-growing pallet of cash on the payout tray ----
   // Bricks tile a layer across the tray footprint, then a new layer starts
   // directly on top once the layer below fills — leave it uncollected long
@@ -2923,6 +3162,48 @@
     return true;
   }
 
+  // ---- dabs set out on the bar, same idea as the bud pile ----
+  var dabMeshes = [];
+  var DAB_PILE_MAX = 18;
+  function dropDabOnBar() {
+    var m;
+    if (dabMeshes.length >= DAB_PILE_MAX) {
+      m = dabMeshes.shift();
+      dabPile.remove(m);
+    }
+    m = new THREE.Mesh(dabGeo, M.dab);
+    m.castShadow = true;
+    dabPile.add(m);
+    var i = dabMeshes.length;
+    var per = 6;
+    var row = Math.floor(i / per), col = i % per;
+    m.userData.restY = 0.14 + Math.floor(row / 3) * 0.3;
+    m.userData.bornAt = performance.now();
+    m.userData.value = dabValue();   // locked in at drop-off time
+    m.position.set(-1.6 + col * 0.62, m.userData.restY + 2.2, -0.25 + (row % 3) * 0.28);
+    m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    dabMeshes.push(m);
+  }
+
+  function updateDabPile(now) {
+    for (var i = 0; i < dabMeshes.length; i++) {
+      var m = dabMeshes[i];
+      var t = (now - (m.userData.bornAt || now)) / 260;
+      m.position.y = t < 1
+        ? m.userData.restY + 2.2 * (1 - (1 - Math.pow(1 - t, 3)))
+        : m.userData.restY + Math.sin(now * 0.004 + i) * 0.03;
+      m.rotation.y += 0.004;
+    }
+  }
+
+  function customerBuyDab() {
+    if (!dabMeshes.length) return false;
+    var m = dabMeshes.shift();
+    dabPile.remove(m);
+    payOutCash((m.userData.value || dabValue()) * (promoActive() ? PROMO_MULT : 1));
+    return true;
+  }
+
   function updatePlotStates() {
     for (var i8 = 0; i8 < state.plots.length; i8++) {
       var p = state.plots[i8];
@@ -3043,6 +3324,9 @@
     if (partitionGroup) {
       partitionGroup.visible = !(player.pos.z < PARTITION_Z && camZ > PARTITION_Z);
     }
+    if (dabWallGroup) {
+      dabWallGroup.visible = !(player.pos.z < DAB_WALL_Z && camZ > DAB_WALL_Z);
+    }
   }
 
   function fitCamera() {
@@ -3070,6 +3354,8 @@
   // all of them the bar goes away for good.
   var TUT_STEPS = [
     { key: "collect", text: "💵 Grab your cash by the till" },
+    { key: "dabsell", text: "🍯 Set your dabs out on the dab bar" },
+    { key: "press",   text: "⚙️ Feed bud into the rosin press" },
     { key: "sell",    text: "🏪 Take your buds out to the counter" },
     { key: "harvest", text: "🌾 A bed is ready — harvest it" },
     { key: "plant",   text: "🌱 Stand on an empty bed to plant" },
@@ -3574,10 +3860,14 @@
     handleSeedZone(Date.now());
     handlePlots();
     handleSellZone();
+    handlePressZone();
+    handleDabSellZone();
     updatePlotVisuals(now);
     updateRowTiles(now);
     updateStack(now);
     updateCounterPile(now, dt);
+    updateDabPile(now);
+    updatePress(now, dt);
     updateCashDrops(now, dt);
     payIntoZone(dt);
     updateCoins(dt);
