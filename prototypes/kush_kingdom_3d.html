@@ -425,7 +425,7 @@
   <div id="hr-overlay">
     <div id="hr-card">
       <h2>HR Office</h2>
-      <p class="hr-sub">Applies to every botanist, runner, extractor and baker.</p>
+      <p class="hr-sub">Applies to every hired hand, front of house and back.</p>
       <div class="hr-row">
         <div class="hr-info">
           <b>Better Boots</b>
@@ -736,11 +736,14 @@
   // One clean row of stations across the mouth of the room, well clear of the
   // pallet footprints — an upgrade pad overlapping a pallet meant you couldn't
   // stack product without also being sat on a purchase square.
-  var DRIVER_ZONE = { x: -11.0, z: -71.5 };        // dispatch office: hire drivers
-  var TRUCK_ZONE  = { x:  0.0, z: -71.5 };         // upgrade to bigger trucks
-  var BAY_ZONE    = { x: 11.0, z: -71.5 };         // add another loading bay
+  var DRIVER_ZONE = { x: -11.5, z: -71.5 };        // dispatch office: hire drivers
+  var PICKER_ZONE = { x:  -5.0, z: -71.5 };        // hire pickers to stock pallets
+  var TRUCK_ZONE  = { x:   5.0, z: -71.5 };        // upgrade to bigger trucks
+  var BAY_ZONE    = { x:  11.5, z: -71.5 };        // add another loading bay
   var MAX_DRIVERS = 3;
+  var MAX_PICKERS = 3;
   function costDriver() { return Math.round(9000 * Math.pow(2.6, state.driverLv || 0)); }
+  function costPicker() { return Math.round(7000 * Math.pow(2.6, state.pickerLv || 0)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -814,6 +817,7 @@
       bayCount: 1,            // garage doors in service
       truckLv: 0,             // how much a truck hauls in one run
       driverLv: 0,            // delivery drivers hired
+      pickerLv: 0,            // pickers hired to stock the pallets
       // sized up front — a fresh game skips the save migration that would
       // otherwise be the only thing filling this in
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
@@ -888,6 +892,7 @@
       merged.bayCount = Math.max(1, Math.min(MAX_BAYS, merged.bayCount || 1));
       merged.truckLv = Math.max(0, Math.min(MAX_TRUCK_LV, merged.truckLv || 0));
       merged.driverLv = Math.max(0, Math.min(MAX_DRIVERS, merged.driverLv || 0));
+      merged.pickerLv = Math.max(0, Math.min(MAX_PICKERS, merged.pickerLv || 0));
       merged.bakerLv = Math.max(0, Math.min(MAX_BAKERS, merged.bakerLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
@@ -983,7 +988,7 @@
     if (canLd) {
       return { which: "load", cost: costStaffLoad(),
         name: "Bigger Crates",
-        desc: "Runners, extractors and bakers haul " + (3 + staffCarryBonus()) + " \u2192 " +
+        desc: "Every hauler carries " + (3 + staffCarryBonus()) + " \u2192 " +
               (4 + staffCarryBonus()) + " at a time" };
     }
     return null;
@@ -2241,6 +2246,235 @@
       });
     }
   })();
+
+  // ---- pickers: production floor to pallet ----
+  // The counter staff (runners, extractors, bakers) all feed the till out
+  // front. Pickers are the wholesale half of that same job: they walk the
+  // beds, presses and ovens and stack what they find on the dock pallets.
+  var pickers = [];
+  // A picker's round trip is the length of the building — grow beds to dock
+  // is four times the walk a runner makes to the counter — so they move a
+  // little quicker and carry noticeably more to make the haul worth it.
+  var PICK_SPEED = 6.0, PICK_ACT_TIME = 0.38, PICK_CARRY = 6;
+  (function buildPickers() {
+    for (var n = 0; n < MAX_PICKERS; n++) {
+      var g = new THREE.Group();
+      // grey coveralls with a brown apron: warehouse floor, not shop floor
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), M.steelDk);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      var belt = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.2, 0.62), M.pallet);
+      belt.position.y = 0.72; g.add(belt);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var cap = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.36, 0.22, 10), M.crateBud);
+      cap.position.y = 2.26; cap.castShadow = true; g.add(cap);
+      var peak = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.07, 0.32), M.crateBud);
+      peak.position.set(0, 2.17, 0.32); g.add(peak);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.truckTrim); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.truckTrim); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // the stack they're hauling, tinted to whatever they picked up
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.7, 0.5);
+      var totes = [];
+      for (var c = 0; c < PICK_CARRY + MAX_STAFF_LOAD_LV; c++) {
+        var it = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.44), M.crateBud);
+        it.position.set(0, c * 0.36, 0);
+        it.visible = false;
+        tote.add(it);
+        totes.push(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      pickers.push({
+        obj: g, l1: l1, l2: l2, tote: tote, totes: totes,
+        pos: { x: PICKER_ZONE.x + 1.6 + n * 0.9, z: PICKER_ZONE.z + 1.5 },
+        phase: "toSource", timer: 0, srcType: "", srcIdx: -1,
+        carrying: 0, carryKind: "bud", walkPhase: n * 1.1, slot: n,
+      });
+    }
+  })();
+
+  function pickStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(PICK_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function pickClaimed(self, type, idx) {
+    for (var j = 0; j < pickers.length; j++) {
+      var o = pickers[j];
+      if (o !== self && o.obj.visible && o.srcType === type && o.srcIdx === idx) return true;
+    }
+    return false;
+  }
+
+  function palletFor(kind) {
+    for (var i = 0; i < PALLET_DEFS.length; i++) {
+      if (PALLET_DEFS[i].kind === kind) return PALLET_DEFS[i];
+    }
+    return null;
+  }
+
+  // Look for something to pick up. A picker already holding stock only takes
+  // more of the same kind, so a part load never gets stranded between pallets.
+  function pickFindJob(self) {
+    var want = self.carrying > 0 ? self.carryKind : null;
+
+    function canTake(kind) {
+      if (want && kind !== want) return false;
+      return palletCount(kind) < PALLET_CAP;
+    }
+
+    // finished edibles first — they're worth the most, so clear them fastest
+    if (canTake("edible")) {
+      for (var o = 0; o < ovenOwned(); o++) {
+        if (state.ovens[o].cooked > 0 && !pickClaimed(self, "oven", o)) {
+          return { type: "oven", idx: o, kind: "edible" };
+        }
+      }
+    }
+    if (canTake("dab")) {
+      for (var p = 0; p < pressOwned(); p++) {
+        if (state.presses[p].dabs > 0 && !pickClaimed(self, "press", p)) {
+          return { type: "press", idx: p, kind: "dab" };
+        }
+      }
+    }
+    if (canTake("bud")) {
+      for (var d = 0; d < state.plotsUnlocked; d++) {
+        if (state.plots[d].state === "ready" && !pickClaimed(self, "bed", d)) {
+          return { type: "bed", idx: d, kind: "bud" };
+        }
+      }
+    }
+    return null;
+  }
+
+  function kindForSource(type) {
+    return type === "oven" ? "edible" : type === "press" ? "dab" : "bud";
+  }
+
+  // is the thing we were walking to still holding anything?
+  function pickSourceHas(type, idx) {
+    if (idx < 0 || !type) return false;
+    if (type === "oven")  return idx < ovenOwned()  && state.ovens[idx].cooked > 0;
+    if (type === "press") return idx < pressOwned() && state.presses[idx].dabs > 0;
+    if (type === "bed")   return idx < state.plotsUnlocked && state.plots[idx].state === "ready";
+    return false;
+  }
+
+  function pickSourcePos(type, idx) {
+    if (type === "oven") return ovenDefs[idx];
+    if (type === "press") return pressDefs[idx];
+    return plotDefs[idx];
+  }
+
+  // returns true if a unit was actually taken
+  function pickTakeFrom(type, idx) {
+    if (type === "oven") {
+      if (idx < ovenOwned() && state.ovens[idx].cooked > 0) { state.ovens[idx].cooked--; return true; }
+    } else if (type === "press") {
+      if (idx < pressOwned() && state.presses[idx].dabs > 0) { state.presses[idx].dabs--; return true; }
+    } else if (type === "bed") {
+      if (idx < state.plotsUnlocked && state.plots[idx].state === "ready") {
+        state.plots[idx] = { state: "empty" };
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function updatePickers(now, dt) {
+    for (var i = 0; i < pickers.length; i++) {
+      var b = pickers[i];
+      var hired = dockUnlocked() && i < (state.pickerLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.srcIdx = -1; b.srcType = ""; b.carrying = 0; continue; }
+
+      var walking = false;
+      var cap = PICK_CARRY + staffCarryBonus();
+
+      if (b.phase === "toSource") {
+        if (b.carrying >= cap) { b.phase = "toPallet"; b.srcIdx = -1; b.srcType = ""; continue; }
+        // Re-check the target every frame rather than trusting the claim:
+        // runners, extractors and bakers are all reaching for the same beds
+        // and machines, so whatever we were walking to may already be gone.
+        if (!pickSourceHas(b.srcType, b.srcIdx) ||
+            (b.carrying > 0 && kindForSource(b.srcType) !== b.carryKind)) {
+          var job = pickFindJob(b);
+          if (!job) {
+            if (b.carrying > 0) { b.phase = "toPallet"; continue; }
+            b.srcIdx = -1; b.srcType = "";
+            b.phase = "idle"; b.timer = 0.7; continue;
+          }
+          b.srcType = job.type; b.srcIdx = job.idx;
+          if (b.carrying === 0) b.carryKind = job.kind;
+        }
+        var sp = pickSourcePos(b.srcType, b.srcIdx);
+        walking = !pickStepTo(b, sp.x, sp.z, dt);
+        if (!walking) { b.phase = "grab"; b.timer = PICK_ACT_TIME; }
+
+      } else if (b.phase === "grab") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (pickTakeFrom(b.srcType, b.srcIdx)) b.carrying++;
+          b.srcIdx = -1; b.srcType = "";
+          b.phase = "toSource";
+        }
+
+      } else if (b.phase === "toPallet") {
+        if (b.carrying <= 0) { b.phase = "toSource"; continue; }
+        var pd = palletFor(b.carryKind);
+        if (!pd || palletCount(b.carryKind) >= PALLET_CAP) { b.phase = "idle"; b.timer = 1.2; continue; }
+        walking = !pickStepTo(b, pd.x, pd.z + 2.4, dt);
+        if (!walking) { b.phase = "stack"; b.timer = PICK_ACT_TIME; }
+
+      } else if (b.phase === "stack") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var room = PALLET_CAP - palletCount(b.carryKind);
+          var put = Math.min(room, b.carrying);
+          if (put > 0) {
+            palletAdd(b.carryKind, put);
+            b.carrying -= put;
+            var pdf = palletFor(b.carryKind);
+            addFloater(pdf.x, 4.6, pdf.z, "+" + put, "#ffd75e");
+          }
+          b.phase = b.carrying > 0 ? "idle" : "toSource";
+          b.timer = 1.0;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.7;
+          b.phase = b.carrying > 0 ? "toPallet" : "toSource";
+        }
+      }
+
+      var mat = b.carryKind === "dab" ? M.crateDab
+              : b.carryKind === "edible" ? M.crateEdible : M.crateBud;
+      for (var c2 = 0; c2 < b.totes.length; c2++) {
+        b.totes[c2].visible = c2 < b.carrying;
+        b.totes[c2].material = mat;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
 
   // ---- delivery drivers: pallet to truck, all day long ----
   var drivers = [];
@@ -5622,6 +5856,28 @@
       },
     },
     {
+      id: "picker", label: "PICKERS", icon: "\ud83d\udce5", x: PICKER_ZONE.x, z: PICKER_ZONE.z,
+      color: 0x8fe0a0, kiosk: false,
+      hidden: function () { return !dockUnlocked(); },
+      name: function () {
+        return (state.pickerLv || 0) === 0 ? "Hire a Picker" : "Hire Another Picker";
+      },
+      desc: function () {
+        var n = state.pickerLv || 0;
+        return n >= MAX_PICKERS
+          ? "The whole picking crew is on shift"
+          : (n === 0
+              ? "They work the beds, presses and ovens and stack it all on the pallets"
+              : n + " on shift \u00b7 hire one more to keep the pallets full");
+      },
+      cost: costPicker,
+      maxed: function () { return (state.pickerLv || 0) >= MAX_PICKERS; },
+      buy: function () {
+        state.pickerLv = (state.pickerLv || 0) + 1;
+        toast("\ud83d\udce5 Picker hired \u2014 they'll stock the pallets for you!");
+      },
+    },
+    {
       id: "bay", label: "BAY DOOR", icon: "\ud83c\udfed", x: BAY_ZONE.x, z: BAY_ZONE.z,
       color: 0xb8c4d0, kiosk: false,
       hidden: function () { return !dockUnlocked(); },
@@ -6086,6 +6342,7 @@
     updateBakers(now, dt);
     updateTrucks(dt);
     updatePalletVisuals();
+    updatePickers(now, dt);
     updateDrivers(now, dt);
     updateFloaters(dt);
 
