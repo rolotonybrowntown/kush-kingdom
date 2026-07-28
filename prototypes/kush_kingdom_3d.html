@@ -567,7 +567,7 @@
     "",
     "Builds the extraction lab out back",
     "Opens the kitchen — bake dabs into edibles",
-    "Adds another room behind the kitchen",
+    "Opens the loading dock — sell wholesale by the truckload",
   ];
 
   // ---- back room fittings ----
@@ -685,6 +685,63 @@
   // real money — the old $4K opener was pocket change.
   function ovenCost(n) { return Math.round(20000 * Math.pow(1.75, n)); }
 
+  // ---- loading dock: wholesale, unlocked at level 4 ----
+  // The retail counter sells to walk-ins one unit at a time. The dock sells
+  // by the pallet: you stack product up, drivers load it onto trucks backed
+  // into the bays, and each truck pays out in a lump when it pulls away.
+  function dockUnlocked() { return (state.roomTier || 0) >= 3; }
+  var DOCK_ROOM = 3;                                // room index of the dock
+
+  // One pallet per product, laid out across the room facing the doors. Each
+  // stacks visibly, the same trick the cash pallet by the till uses.
+  // Set back from the doors so the upgrade pads have a clear row of their own
+  // as you walk in, and so drivers aren't cutting through the stacks.
+  var PALLET_DEFS = [
+    { kind: "bud",    label: "BUD",     color: 0x6fd68a, x: -8.5, z: -75.5 },
+    { kind: "dab",    label: "DABS",    color: 0xffc36a, x:  0.0, z: -75.5 },
+    { kind: "edible", label: "EDIBLES", color: 0xd7996a, x:  8.5, z: -75.5 },
+  ];
+  var PALLET_HALF = 2.0;          // how close you stand to load one
+  var PALLET_CAP = 36;            // units a pallet holds before it's full
+  // Crates tile a layer across the pallet, then stack upward. Chunky and only
+  // six to a layer, so the pile visibly climbs instead of spreading out flat.
+  var CRATE_COLS = 3, CRATE_ROWS = 2;
+  var CRATE_W = 1.05, CRATE_H = 0.8, CRATE_D = 0.95;
+
+  // Up to four bays. Bay 1 comes with the room; the rest are bought.
+  var MAX_BAYS = 4;
+  var BAY_X = [-9.0, -3.0, 3.0, 9.0];
+  var BAY_HALF_W = 2.6;
+  function bayCount() { return Math.max(1, Math.min(MAX_BAYS, state.bayCount || 1)); }
+  function bayCost(n) { return Math.round(60000 * Math.pow(2.4, n - 1)); }
+
+  // Bigger trucks haul more per run, which is the whole point of wholesale:
+  // one trip moves what the counter would take a hundred customers to shift.
+  var BASE_TRUCK_LOAD = 10, MAX_TRUCK_LV = 5;
+  function truckCap() { return BASE_TRUCK_LOAD + 8 * (state.truckLv || 0); }
+  function truckCost(lv) { return Math.round(24000 * Math.pow(2.2, lv)); }
+  var TRUCK_ARRIVE_TIME = 2.6;    // seconds reversing onto the bay
+  var TRUCK_DEPART_TIME = 2.6;    // seconds pulling away once loaded
+  var TRUCK_GAP = 3.0;            // seconds before the next one backs in
+  var TRUCK_PATIENCE = 26;        // leaves with a part load rather than idling
+
+  // Wholesale pays a bulk premium over the counter price — you are moving
+  // volume and skipping the queue.
+  var WHOLESALE_MULT = 1.3;
+  function wholesaleValue(kind) {
+    var base = kind === "edible" ? edibleValue() : kind === "dab" ? dabValue() : sellValue();
+    return base * WHOLESALE_MULT;
+  }
+
+  // One clean row of stations across the mouth of the room, well clear of the
+  // pallet footprints — an upgrade pad overlapping a pallet meant you couldn't
+  // stack product without also being sat on a purchase square.
+  var DRIVER_ZONE = { x: -11.0, z: -71.5 };        // dispatch office: hire drivers
+  var TRUCK_ZONE  = { x:  0.0, z: -71.5 };         // upgrade to bigger trucks
+  var BAY_ZONE    = { x: 11.0, z: -71.5 };         // add another loading bay
+  var MAX_DRIVERS = 3;
+  function costDriver() { return Math.round(9000 * Math.pow(2.6, state.driverLv || 0)); }
+
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
   // are never payment zones — standing on one only ever plants or harvests.
@@ -752,6 +809,11 @@
       dabLv: 0,               // purity: what a dab fetches at the counter
       ovenCount: 0,           // ovens bought in the kitchen
       bakerLv: 0,             // bakers hired to work the oven line
+      // ---- loading dock ----
+      pallets: { bud: 0, dab: 0, edible: 0 },   // stock stacked ready to ship
+      bayCount: 1,            // garage doors in service
+      truckLv: 0,             // how much a truck hauls in one run
+      driverLv: 0,            // delivery drivers hired
       // sized up front — a fresh game skips the save migration that would
       // otherwise be the only thing filling this in
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
@@ -816,6 +878,17 @@
       if (!Array.isArray(merged.ovens) || merged.ovens.length !== ovenDefs.length) {
         merged.ovens = ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; });
       }
+      // ---- loading dock ----
+      if (!merged.pallets || typeof merged.pallets !== "object") merged.pallets = {};
+      ["bud", "dab", "edible"].forEach(function (k) {
+        var v = merged.pallets[k];
+        merged.pallets[k] = (typeof v === "number" && isFinite(v))
+          ? Math.max(0, Math.min(PALLET_CAP, v)) : 0;
+      });
+      merged.bayCount = Math.max(1, Math.min(MAX_BAYS, merged.bayCount || 1));
+      merged.truckLv = Math.max(0, Math.min(MAX_TRUCK_LV, merged.truckLv || 0));
+      merged.driverLv = Math.max(0, Math.min(MAX_DRIVERS, merged.driverLv || 0));
+      merged.bakerLv = Math.max(0, Math.min(MAX_BAKERS, merged.bakerLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
@@ -1226,7 +1299,21 @@
     growFloor:   mat(0x7a4f2e, { map: walnutTex, roughness: 0.52 }),   // warm
     labFloor:    mat(0x40474d, { map: walnutTex, roughness: 0.44 }),   // cool grey
     kitchenFloor: mat(0x8d7259, { map: walnutTex, roughness: 0.42 }),  // pale
-    vaultFloor:  mat(0x35251f, { map: walnutTex, roughness: 0.52 }),   // near-black
+    dockFloor:   mat(0x8d9299, { map: plasterTex, roughness: 0.85 }),  // sealed concrete
+    dockLine:    mat(0xf2c53d, { roughness: 0.7 }),                    // painted bay lines
+    dockEdge:    mat(0x2c3138, { roughness: 0.75 }),                   // rubber bumpers
+    doorSlat:    mat(0xb9c2cb, { roughness: 0.45, metalness: 0.35 }),  // roll-up shutter
+    doorFrameM:  mat(0x5b646d, { roughness: 0.5, metalness: 0.4 }),
+    pallet:      mat(0xa97b45, { map: woodTex, roughness: 0.9 }),
+    crateBud:    mat(0x4f9d5f, { roughness: 0.75 }),
+    crateDab:    mat(0xd39a3c, { roughness: 0.6 }),
+    crateEdible: mat(0x9c6a44, { roughness: 0.78 }),
+    truckCab:    mat(0xd8563a, { roughness: 0.45, metalness: 0.25 }),
+    truckBox:    mat(0xe9edf1, { roughness: 0.55 }),
+    truckTrim:   mat(0x39414a, { roughness: 0.6, metalness: 0.3 }),
+    tyre:        mat(0x1d2126, { roughness: 0.9 }),
+    hiVis:       mat(0xe8f24a, { map: fabricTex, roughness: 0.85 }),   // driver vest
+    asphalt:     mat(0x4a4f55, { map: plasterTex, roughness: 0.95 }),
     threshold:   mat(0xb99248, { roughness: 0.3, metalness: 0.7 }),
     pavement:    mat(0x9a9a94, { map: plasterTex, roughness: 0.95 }),
     kerb:        mat(0x7d7d78, { map: plasterTex, roughness: 0.95 }),
@@ -1311,9 +1398,11 @@
 
   // Back-of-house rooms are told apart by their floor rather than by walls.
   // Index is the room number counting the grow room as 0.
-  var ROOM_FLOOR_MATS = [M.growFloor, M.labFloor, M.kitchenFloor, M.vaultFloor];
-  var ROOM_NAMES = ["GROW ROOM", "EXTRACTION LAB", "KITCHEN", "BACK ROOM"];
-  var ROOM_SIGN_COLORS = ["#8ef0a4", "#ffc36a", "#9fdcff", "#e6c8ff"];
+  // The dock is the exception: it is a warehouse, so it gets sealed concrete
+  // rather than the walnut the finished rooms use.
+  var ROOM_FLOOR_MATS = [M.growFloor, M.labFloor, M.kitchenFloor, M.dockFloor];
+  var ROOM_NAMES = ["GROW ROOM", "EXTRACTION LAB", "KITCHEN", "LOADING DOCK"];
+  var ROOM_SIGN_COLORS = ["#8ef0a4", "#ffc36a", "#9fdcff", "#ffd75e"];
 
   // ===================================================================
   //  ROOM SHELL — rebuilt whenever the player buys "Expand Store"
@@ -1401,7 +1490,7 @@
       // room name floating overhead in place of the old doorway sign
       var rmSign = textSprite(ROOM_NAMES[rm], ROOM_SIGN_COLORS[rm]);
       rmSign.scale.set(5.2, 1.1, 1);
-      rmSign.position.set(0, 5.6, rNear - 1.2);
+      rmSign.position.set(0, 7.2, rNear - 0.5);
       roomGroup.add(rmSign);
     }
 
@@ -1428,7 +1517,31 @@
       wall.receiveShadow = true;
       roomGroup.add(wall);
     }
-    wallSlab(w + wallThick * 2, wallThick, 0, minZ, M.wallBack);
+    // Rear wall. Once the dock is built it is punched through with four
+    // door openings, so it goes up as the strips between and above them.
+    if (tier >= DOCK_ROOM) {
+      var lintelY = 7.2;                       // headroom under the door frames
+      var edges = [-HALF_X - wallThick];
+      for (var bx = 0; bx < MAX_BAYS; bx++) {
+        edges.push(BAY_X[bx] - BAY_HALF_W, BAY_X[bx] + BAY_HALF_W);
+      }
+      edges.push(HALF_X + wallThick);
+      for (var pi = 0; pi < edges.length; pi += 2) {
+        var segW3 = edges[pi + 1] - edges[pi];
+        if (segW3 <= 0.05) continue;
+        var pier = new THREE.Mesh(new THREE.BoxGeometry(segW3, WALL_H, wallThick), M.wallBack);
+        pier.position.set((edges[pi] + edges[pi + 1]) / 2, WALL_H / 2, minZ);
+        pier.receiveShadow = true;
+        roomGroup.add(pier);
+      }
+      var header3 = new THREE.Mesh(
+        new THREE.BoxGeometry(w + wallThick * 2, WALL_H - lintelY, wallThick), M.wallBack);
+      header3.position.set(0, lintelY + (WALL_H - lintelY) / 2, minZ);
+      header3.receiveShadow = true;
+      roomGroup.add(header3);
+    } else {
+      wallSlab(w + wallThick * 2, wallThick, 0, minZ, M.wallBack);
+    }
     // the front wall and everything mounted on it live in their own group so
     // they can be hidden when the camera swings outside the storefront
     frontWallGroup = new THREE.Group();
@@ -1860,6 +1973,316 @@
     fridge(11.3, KZ_FAR + 6.2);
     prepBench(11.4, KZ_FAR + 11.5, 5.0);
     panShelf(12.2, KZ_FAR + 11.5, 5.0, 1);
+  })();
+
+  // ===================================================================
+  //  LOADING DOCK — the level 4 room
+  // ===================================================================
+  // Everything here is built once at fixed coordinates and simply hidden
+  // until the room is bought, the same way the kitchen fit-out works.
+  var dockFit = new THREE.Group();
+  dockFit.visible = false;
+  scene.add(dockFit);
+
+  var DOCK_LINTEL = 7.2;              // clear height under the door frames
+  var bayDoors = [];                  // { group, shutter, lamp } per bay
+  var DOCK_WALL_Z = backDividerZ(4);  // -86
+
+  (function buildDock() {
+    var g = dockFit;
+    var farZ = DOCK_WALL_Z, nearZ = backDividerZ(3);
+
+    // ---- the yard outside: asphalt, a painted lane, a boundary fence ----
+    var yard = new THREE.Mesh(new THREE.BoxGeometry(HALF_X * 2 + 20, 0.3, 30), M.asphalt);
+    yard.position.set(0, 0.08, farZ - 15);
+    yard.receiveShadow = true;
+    g.add(yard);
+    for (var ln = 0; ln < MAX_BAYS; ln++) {
+      // guide lines running back from each door so the bays read as marked out
+      [-1, 1].forEach(function (sg) {
+        var line = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 17), M.dockLine);
+        line.rotation.x = -Math.PI / 2;
+        line.position.set(BAY_X[ln] + sg * (BAY_HALF_W + 0.3), 0.24, farZ - 9.5);
+        g.add(line);
+      });
+    }
+    for (var fp = -3; fp <= 3; fp++) {
+      var post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 3.0, 0.3), M.dockEdge);
+      post.position.set(fp * 5.5, 1.6, farZ - 29);
+      post.castShadow = true;
+      g.add(post);
+    }
+    var rail = new THREE.Mesh(new THREE.BoxGeometry(HALF_X * 2 + 20, 0.22, 0.22), M.dockEdge);
+    rail.position.set(0, 2.7, farZ - 29);
+    g.add(rail);
+
+    // ---- one roll-up door per bay, plus its frame, bumpers and lamp ----
+    for (var b = 0; b < MAX_BAYS; b++) {
+      var bg = new THREE.Group();
+      bg.position.set(BAY_X[b], 0, farZ);
+      g.add(bg);
+
+      var jambW = 0.35;
+      [-1, 1].forEach(function (sg) {
+        var jamb = new THREE.Mesh(
+          new THREE.BoxGeometry(jambW, DOCK_LINTEL + 0.4, 0.7), M.doorFrameM);
+        jamb.position.set(sg * (BAY_HALF_W + jambW / 2), (DOCK_LINTEL + 0.4) / 2, 0);
+        jamb.castShadow = true;
+        bg.add(jamb);
+      });
+      var lintel = new THREE.Mesh(
+        new THREE.BoxGeometry(BAY_HALF_W * 2 + jambW * 2, 0.5, 0.7), M.doorFrameM);
+      lintel.position.set(0, DOCK_LINTEL + 0.25, 0);
+      lintel.castShadow = true;
+      bg.add(lintel);
+
+      // The shutter rolls up rather than sliding away: scaling it toward the
+      // lintel reads as the slats coiling into the drum at the top.
+      var shutter = new THREE.Group();
+      var slatCount = 9;
+      for (var s = 0; s < slatCount; s++) {
+        var slat = new THREE.Mesh(
+          new THREE.BoxGeometry(BAY_HALF_W * 2 - 0.1, DOCK_LINTEL / slatCount - 0.06, 0.16),
+          M.doorSlat);
+        slat.position.set(0, -DOCK_LINTEL / 2 + (s + 0.5) * (DOCK_LINTEL / slatCount), 0.02);
+        slat.castShadow = true;
+        shutter.add(slat);
+      }
+      shutter.position.set(0, DOCK_LINTEL / 2, 0);
+      bg.add(shutter);
+
+      // rubber bumpers either side of the opening, at trailer-bed height
+      [-1, 1].forEach(function (sg) {
+        var bump = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.55), M.dockEdge);
+        bump.position.set(sg * (BAY_HALF_W - 0.15), 1.35, -0.5);
+        bump.castShadow = true;
+        bg.add(bump);
+      });
+
+      // bay number stencilled on the wall above the door
+      var num = textSprite(String(b + 1), "#ffd75e");
+      num.scale.set(0.9, 0.9, 1);
+      num.position.set(0, DOCK_LINTEL + 1.1, 0.3);
+      bg.add(num);
+
+      // a dock lamp that goes green while a truck is on the bay
+      var lamp = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), M.neonGreen);
+      lamp.position.set(BAY_HALF_W + 0.55, DOCK_LINTEL - 0.6, 0.35);
+      bg.add(lamp);
+
+      bayDoors.push({ group: bg, shutter: shutter, lamp: lamp });
+    }
+
+    // ---- inside: hazard striping along the door line and bay floor boxes ----
+    for (var hs = -13; hs < 13; hs++) {
+      var stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.1), hs % 2 ? M.dockLine : M.dockEdge);
+      stripe.rotation.x = -Math.PI / 2;
+      stripe.rotation.z = 0.5;
+      stripe.position.set(hs + 0.5, FLOOR_TOP_BACK + 0.01, farZ + 1.6);
+      g.add(stripe);
+    }
+
+    // ---- pallet racking down both side walls, so it reads as a warehouse ----
+    function rack(x, z, lenZ, faceSign) {
+      var r = new THREE.Group();
+      var uprights = 4;
+      for (var u = 0; u < uprights; u++) {
+        var col = new THREE.Mesh(new THREE.BoxGeometry(1.3, 8.0, 0.28), M.doorFrameM);
+        col.position.set(0, 4.0, -lenZ / 2 + u * (lenZ / (uprights - 1)));
+        col.castShadow = true;
+        r.add(col);
+      }
+      [2.4, 5.0].forEach(function (shelfY) {
+        var beam = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.22, lenZ), M.dockLine);
+        beam.position.set(0, shelfY, 0);
+        beam.castShadow = true;
+        r.add(beam);
+        // a few pallets of stock sitting on the shelf
+        for (var pz = 0; pz < 3; pz++) {
+          var box = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.1, 1.5), M.crateEdible);
+          box.position.set(0, shelfY + 0.66, -lenZ / 2 + 1.6 + pz * (lenZ - 3.2) / 2);
+          box.castShadow = true;
+          r.add(box);
+        }
+      });
+      r.position.set(x, 0, z);
+      r.rotation.y = faceSign > 0 ? Math.PI : 0;
+      g.add(r);
+    }
+    rack(-12.2, farZ + 6.5, 9.0, -1);
+    rack(12.2, farZ + 6.5, 9.0, 1);
+  })();
+
+  // ---- the pallets themselves: one per product, stacking visibly ----
+  var palletObjects = [];
+  (function buildPallets() {
+    var crateGeo = new THREE.BoxGeometry(CRATE_W, CRATE_H, CRATE_D);
+    for (var p = 0; p < PALLET_DEFS.length; p++) {
+      var def = PALLET_DEFS[p];
+      var grp = new THREE.Group();
+      grp.position.set(def.x, 0, def.z);
+      dockFit.add(grp);
+
+      // the pallet: deck boards over two bearers, like the real thing
+      var deckY = FLOOR_TOP_BACK + 0.22;
+      for (var db = 0; db < 5; db++) {
+        var board = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.12, 0.44), M.pallet);
+        board.position.set(0, deckY, -1.4 + db * 0.7);
+        board.castShadow = true; board.receiveShadow = true;
+        grp.add(board);
+      }
+      [-1, 1].forEach(function (sg) {
+        var bearer = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.22, 0.3), M.pallet);
+        bearer.position.set(0, FLOOR_TOP_BACK + 0.11, sg * 1.3);
+        grp.add(bearer);
+      });
+
+      // floor decal + sign so it is obvious which product goes where
+      var tint = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.4, 4.0),
+        new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.3, depthWrite: false })
+      );
+      tint.rotation.x = -Math.PI / 2;
+      tint.position.y = FLOOR_TOP_BACK + 0.012;
+      grp.add(tint);
+      var dash = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.6, 4.2),
+        new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, depthWrite: false })
+      );
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.y = FLOOR_TOP_BACK + 0.02;
+      grp.add(dash);
+
+      // clear of a full six-layer stack, which tops out around y 5.3
+      var sign = textSprite(def.label, "#ffffff");
+      sign.scale.set(3.0, 0.78, 1);
+      sign.position.set(0, 7.0, 0);
+      grp.add(sign);
+
+      var bar = makeStatusBar(2.8, def.color);
+      bar.position.set(0, 6.3, 0);
+      grp.add(bar);
+
+      // crate pool, revealed one at a time as stock is stacked on
+      var crateMat = def.kind === "bud" ? M.crateBud
+                   : def.kind === "dab" ? M.crateDab : M.crateEdible;
+      var crates = [];
+      for (var c = 0; c < PALLET_CAP; c++) {
+        var m = new THREE.Mesh(crateGeo, crateMat);
+        var layer = Math.floor(c / (CRATE_COLS * CRATE_ROWS));
+        var within = c % (CRATE_COLS * CRATE_ROWS);
+        var col = within % CRATE_COLS, row = Math.floor(within / CRATE_COLS);
+        m.position.set(
+          (col - (CRATE_COLS - 1) / 2) * (CRATE_W + 0.08),
+          deckY + 0.06 + CRATE_H / 2 + layer * CRATE_H,
+          (row - (CRATE_ROWS - 1) / 2) * (CRATE_D + 0.1)
+        );
+        m.castShadow = true; m.receiveShadow = true;
+        m.visible = false;
+        grp.add(m);
+        crates.push(m);
+      }
+      palletObjects.push({ def: def, group: grp, crates: crates, bar: bar, shown: -1 });
+    }
+  })();
+
+  // ---- trucks. One per bay, cycling arrive → load → depart. ----
+  var trucks = [];
+  var TRUCK_PARK_Z = DOCK_WALL_Z - 5.2;     // where the rear doors meet the bay
+  var TRUCK_START_Z = DOCK_WALL_Z - 26;     // out in the yard, waiting its turn
+  (function buildTrucks() {
+    for (var t = 0; t < MAX_BAYS; t++) {
+      var g = new THREE.Group();
+      // chassis + box body. The rear of the box is at local z = +4.6, so the
+      // truck reverses until that face is up against the dock bumpers.
+      var chassis = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.5, 10.2), M.truckTrim);
+      chassis.position.set(0, 0.95, 0.2); chassis.castShadow = true;
+      g.add(chassis);
+      var box = new THREE.Mesh(new THREE.BoxGeometry(3.5, 3.8, 7.2), M.truckBox);
+      box.position.set(0, 3.1, 1.0); box.castShadow = true; box.receiveShadow = true;
+      g.add(box);
+      var boxTrim = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.3, 7.3), M.truckTrim);
+      boxTrim.position.set(0, 1.25, 1.0);
+      g.add(boxTrim);
+      // roller door on the back of the box, facing the building
+      var rear = new THREE.Mesh(new THREE.BoxGeometry(3.1, 3.2, 0.14), M.doorSlat);
+      rear.position.set(0, 3.0, 4.62);
+      g.add(rear);
+      var cab = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.7, 2.8), M.truckCab);
+      cab.position.set(0, 2.5, -4.0); cab.castShadow = true;
+      g.add(cab);
+      var windshield = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.1, 0.12), M.windowGlass);
+      windshield.position.set(0, 3.1, -5.36);
+      g.add(windshield);
+      var bumper = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.45, 0.4), M.truckTrim);
+      bumper.position.set(0, 1.0, -5.5);
+      g.add(bumper);
+      var wheelGeo = new THREE.CylinderGeometry(0.85, 0.85, 0.5, 12);
+      [[-1.6, -3.9], [1.6, -3.9], [-1.6, 1.6], [1.6, 1.6], [-1.6, 3.4], [1.6, 3.4]]
+        .forEach(function (wp) {
+          var wheel = new THREE.Mesh(wheelGeo, M.tyre);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(wp[0], 0.85, wp[1]);
+          wheel.castShadow = true;
+          g.add(wheel);
+        });
+      // a load gauge floating over the cab so you can see how full it is
+      var bar = makeStatusBar(3.0, 0xffd75e);
+      bar.position.set(0, 6.6, 0);
+      g.add(bar);
+
+      g.position.set(BAY_X[t], 0, TRUCK_START_Z);
+      g.visible = false;
+      dockFit.add(g);
+      trucks.push({
+        obj: g, bar: bar, bay: t,
+        phase: "gone", timer: TRUCK_GAP * (0.4 + t * 0.5),
+        load: 0, manifest: { bud: 0, dab: 0, edible: 0 }, doorOpen: 0,
+      });
+    }
+  })();
+
+  // ---- delivery drivers: pallet to truck, all day long ----
+  var drivers = [];
+  var DRV_SPEED = 5.2, DRV_ACT_TIME = 0.35, DRV_CARRY = 4;
+  (function buildDrivers() {
+    for (var n = 0; n < MAX_DRIVERS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), M.truckTrim);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      // hi-vis vest and a hard hat — the dock uniform
+      var vest = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.72, 0.66), M.hiVis);
+      vest.position.y = 1.16; vest.castShadow = true; g.add(vest);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin : M.skin2);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var hat = new THREE.Mesh(new THREE.SphereGeometry(0.36, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.truckCab);
+      hat.position.y = 2.18; hat.castShadow = true; g.add(hat);
+      var brim = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 0.3), M.truckCab);
+      brim.position.set(0, 2.19, 0.3); g.add(brim);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // the carton they're hauling
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.7, 0.5);
+      for (var c = 0; c < DRV_CARRY; c++) {
+        var it = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.44), M.crateEdible);
+        it.position.set(0, c * 0.36, 0);
+        it.visible = false;
+        tote.add(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      drivers.push({
+        obj: g, l1: l1, l2: l2, tote: tote,
+        pos: { x: DRIVER_ZONE.x + 1.6 + n * 0.9, z: DRIVER_ZONE.z + 1.5 },
+        phase: "toPallet", timer: 0, palletIdx: -1, bayIdx: -1,
+        carrying: 0, carryKind: "bud", walkPhase: n * 1.3, slot: n,
+      });
+    }
   })();
 
   // ---- HR desk. Walking up opens a panel with buttons rather than the
@@ -4109,6 +4532,301 @@
     }
   }
 
+  // ===================================================================
+  //  LOADING DOCK LOGIC
+  // ===================================================================
+  function palletCount(kind) { return (state.pallets && state.pallets[kind]) || 0; }
+  function palletAdd(kind, n) {
+    state.pallets[kind] = Math.max(0, Math.min(PALLET_CAP, palletCount(kind) + n));
+  }
+
+  // Walk onto a pallet with matching stock in your pack and it goes on.
+  function handlePallets() {
+    if (!dockUnlocked()) return;
+    for (var p = 0; p < PALLET_DEFS.length; p++) {
+      var def = PALLET_DEFS[p];
+      if (Math.abs(player.pos.x - def.x) > PALLET_HALF + PLAYER_RADIUS) continue;
+      if (Math.abs(player.pos.z - def.z) > PALLET_HALF + PLAYER_RADIUS) continue;
+      var moved = 0;
+      for (var i = player.backpack.length - 1; i >= 0; i--) {
+        if (palletCount(def.kind) + moved >= PALLET_CAP) break;
+        if (player.backpack[i].type !== def.kind) continue;
+        player.backpack.splice(i, 1);
+        moved++;
+      }
+      if (!moved) continue;
+      palletAdd(def.kind, moved);
+      syncStack();
+      addFloater(def.x, 4.2, def.z, "+" + moved + " " + def.label, "#ffd75e");
+      markTut("pallet");
+      renderUpgrades();
+    }
+  }
+
+  // How much of `kind` a truck will still take. Trucks are not fussy about
+  // what they carry — the cap is on units, not on product.
+  function truckSpace(t) { return Math.max(0, truckCap() - t.load); }
+
+  function truckLoadOne(t, kind) {
+    if (truckSpace(t) <= 0) return false;
+    t.manifest[kind] = (t.manifest[kind] || 0) + 1;
+    t.load++;
+    return true;
+  }
+
+  // Standing at an open bay with product on you loads the truck by hand, so
+  // the dock still works before you have hired anybody.
+  function handleBayLoading() {
+    if (!dockUnlocked()) return;
+    for (var b = 0; b < bayCount(); b++) {
+      var t = trucks[b];
+      if (t.phase !== "loading") continue;
+      if (Math.abs(player.pos.x - BAY_X[b]) > BAY_HALF_W + PLAYER_RADIUS) continue;
+      if (Math.abs(player.pos.z - (DOCK_WALL_Z + 2.2)) > 2.0 + PLAYER_RADIUS) continue;
+      var moved = 0;
+      for (var i = player.backpack.length - 1; i >= 0; i--) {
+        var kind = player.backpack[i].type;
+        if (kind !== "bud" && kind !== "dab" && kind !== "edible") continue;
+        if (!truckLoadOne(t, kind)) break;
+        player.backpack.splice(i, 1);
+        moved++;
+      }
+      if (moved) {
+        syncStack();
+        addFloater(BAY_X[b], 4.4, DOCK_WALL_Z + 2.5, "+" + moved + " LOADED", "#ffd75e");
+        markTut("shipping");
+        renderUpgrades();
+      }
+    }
+  }
+
+  function dispatchTruck(t) {
+    var gross = 0, units = t.load;
+    for (var k in t.manifest) {
+      if (!t.manifest[k]) continue;
+      gross += wholesaleValue(k) * t.manifest[k];
+      t.manifest[k] = 0;
+    }
+    t.load = 0;
+    if (gross > 0) {
+      var paid = Math.round(gross * (promoActive() ? PROMO_MULT : 1));
+      state.cash += paid;
+      // Wholesale settles on the spot rather than piling up by the till —
+      // the dock is the far end of the building and a second cash run there
+      // would be all walking and no game.
+      addFloater(BAY_X[t.bay], 6.0, DOCK_WALL_Z - 4, "+$" + fmt(paid), "#8ff5a8");
+      showCashGain(paid);
+      toast("🚚 Truck out — " + units + " units for $" + fmt(paid));
+      renderHud();
+      saveState();
+    }
+  }
+
+  function updateTrucks(dt) {
+    var live = dockUnlocked() ? bayCount() : 0;
+    for (var b = 0; b < trucks.length; b++) {
+      var t = trucks[b];
+      if (b >= live) {
+        t.obj.visible = false;
+        t.phase = "gone"; t.timer = TRUCK_GAP; t.load = 0; t.doorOpen = 0;
+        continue;
+      }
+
+      if (t.phase === "gone") {
+        t.obj.visible = false;
+        t.timer -= dt;
+        if (t.timer <= 0) { t.phase = "arriving"; t.timer = TRUCK_ARRIVE_TIME; }
+
+      } else if (t.phase === "arriving") {
+        t.obj.visible = true;
+        t.timer -= dt;
+        var pa = 1 - Math.max(0, t.timer) / TRUCK_ARRIVE_TIME;
+        // ease out, so it slows as it nears the bumpers like a real reverse
+        var ea = 1 - Math.pow(1 - pa, 3);
+        t.obj.position.z = TRUCK_START_Z + (TRUCK_PARK_Z - TRUCK_START_Z) * ea;
+        if (t.timer <= 0) { t.phase = "loading"; t.timer = TRUCK_PATIENCE; }
+
+      } else if (t.phase === "loading") {
+        t.obj.visible = true;
+        t.obj.position.z = TRUCK_PARK_Z;
+        t.timer -= dt;
+        // full, or out of patience with something aboard: send it on its way
+        if (t.load >= truckCap() || (t.timer <= 0 && t.load > 0)) {
+          dispatchTruck(t);
+          t.phase = "departing"; t.timer = TRUCK_DEPART_TIME;
+        } else if (t.timer <= 0) {
+          // nothing to take — go round the block and come back
+          t.phase = "departing"; t.timer = TRUCK_DEPART_TIME;
+        }
+
+      } else if (t.phase === "departing") {
+        t.obj.visible = true;
+        t.timer -= dt;
+        var pd = 1 - Math.max(0, t.timer) / TRUCK_DEPART_TIME;
+        t.obj.position.z = TRUCK_PARK_Z + (TRUCK_START_Z - TRUCK_PARK_Z) * (pd * pd);
+        if (t.timer <= 0) { t.phase = "gone"; t.timer = TRUCK_GAP; }
+      }
+
+      // the shutter is up whenever a truck is on or approaching the bay
+      var wantOpen = (t.phase === "arriving" || t.phase === "loading") ? 1 : 0;
+      t.doorOpen += (wantOpen - t.doorOpen) * Math.min(1, dt * 3.2);
+      var d = bayDoors[b];
+      d.group.visible = true;
+      d.shutter.scale.y = Math.max(0.02, 1 - t.doorOpen);
+      d.shutter.position.y = DOCK_LINTEL - (DOCK_LINTEL * (1 - t.doorOpen)) / 2;
+      d.lamp.material = t.phase === "loading" ? M.neonGreen : M.dockEdge;
+
+      setBar(t.bar, truckCap() ? t.load / truckCap() : 0);
+      t.bar.visible = t.phase === "loading";
+    }
+    // doors on bays that have not been bought stay shut and dark
+    for (var u = live; u < bayDoors.length; u++) {
+      bayDoors[u].shutter.scale.y = 1;
+      bayDoors[u].shutter.position.y = DOCK_LINTEL / 2;
+      bayDoors[u].lamp.material = M.dockEdge;
+    }
+  }
+
+  function updatePalletVisuals() {
+    for (var p = 0; p < palletObjects.length; p++) {
+      var po = palletObjects[p];
+      var n = palletCount(po.def.kind);
+      if (po.shown !== n) {
+        for (var c = 0; c < po.crates.length; c++) po.crates[c].visible = c < n;
+        po.shown = n;
+      }
+      setBar(po.bar, n / PALLET_CAP);
+    }
+  }
+
+  // ---- drivers ----
+  function drvStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(DRV_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  // the fullest pallet nobody else has claimed — clears the backlog first
+  function drvFreePallet(self) {
+    var best = -1, bestN = 0;
+    for (var i = 0; i < PALLET_DEFS.length; i++) {
+      var n = palletCount(PALLET_DEFS[i].kind);
+      if (n <= 0 || n <= bestN) continue;
+      var taken = false;
+      for (var j = 0; j < drivers.length; j++) {
+        var o = drivers[j];
+        if (o !== self && o.obj.visible && o.palletIdx === i) { taken = true; break; }
+      }
+      if (!taken) { best = i; bestN = n; }
+    }
+    return best;
+  }
+
+  // any bay with a truck on it that still has room
+  function drvFreeBay(self) {
+    for (var i = 0; i < bayCount(); i++) {
+      var t = trucks[i];
+      if (t.phase !== "loading" || truckSpace(t) <= 0) continue;
+      var claims = 0;
+      for (var j = 0; j < drivers.length; j++) {
+        var o = drivers[j];
+        if (o !== self && o.obj.visible && o.bayIdx === i) claims++;
+      }
+      // one driver per bay keeps them from stacking on the same door
+      if (claims === 0) return i;
+    }
+    return -1;
+  }
+
+  function updateDrivers(now, dt) {
+    for (var i = 0; i < drivers.length; i++) {
+      var b = drivers[i];
+      var hired = dockUnlocked() && i < (state.driverLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.palletIdx = -1; b.bayIdx = -1; b.carrying = 0; continue; }
+
+      var walking = false;
+
+      if (b.phase === "toPallet") {
+        if (b.carrying >= DRV_CARRY + staffCarryBonus()) { b.phase = "toTruck"; b.palletIdx = -1; continue; }
+        if (b.palletIdx < 0 || palletCount(PALLET_DEFS[b.palletIdx].kind) <= 0) {
+          b.palletIdx = drvFreePallet(b);
+        }
+        if (b.palletIdx < 0) {
+          if (b.carrying > 0) { b.phase = "toTruck"; continue; }
+          b.phase = "idle"; b.timer = 0.7; continue;
+        }
+        var pdf = PALLET_DEFS[b.palletIdx];
+        walking = !drvStepTo(b, pdf.x, pdf.z + 2.4, dt);
+        if (!walking) { b.phase = "pick"; b.timer = DRV_ACT_TIME; }
+
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var pk = b.palletIdx;
+          if (pk >= 0 && palletCount(PALLET_DEFS[pk].kind) > 0) {
+            // a driver hauls one product at a time, so a part load never
+            // gets stranded when they switch pallets
+            if (b.carrying === 0) b.carryKind = PALLET_DEFS[pk].kind;
+            if (b.carryKind === PALLET_DEFS[pk].kind) {
+              palletAdd(PALLET_DEFS[pk].kind, -1);
+              b.carrying++;
+            } else {
+              b.phase = "toTruck"; b.palletIdx = -1; continue;
+            }
+          }
+          b.palletIdx = -1;
+          b.phase = "toPallet";
+        }
+
+      } else if (b.phase === "toTruck") {
+        if (b.carrying <= 0) { b.phase = "toPallet"; b.bayIdx = -1; continue; }
+        if (b.bayIdx < 0 || b.bayIdx >= bayCount() ||
+            trucks[b.bayIdx].phase !== "loading" || truckSpace(trucks[b.bayIdx]) <= 0) {
+          b.bayIdx = drvFreeBay(b);
+        }
+        if (b.bayIdx < 0) { b.phase = "idle"; b.timer = 0.7; continue; }
+        walking = !drvStepTo(b, BAY_X[b.bayIdx], DOCK_WALL_Z + 2.4, dt);
+        if (!walking) { b.phase = "unload"; b.timer = DRV_ACT_TIME; }
+
+      } else if (b.phase === "unload") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var tk = b.bayIdx >= 0 ? trucks[b.bayIdx] : null;
+          if (tk && tk.phase === "loading" && b.carrying > 0 && truckLoadOne(tk, b.carryKind)) {
+            b.carrying--;
+          } else {
+            b.bayIdx = -1;
+          }
+          if (b.carrying <= 0) { b.bayIdx = -1; b.phase = "toPallet"; }
+          else b.timer = DRV_ACT_TIME * 0.6;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.7;
+          b.phase = b.carrying > 0 ? "toTruck" : "toPallet";
+        }
+      }
+
+      for (var c2 = 0; c2 < b.tote.children.length; c2++) {
+        b.tote.children[c2].visible = c2 < b.carrying;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
   // ---- dab bar drop-off, mirroring the bud counter ----
   function handleDabSellZone() {
     if (d2(player.pos.x, player.pos.z, SELL_ZONE.x, SELL_ZONE.z) > SELL_ZONE.r + PLAYER_RADIUS) return;
@@ -4598,6 +5316,8 @@
   // all of them the bar goes away for good.
   var TUT_STEPS = [
     { key: "collect", text: "💵 Grab your cash by the till" },
+    { key: "shipping", text: "🚚 A truck is on the bay — load it up" },
+    { key: "pallet",  text: "📦 Stack product on the dock pallets" },
     { key: "ediblesell", text: "🍪 Take your edibles out to the counter" },
     { key: "ediblegrab", text: "🍪 An oven is done — grab the edible" },
     { key: "bake",    text: "🔥 Load an oven with dabs in the kitchen" },
@@ -4645,8 +5365,23 @@
       if (state.ovens[e1].cooked > 0) anyOvenReady = true;
       if (state.ovens[e1].dabs < OVEN_CAP) anyOvenRoom = true;
     }
+    var anyStock = false, anyTruck = false, anyPalletStock = false;
+    for (var d0 = 0; d0 < player.backpack.length; d0++) {
+      var ty = player.backpack[d0].type;
+      if (ty === "bud" || ty === "dab" || ty === "edible") anyStock = true;
+    }
+    if (dockUnlocked()) {
+      for (var d1 = 0; d1 < bayCount(); d1++) {
+        if (trucks[d1].phase === "loading" && truckSpace(trucks[d1]) > 0) anyTruck = true;
+      }
+      for (var d2 = 0; d2 < PALLET_DEFS.length; d2++) {
+        if (palletCount(PALLET_DEFS[d2].kind) > 0) anyPalletStock = true;
+      }
+    }
     var applies = {
       collect: pendingCash > 0,
+      shipping: anyTruck && (anyStock || anyPalletStock),
+      pallet:   dockUnlocked() && anyStock,
       ediblesell: hasEdible,
       ediblegrab: anyOvenReady,
       bake: anyOvenRoom && hasDab,
@@ -4862,6 +5597,62 @@
       buy: function () {
         state.bakerLv = (state.bakerLv || 0) + 1;
         toast("\ud83d\udc68\u200d\ud83c\udf73 Baker hired \u2014 they'll run the oven line!");
+      },
+    },
+    {
+      id: "driver", label: "DISPATCH", icon: "\ud83d\ude9a", x: DRIVER_ZONE.x, z: DRIVER_ZONE.z,
+      color: 0xffd75e, kiosk: false,
+      hidden: function () { return !dockUnlocked(); },
+      name: function () {
+        return (state.driverLv || 0) === 0 ? "Hire a Driver" : "Hire Another Driver";
+      },
+      desc: function () {
+        var n = state.driverLv || 0;
+        return n >= MAX_DRIVERS
+          ? "Every bay has a driver on it"
+          : (n === 0
+              ? "They shift stock off the pallets and onto the trucks for you"
+              : n + " on shift \u00b7 hire one more to load faster");
+      },
+      cost: costDriver,
+      maxed: function () { return (state.driverLv || 0) >= MAX_DRIVERS; },
+      buy: function () {
+        state.driverLv = (state.driverLv || 0) + 1;
+        toast("\ud83d\ude9a Driver hired \u2014 they'll work the bays!");
+      },
+    },
+    {
+      id: "bay", label: "BAY DOOR", icon: "\ud83c\udfed", x: BAY_ZONE.x, z: BAY_ZONE.z,
+      color: 0xb8c4d0, kiosk: false,
+      hidden: function () { return !dockUnlocked(); },
+      name: function () { return "Open Another Bay"; },
+      desc: function () {
+        return bayCount() >= MAX_BAYS
+          ? "All four doors are in service"
+          : bayCount() + " \u2192 " + (bayCount() + 1) + " trucks loading at once";
+      },
+      cost: function () { return bayCost(bayCount()); },
+      maxed: function () { return bayCount() >= MAX_BAYS; },
+      buy: function () {
+        state.bayCount = bayCount() + 1;
+        toast("\ud83c\udfed Bay " + state.bayCount + " open \u2014 another truck can back in!");
+      },
+    },
+    {
+      id: "truck", label: "BIG RIGS", icon: "\ud83d\udce6", x: TRUCK_ZONE.x, z: TRUCK_ZONE.z,
+      color: 0xe08a5a, kiosk: false,
+      hidden: function () { return !dockUnlocked(); },
+      name: function () { return "Bigger Trucks"; },
+      desc: function () {
+        return (state.truckLv || 0) >= MAX_TRUCK_LV
+          ? "These rigs are as big as they come"
+          : "Every truck hauls " + truckCap() + " \u2192 " + (truckCap() + 8) + " units a run";
+      },
+      cost: function () { return truckCost(state.truckLv || 0); },
+      maxed: function () { return (state.truckLv || 0) >= MAX_TRUCK_LV; },
+      buy: function () {
+        state.truckLv = (state.truckLv || 0) + 1;
+        toast("\ud83d\udce6 Bigger rigs \u2014 " + truckCap() + " units a run now!");
       },
     },
     {
@@ -5225,6 +6016,7 @@
       counterTopMesh.material = state.sellLv >= 4 ? M.counterStone : M.counterTop;
     }
     kitchenFit.visible = ediblesUnlocked();
+    dockFit.visible = dockUnlocked();
   }
 
   // kept as the single "refresh all the shop-facing UI" entry point
@@ -5268,6 +6060,8 @@
     handlePresses();
     handleOvens();
     handleDabSellZone();
+    handlePallets();
+    handleBayLoading();
     updatePlotVisuals(now);
     updateRowTiles(now);
     updatePressPads(now);
@@ -5290,6 +6084,9 @@
     updateRunners(now, dt);
     updateExtractors(now, dt);
     updateBakers(now, dt);
+    updateTrucks(dt);
+    updatePalletVisuals();
+    updateDrivers(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
