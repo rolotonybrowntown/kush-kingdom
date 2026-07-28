@@ -263,6 +263,72 @@
   @keyframes spin { from {transform:rotate(0);} to {transform:rotate(360deg);} }
   #loading.hidden { display: none; }
   #fallback { display: none; font-size: 13px; line-height: 1.6; opacity: 0.75; max-width: 320px; }
+
+  /* ---------------- menu (the shop keeps running behind it) ---------------- */
+  #menu-btn {
+    position: absolute;
+    top: calc(var(--safe-t) + 18px);
+    right: calc(var(--safe-r) + 14px);
+    width: 46px; height: 46px;
+    border-radius: 14px;
+    border: 1.5px solid var(--panel-line);
+    background: var(--panel);
+    color: #eafff2;
+    font-size: 20px; line-height: 1;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 5px 16px rgba(0,0,0,0.4);
+    z-index: 8;
+    cursor: pointer;
+  }
+  #menu-overlay {
+    position: fixed; inset: 0;
+    background: rgba(4, 14, 9, 0.62);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 20;
+    padding: 24px;
+  }
+  #menu-overlay.show { display: flex; }
+  #menu-card {
+    width: 100%; max-width: 330px;
+    background: linear-gradient(180deg, #123024, #0b1f16);
+    border: 2px solid var(--panel-line);
+    border-radius: 22px;
+    padding: 22px 20px 18px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55);
+    text-align: center;
+  }
+  #menu-card h2 {
+    margin: 0 0 14px;
+    font-size: 21px; letter-spacing: 0.5px;
+    color: var(--green-light);
+  }
+  .menu-stat {
+    display: flex; justify-content: space-between;
+    font-size: 13px; padding: 7px 2px;
+    border-bottom: 1px solid rgba(143,224,138,0.14);
+  }
+  .menu-stat span { opacity: 0.72; }
+  .menu-stat b { color: var(--gold); }
+  .menu-action {
+    display: block; width: 100%;
+    margin-top: 10px; padding: 12px;
+    border-radius: 13px;
+    border: 1.5px solid var(--panel-line);
+    background: rgba(255,255,255,0.06);
+    color: #eafff2;
+    font-size: 14px; font-weight: 800;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .menu-action.primary { background: linear-gradient(180deg, #48b465, #2b7a44); border-color: #6fd68a; }
+  .menu-action.danger  { background: linear-gradient(180deg, #c4503a, #8d3020); border-color: #e2795f; }
+  #menu-confirm { display: none; margin-top: 12px; }
+  #menu-confirm.show { display: block; }
+  #menu-confirm p { font-size: 12px; opacity: 0.8; margin: 0 0 4px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -278,6 +344,24 @@
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
       <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
+    </div>
+  </div>
+
+  <button id="menu-btn" aria-label="Menu">☰</button>
+
+  <div id="menu-overlay">
+    <div id="menu-card">
+      <h2>Kush Kingdom</h2>
+      <div class="menu-stat"><span>Shop level</span><b id="menu-level">1</b></div>
+      <div class="menu-stat"><span>Cash</span><b id="menu-cash">0</b></div>
+      <div class="menu-stat"><span>Strain</span><b id="menu-strain">—</b></div>
+      <button class="menu-action primary" id="menu-resume">Resume</button>
+      <button class="menu-action danger" id="menu-reset">Reset Progress</button>
+      <div id="menu-confirm">
+        <p>This wipes your shop and starts over. It can't be undone.</p>
+        <button class="menu-action danger" id="menu-reset-yes">Yes, wipe it</button>
+        <button class="menu-action" id="menu-reset-no">Never mind</button>
+      </div>
     </div>
   </div>
 
@@ -418,6 +502,9 @@
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
   var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
   var HOPPER_ZONE  = { x: -10.0, z: -35.0 };       // bigger press hoppers
+  // HR corner of the break room: upgrades that apply to every hired hand
+  var HR_ZONE = { x: 11.0, z: -28.5 };
+  var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
   var MAX_EXTRACTORS = 3;
 
   // dab display case, on the fixed retail floor beside the bud counter
@@ -491,7 +578,13 @@
   var ROW_TILE_HALF = (PLOT_SIZE + 0.5) / 2;
   function rowCost(rowNum) { return Math.round(200 * Math.pow(3.2, rowNum - 1)); }
   function rowLightCost(lv) { return Math.round(250 * Math.pow(1.9, lv)); }
-  var BOOST_SECONDS = 90;          // how long one hydroponic feed lasts
+  var BOOST_SECONDS = 90;          // how long one bag of feed lasts
+  var SOIL_COOLDOWN = 5 * 60 * 1000;   // 5 minutes between deliveries
+  // Where a bag can land: open floor on the shop side, away from fittings.
+  var SOIL_SPOTS = [
+    { x: -4.5, z: -2.0 }, { x: 0.5, z: -8.0 }, { x: -6.0, z: -7.5 },
+    { x: 2.0, z: 0.5 },   { x: 7.0, z: -9.5 }, { x: -2.0, z: 1.0 },
+  ];
   var PROMO_SECONDS = 60;          // how long one promotion runs
   var PROMO_MULT = 2;              // money multiplier per sale while running
 
@@ -505,6 +598,8 @@
       botanistLv: 0,          // hired botanists who plant seeds for you
       runnerLv: 0,            // hired runners who haul buds to the counter
       extractorLv: 0,         // hired extractors who work the press line
+      staffSpeedLv: 0,        // HR: how fast every hired hand walks
+      staffLoadLv: 0,         // HR: how much every hired hand carries
       tutSeen: {},            // one-shot "what to do next" prompts already shown
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
@@ -515,6 +610,8 @@
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
       promoUntil: 0,          // promotion expiry (epoch ms)
+      soilAt: null,           // where the free feed bag is sitting, if any
+      soilNextAt: 0,          // earliest the next bag may appear
       pressCount: 0,          // rosin presses bought, one machine at a time
       presses: pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; }),
       hopperLv: 0,            // how much bud a press holds at once
@@ -560,6 +657,8 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       if (typeof merged.promoUntil !== "number") merged.promoUntil = 0;
+      if (typeof merged.soilNextAt !== "number") merged.soilNextAt = 0;
+      if (merged.soilAt && typeof merged.soilAt.x !== "number") merged.soilAt = null;
       delete merged.pressBuds; delete merged.pressDabs; delete merged.pressLv;
       // presses used to come in rows; carry that over as a machine count
       if (typeof merged.pressCount !== "number") {
@@ -576,6 +675,8 @@
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
       merged.speedLv = Math.max(0, Math.min(MAX_SPEED_LV, merged.speedLv || 0));
+      merged.staffSpeedLv = Math.max(0, Math.min(MAX_STAFF_SPEED_LV, merged.staffSpeedLv || 0));
+      merged.staffLoadLv = Math.max(0, Math.min(MAX_STAFF_LOAD_LV, merged.staffLoadLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
@@ -638,10 +739,32 @@
   function costCap()   { return Math.round(45 * Math.pow(1.55, state.capLv)); }
   function costSpeed() { return Math.round(40 * Math.pow(1.55, state.speedLv)); }
   function costSell()  { return Math.round(69 * Math.pow(1.5, state.sellLv)); }
-  function costBoost() { return 100; }
   function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
   function costRunner() { return Math.round(500 * Math.pow(2.2, state.runnerLv || 0)); }
   function costExtractor() { return Math.round(1200 * Math.pow(2.2, state.extractorLv || 0)); }
+  function costStaffSpeed() { return Math.round(600 * Math.pow(2.1, state.staffSpeedLv || 0)); }
+  function costStaffLoad() { return Math.round(800 * Math.pow(2.3, state.staffLoadLv || 0)); }
+  // one multiplier and one carry bonus, shared by botanists, runners and extractors
+  function staffSpeedMult() { return 1 + 0.18 * (state.staffSpeedLv || 0); }
+  function staffCarryBonus() { return state.staffLoadLv || 0; }
+  function hrOffer() {
+    var sp = state.staffSpeedLv || 0, ld = state.staffLoadLv || 0;
+    var canSp = sp < MAX_STAFF_SPEED_LV, canLd = ld < MAX_STAFF_LOAD_LV;
+    var pickSpeed = canSp && (!canLd || sp <= ld);
+    if (pickSpeed) {
+      return { which: "speed", cost: costStaffSpeed(),
+        name: "Better Boots",
+        desc: "Every hired hand walks " + Math.round((staffSpeedMult() - 1) * 100) +
+              "% \u2192 " + Math.round((staffSpeedMult() + 0.18 - 1) * 100) + "% faster" };
+    }
+    if (canLd) {
+      return { which: "load", cost: costStaffLoad(),
+        name: "Bigger Crates",
+        desc: "Runners and extractors haul " + (3 + staffCarryBonus()) + " \u2192 " +
+              (4 + staffCarryBonus()) + " at a time" };
+    }
+    return null;
+  }
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
   function costPromo() { return Math.round(sellValue() * 22); }
@@ -2298,9 +2421,12 @@
   //  NPC CUSTOMERS (queue outside the gate — pure life/decoration)
   // ===================================================================
   var npcs = [];
+  // A big enough pool that a busy shop can genuinely queue out the door. How
+  // many are actually walking around is driven by activeCustomers() below.
+  var MAX_CUSTOMERS = 14;
   (function buildNpcs() {
     var colors = [M.npc1, M.npc2, M.npc3];
-    for (var n = 0; n < 3; n++) {
+    for (var n = 0; n < MAX_CUSTOMERS; n++) {
       var g = new THREE.Group();
       var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), colors[n]);
       t.position.y = 1.1; t.castShadow = true; g.add(t);
@@ -2322,7 +2448,7 @@
       scene.add(g);
       npcs.push({
         obj: g, l1: l1, l2: l2, bubble: bubble,
-        phase: n * 1.9,
+        phase: n * 1.15,
         slot: n, kind: "bud",
         want: 0, shown: -1, buyAcc: 0,
       });
@@ -2342,16 +2468,29 @@
   var NPC_WAIT = 2.4;         // seconds standing at the counter
   var NPC_BUY_EVERY = 0.28;   // seconds between buds handed over
 
+  // Word gets around: a bigger, better-stocked shop draws a bigger crowd.
+  function activeCustomers() {
+    var n = 3;
+    n += (state.roomTier || 0) * 2;          // each level of shop
+    n += Math.floor((state.sellLv || 0) / 2); // and each couple of strains
+    return Math.max(3, Math.min(MAX_CUSTOMERS, n));
+  }
+
   function updateNpcs(now, dt) {
+    var live = activeCustomers();
     npcs.forEach(function (npc, idx) {
+      if (idx >= live) { npc.obj.visible = false; npc.bubble.visible = false; return; }
+      npc.obj.visible = true;
       // Dab shoppers never enter the bud room: they stop at the dab bar in
       // room two. Bud shoppers walk on through the dab-room doorway, which is
       // why that doorway is lined up with the bud counter.
       var dabber = npc.kind === "dab";
       var counter = dabber ? DAB_SELL_ZONE : SELL_ZONE;
-      var queueX = counter.x - 0.4 + (idx - 1) * 1.5;
+      // three abreast, then further rows queue up behind them
+      var lane = idx % 3, rank = Math.floor(idx / 3);
+      var queueX = counter.x - 0.4 + (lane - 1) * 1.5;
       var startZ = retailMaxZForTier(state.roomTier) - 1.5;
-      var queueZ = counter.z + 3.0;
+      var queueZ = counter.z + 3.0 + rank * 1.7;
       var walkTime = Math.abs(startZ - queueZ) / NPC_SPEED;
       var cycle = walkTime * 2 + NPC_WAIT;
       var t = ((now / 1000) + npc.phase) % cycle;
@@ -2477,7 +2616,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(BOT_SPEED * dt, d);
+    var step = Math.min(BOT_SPEED * staffSpeedMult() * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -2640,7 +2779,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(RUN_SPEED * dt, d);
+    var step = Math.min(RUN_SPEED * staffSpeedMult() * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -2658,7 +2797,7 @@
       var walking = false;
       if (b.phase === "toBed") {
         // full load, or nothing left to pick — take what we have out front
-        if (b.carrying >= RUN_CARRY) { b.phase = "toCounter"; b.bedIdx = -1; continue; }
+        if (b.carrying >= RUN_CARRY + staffCarryBonus()) { b.phase = "toCounter"; b.bedIdx = -1; continue; }
         if (b.bedIdx < 0 || b.bedIdx >= state.plotsUnlocked ||
             state.plots[b.bedIdx].state !== "ready") {
           b.bedIdx = runFreeBed(b);
@@ -2786,7 +2925,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(EXT_SPEED * dt, d);
+    var step = Math.min(EXT_SPEED * staffSpeedMult() * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -2821,7 +2960,7 @@
 
       if (b.phase === "toBud") {
         // harvest a ready bed to feed the presses
-        if (b.holdingBud >= EXT_CARRY) { b.phase = "toPress"; b.target = -1; continue; }
+        if (b.holdingBud >= EXT_CARRY + staffCarryBonus()) { b.phase = "toPress"; b.target = -1; continue; }
         if (b.target < 0 || b.target >= state.plotsUnlocked ||
             state.plots[b.target].state !== "ready") {
           b.target = extFreeThing(b, state.plots.slice(0, state.plotsUnlocked), "target", "ready");
@@ -2874,7 +3013,7 @@
 
       } else if (b.phase === "toReady") {
         // collect finished dabs, then run them out front
-        if (b.carrying >= EXT_CARRY) { b.phase = "toCase"; b.target = -1; continue; }
+        if (b.carrying >= EXT_CARRY + staffCarryBonus()) { b.phase = "toCase"; b.target = -1; continue; }
         if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].dabs <= 0) {
           b.target = extFreePress(b, function (pp) { return pp.dabs > 0; });
         }
@@ -3304,6 +3443,61 @@
     scene.add(g);
   })();
 
+  // ---- a bag of feed that turns up on the shop floor now and then ----
+  // It waits there until you walk into it — no expiry — then the next one is
+  // held back for five minutes.
+  var soilBag = new THREE.Group();
+  (function buildSoilBag() {
+    var sack = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.0, 0.9), M.soil);
+    sack.castShadow = true;
+    soilBag.add(sack);
+    // pinched top, so it reads as a sack rather than a crate
+    var tie = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.24, 0.55), M.woodDark);
+    tie.position.y = 0.58;
+    soilBag.add(tie);
+    var leaf = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.7, 5), M.plant);
+    leaf.position.set(0, 1.15, 0);
+    soilBag.add(leaf);
+    addGlow(soilBag, 0, 0.4, 0, 3.6, 0x9df0a0, 0.5);
+    var tag = textSprite("FREE FEED", "#b6f5b0");
+    tag.scale.set(2.6, 0.62, 1);
+    tag.position.y = 2.1;
+    soilBag.add(tag);
+    soilBag.visible = false;
+    scene.add(soilBag);
+  })();
+
+  function spawnSoilBag() {
+    var spot = SOIL_SPOTS[Math.floor(Math.random() * SOIL_SPOTS.length)];
+    state.soilAt = { x: spot.x, z: spot.z };
+    soilBag.position.set(spot.x, 1.0, spot.z);
+    soilBag.visible = true;
+  }
+
+  function updateSoilBag(now, dt) {
+    // nothing on the floor: bring another one once the cooldown is up
+    if (!state.soilAt) {
+      if (Date.now() >= (state.soilNextAt || 0)) spawnSoilBag();
+      soilBag.visible = !!state.soilAt;
+      return;
+    }
+    soilBag.visible = true;
+    soilBag.position.y = 1.0 + Math.sin(now * 0.003) * 0.18;
+    soilBag.rotation.y = now * 0.0009;
+
+    if (d2(player.pos.x, player.pos.z, state.soilAt.x, state.soilAt.z) <= 1.6 + PLAYER_RADIUS) {
+      var from = Math.max(Date.now(), state.boostUntil || 0);
+      state.boostUntil = from + BOOST_SECONDS * 1000;
+      addFloater(state.soilAt.x, 2.6, state.soilAt.z, "FEED!", "#9df0a0");
+      toast("\ud83c\udf31 Fresh feed \u2014 every bed grows twice as fast!");
+      state.soilAt = null;
+      state.soilNextAt = Date.now() + SOIL_COOLDOWN;
+      soilBag.visible = false;
+      renderHud();
+      saveState();
+    }
+  }
+
   function payOutCash(amount) {
     if (amount <= 0) return;
     pendingCash += amount;
@@ -3715,22 +3909,6 @@
       buy: function () { state.speedLv++; },
     },
     {
-      id: "boost", label: "HYDRO", icon: "\ud83d\udca7", x: HYDRO_ZONE.x, z: HYDRO_ZONE.z,
-      color: 0x63d8e8, kiosk: false,
-      name: function () { return "Hydroponic Feed"; },
-      desc: function () {
-        return boostActive()
-          ? "Running \u2014 " + boostSecsLeft() + "s left \u00b7 buy again to extend"
-          : "2\u00d7 grow speed on every bed for " + BOOST_SECONDS + "s";
-      },
-      cost: costBoost,
-      buy: function () {
-        var from = Math.max(Date.now(), state.boostUntil || 0);
-        state.boostUntil = from + BOOST_SECONDS * 1000;
-        toast("\ud83d\udca7 Hydroponic feed running \u2014 beds are twice as fast!");
-      },
-    },
-    {
       id: "botanist", label: "BOTANIST", icon: "\ud83c\udf3f", x: HIRE_ZONE.x, z: HIRE_ZONE.z,
       color: 0x7fd97f, kiosk: false,
       name: function () {
@@ -3770,6 +3948,33 @@
       buy: function () {
         state.runnerLv = (state.runnerLv || 0) + 1;
         toast("\ud83c\udfc3 Runner hired \u2014 they'll stock the counter for you!");
+      },
+    },
+    {
+      id: "hr", label: "HR OFFICE", icon: "\ud83d\udccb", x: HR_ZONE.x, z: HR_ZONE.z,
+      color: 0x7fc4ff, kiosk: false,
+      // One desk, two tracks. It offers whichever is behind, so the crew
+      // improves evenly instead of needing a pad each in a cramped room.
+      name: function () {
+        var o = hrOffer();
+        return o ? o.name : "Crew Fully Trained";
+      },
+      desc: function () {
+        var o = hrOffer();
+        return o ? o.desc : "Nothing left to teach them";
+      },
+      cost: function () { var o = hrOffer(); return o ? o.cost : 0; },
+      maxed: function () { return !hrOffer(); },
+      buy: function () {
+        var o = hrOffer();
+        if (!o) return;
+        if (o.which === "speed") {
+          state.staffSpeedLv = (state.staffSpeedLv || 0) + 1;
+          toast("\ud83d\udc5f Crew kitted out \u2014 everyone moves quicker!");
+        } else {
+          state.staffLoadLv = (state.staffLoadLv || 0) + 1;
+          toast("\ud83e\uddf3 Bigger crates \u2014 the crew hauls more per trip!");
+        }
       },
     },
     {
@@ -4194,6 +4399,7 @@
     updatePlotVisuals(now);
     updateRowTiles(now);
     updatePressPads(now);
+    updateSoilBag(now, dt);
     updateStack(now);
     updateCounterPile(now, dt);
     updateDabPile(now);
@@ -4217,6 +4423,37 @@
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
+
+  // ---- menu. Deliberately does not pause: the shop keeps trading behind it,
+  // which is the point of an idle game. It's a place to check on things and
+  // to start over. ----
+  var menuOverlay = document.getElementById("menu-overlay");
+  var menuConfirm = document.getElementById("menu-confirm");
+  function openMenu() {
+    document.getElementById("menu-level").textContent = "Lv." + storeLevel();
+    document.getElementById("menu-cash").textContent = "$" + fmt(state.cash);
+    document.getElementById("menu-strain").textContent = strainName(state.sellLv || 0);
+    menuConfirm.classList.remove("show");
+    menuOverlay.classList.add("show");
+  }
+  function closeMenu() { menuOverlay.classList.remove("show"); }
+  document.getElementById("menu-btn").addEventListener("click", openMenu);
+  document.getElementById("menu-resume").addEventListener("click", closeMenu);
+  menuOverlay.addEventListener("click", function (e) {
+    if (e.target === menuOverlay) closeMenu();
+  });
+  document.getElementById("menu-reset").addEventListener("click", function () {
+    menuConfirm.classList.add("show");
+  });
+  document.getElementById("menu-reset-no").addEventListener("click", function () {
+    menuConfirm.classList.remove("show");
+  });
+  document.getElementById("menu-reset-yes").addEventListener("click", function () {
+    // drop the save and reload, rather than trying to unwind every system
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+    window.removeEventListener("beforeunload", saveState);
+    location.reload();
+  });
 
   renderUpgrades();
   renderHud();
