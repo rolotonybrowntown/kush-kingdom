@@ -345,7 +345,6 @@
   // Only the retail floor grows when the player buys "Expand Store" — the
   // back-of-house stays a fixed size, so its fittings never need moving.
   var HALF_X = 13;              // interior half-width, same for both rooms
-  var BACK_MIN_Z = -32;         // rear wall of the back room
   var PARTITION_Z = -11;        // dividing wall, with a doorway gap at x~0
   var DOOR_HALF = 2.7;          // half-width of that doorway
   var WALL_H = 9;
@@ -357,24 +356,28 @@
   var FLOOR_TOP_BACK   = 0.28;  // back-room slab: y 0.25, height 0.06
   function floorTopAt(z) { return z < PARTITION_Z ? FLOOR_TOP_BACK : FLOOR_TOP_RETAIL; }
 
-  // Level 2 doesn't just push the front wall out — it walls off a whole
-  // second room in front of the shop floor, which is where dabs are made
-  // and sold. Levels 3 and 4 then grow that room.
+  // The shop grows backwards, never forwards. The retail floor with the
+  // register is a fixed size at every level; each level instead adds another
+  // back room behind the last, which is where production happens.
+  var RETAIL_MAX_Z = 2;            // storefront wall — never moves
+  var GROW_ROOM_MIN_Z = -32;       // back wall of the grow room
+  var BACK_ROOM_DEPTH = 18;        // each added back room is this deep
   var ROOM_TIERS = [
-    { retailMaxZ: 2,  camDist: 22 },
-    { retailMaxZ: 14, camDist: 31 },
-    { retailMaxZ: 19, camDist: 34 },
-    { retailMaxZ: 24, camDist: 37 },
+    { camDist: 22 },               // level 1: grow room only
+    { camDist: 30 },               // level 2: + extraction lab
+    { camDist: 36 },               // level 3: + second lab bay
+    { camDist: 42 },               // level 4: + third lab bay
   ];
-  var DAB_WALL_Z = 2;              // divider between the bud shop and dab room
-  // Wide archway rather than a door. It has to cover two things at once: the
-  // bud customers' lanes (x 3.1-6.1) so they can walk through to their
-  // counter, and a lane left of the bud counter's pickup radius (x 2-8) so
-  // you can carry bud to the press without the counter taking it off you.
-  var DAB_DOOR_X = 2;
-  var DAB_DOOR_HALF = 6.0;
+  // rear-most wall for a given tier: one more room every level
+  function backMinZForTier(t) { return GROW_ROOM_MIN_Z - t * BACK_ROOM_DEPTH; }
+  function retailMaxZForTier() { return RETAIL_MAX_Z; }
+  // Front wall of back room n, counting the grow room as room 0. Room 1's
+  // front wall is the grow room's back wall, so this is offset by one:
+  // n=1 -> -32, n=2 -> -50, ...
+  function backDividerZ(n) { return GROW_ROOM_MIN_Z - (n - 1) * BACK_ROOM_DEPTH; }
+  var BACK_DOOR_X = 0;             // doorways line up down the middle
+  var BACK_DOOR_HALF = 3.0;
   var MAX_ROOM_TIER = ROOM_TIERS.length - 1;
-  function retailMaxZForTier(t) { return ROOM_TIERS[t].retailMaxZ; }
   function camDistForTier(t)    { return ROOM_TIERS[t].camDist; }
   // cost to expand FROM (t-1) TO t
   function expandCost(t) { return Math.round(200 * Math.pow(3.2, t - 1)); }
@@ -382,9 +385,9 @@
   // concrete rather than an abstract "tier 1 -> 2"
   var LEVEL_REVEALS = [
     "",
-    "Opens a wall of product shelving",
-    "Adds a customer lounge",
-    "Adds a premium display floor",
+    "Builds the extraction lab out back",
+    "Adds a second lab bay for more presses",
+    "Adds a third lab bay for more presses",
   ];
 
   // ---- back room fittings ----
@@ -412,17 +415,52 @@
   var RUNNER_ZONE = { x: -5.0, z: -9.0 };          // dispatch point: hire runners
   var MAX_RUNNERS = 3;
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
+  var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
+  var MAX_EXTRACTORS = 3;
 
-  // ---- dab room (room two, unlocked at store level 2) ----
-  // Press sits nearest the doorway (you arrive carrying bud), the bar further
-  // forward so dab customers coming in the front have room to walk to it.
-  var PRESS_ZONE = { x: -7.0, z: 4.5, r: 2.8 };    // rosin press: bud -> dabs
-  var DAB_SELL_ZONE = { x: -7.0, z: 8.0, r: 3.0 }; // dab bar
+  // dab display case, on the fixed retail floor beside the bud counter
+  var DAB_SELL_ZONE = { x: 10.6, z: -1.5, r: 2.2 };
   var DAB_MULT = 4;                                // a dab is worth 4 buds
-  var PRESS_SECONDS = 2.2;                         // per bud pressed
-  var PRESS_MAX = 12;                              // hopper + output capacity
   function dabsUnlocked() { return (state.roomTier || 0) >= 1; }
   function dabValue() { return sellValue() * DAB_MULT; }
+
+  // ---- extraction lab: rows of rosin presses out back, one bay per level ----
+  // Laid out exactly like the grow beds: a grid you unlock a row at a time
+  // from a tile beside that row, then upgrade that row's speed from the same
+  // tile. Two rows live in each lab bay.
+  var PRESS_COLS = 3, PRESS_ROWS_PER_BAY = 2;
+  var PRESS_SPACING_X = 6.0, PRESS_SIZE = 3.2;
+  var MAX_PRESS_ROWS = PRESS_ROWS_PER_BAY * (ROOM_TIERS.length - 1);
+  var pressDefs = [];
+  (function () {
+    var w = (PRESS_COLS - 1) * PRESS_SPACING_X;
+    for (var r = 0; r < MAX_PRESS_ROWS; r++) {
+      var bay = Math.floor(r / PRESS_ROWS_PER_BAY);
+      var within = r % PRESS_ROWS_PER_BAY;
+      // bay b is room b+1, spanning its far wall to its front wall
+      var near = backDividerZ(bay + 1), far = backDividerZ(bay + 2);
+      var zc = far + (near - far) * (within + 1) / (PRESS_ROWS_PER_BAY + 1);
+      for (var c = 0; c < PRESS_COLS; c++) {
+        pressDefs.push({ x: -w / 2 + c * PRESS_SPACING_X, z: zc, row: r, bay: bay });
+      }
+    }
+  })();
+  var MAX_PRESSES = pressDefs.length;
+  var PRESS_TILE_X = -((PRESS_COLS - 1) * PRESS_SPACING_X) / 2 - PRESS_SPACING_X + 1.6;
+  var PRESS_TILE_HALF = (PRESS_SIZE + 0.5) / 2;
+  var MAX_PRESS_LV = 3;                            // speed tiers per row
+  var BASE_PRESS_TIME = 7;                         // seconds to squeeze one bud
+  function pressRowOf(i) { return pressDefs[i].row; }
+  function pressLvOf(i) { return (state.pressLv && state.pressLv[pressRowOf(i)]) || 0; }
+  function pressTimeFor(i) {
+    var t = BASE_PRESS_TIME * Math.pow(0.72, pressLvOf(i));
+    if (boostActive()) t *= 0.5;
+    return Math.max(t, 0.8);
+  }
+  // a row can only be bought once its bay has been built
+  function pressRowsAvailable() { return (state.roomTier || 0) * PRESS_ROWS_PER_BAY; }
+  function pressRowCost(rowNum) { return Math.round(900 * Math.pow(2.6, rowNum)); }
+  function pressUpgradeCost(lv) { return Math.round(700 * Math.pow(2.0, lv)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -464,6 +502,7 @@
       capLv: 0, speedLv: 0, sellLv: 0,
       botanistLv: 0,          // hired botanists who plant seeds for you
       runnerLv: 0,            // hired runners who haul buds to the counter
+      extractorLv: 0,         // hired extractors who work the press line
       tutSeen: {},            // one-shot "what to do next" prompts already shown
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
@@ -474,8 +513,9 @@
       roomTier: 0,
       boostUntil: 0,          // hydroponic feed expiry (epoch ms)
       promoUntil: 0,          // promotion expiry (epoch ms)
-      pressBuds: 0,           // bud waiting in the rosin press hopper
-      pressDabs: 0,           // dabs pressed and waiting to be collected
+      pressRows: 0,           // press rows built in the extraction lab
+      presses: pressDefs.map(function () { return { state: "idle" }; }),
+      pressLv: [],            // press-plate speed level per row
       lastSaveTime: Date.now(),
     };
   }
@@ -518,10 +558,18 @@
       delete merged.lightPaid;
       if (typeof merged.boostUntil !== "number") merged.boostUntil = 0;
       if (typeof merged.promoUntil !== "number") merged.promoUntil = 0;
-      merged.pressBuds = Math.max(0, Math.min(PRESS_MAX, merged.pressBuds || 0));
-      merged.pressDabs = Math.max(0, Math.min(PRESS_MAX, merged.pressDabs || 0));
+      delete merged.pressBuds; delete merged.pressDabs;   // pre-grid fields
+      if (!Array.isArray(merged.presses) || merged.presses.length !== pressDefs.length) {
+        merged.presses = pressDefs.map(function () { return { state: "idle" }; });
+      }
+      if (!Array.isArray(merged.pressLv) || merged.pressLv.length !== MAX_PRESS_ROWS) {
+        merged.pressLv = [];
+        for (var pr = 0; pr < MAX_PRESS_ROWS; pr++) merged.pressLv.push(0);
+      }
+      merged.pressRows = Math.max(0, Math.min(MAX_PRESS_ROWS, merged.pressRows || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
+      merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
@@ -585,6 +633,7 @@
   function costBoost() { return 100; }
   function costBotanist() { return Math.round(350 * Math.pow(2.2, state.botanistLv || 0)); }
   function costRunner() { return Math.round(500 * Math.pow(2.2, state.runnerLv || 0)); }
+  function costExtractor() { return Math.round(1200 * Math.pow(2.2, state.extractorLv || 0)); }
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
   function costPromo() { return Math.round(sellValue() * 22); }
@@ -909,6 +958,7 @@
                                emissive: 0x8a4f00, emissiveIntensity: 0.5 }),
     pressBody: mat(0x4a5560, { roughness: 0.35, metalness: 0.7 }),
     pressPlate:mat(0xd9552f, { roughness: 0.4, metalness: 0.5 }),
+    labCoat:   mat(0xe8f1f8, { map: fabricTex, roughness: 0.85 }),
     runnerVest:mat(0xd8562f, { map: fabricTex, roughness: 0.9 }),
     runnerCap: mat(0x9c3a1c, { map: fabricTex, roughness: 0.9 }),
     energyCan: mat(0x1668c8, { roughness: 0.3, metalness: 0.55 }),
@@ -931,7 +981,7 @@
   var ground; // hit-tested by the tap-to-move raycaster below
   var roomGroup = new THREE.Group();
   scene.add(roomGroup);
-  var frontWallGroup = null, partitionGroup = null, dabWallGroup = null;
+  var frontWallGroup = null, partitionGroup = null, backDividers = [];
 
   // The camera looks straight down into the room, so ceiling fixtures can't be
   // modelled as geometry — they'd occlude the whole scene. Lights are emitted
@@ -974,10 +1024,11 @@
     while (roomGroup.children.length) roomGroup.remove(roomGroup.children[0]);
 
     var tier = state.roomTier;
-    var maxZ = retailMaxZForTier(tier);
+    var maxZ = RETAIL_MAX_Z;
+    var minZ = backMinZForTier(tier);
     var w = HALF_X * 2;
-    var d = maxZ - BACK_MIN_Z;
-    var cz = (BACK_MIN_Z + maxZ) / 2;
+    var d = maxZ - minZ;
+    var cz = (minZ + maxZ) / 2;
 
     // ---- floor across both rooms ----
     var floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, d), M.floorLight);
@@ -989,8 +1040,8 @@
     // plainer utility floor behind the partition, so the back of house reads
     // as a different space even though it's one slab
     var backFloor = new THREE.Mesh(
-      new THREE.BoxGeometry(w - 0.4, 0.06, PARTITION_Z - BACK_MIN_Z - 0.4), M.backFloor);
-    backFloor.position.set(0, 0.25, (BACK_MIN_Z + PARTITION_Z) / 2);
+      new THREE.BoxGeometry(w - 0.4, 0.06, PARTITION_Z - minZ - 0.4), M.backFloor);
+    backFloor.position.set(0, 0.25, (minZ + PARTITION_Z) / 2);
     backFloor.receiveShadow = true;
     roomGroup.add(backFloor);
 
@@ -1017,7 +1068,7 @@
       wall.receiveShadow = true;
       roomGroup.add(wall);
     }
-    wallSlab(w + wallThick * 2, wallThick, 0, BACK_MIN_Z, M.wallBack);
+    wallSlab(w + wallThick * 2, wallThick, 0, minZ, M.wallBack);
     // the front wall and everything mounted on it live in their own group so
     // they can be hidden when the camera swings outside the storefront
     frontWallGroup = new THREE.Group();
@@ -1026,8 +1077,8 @@
     frontWall.position.set(0, WALL_H / 2, maxZ);
     frontWall.receiveShadow = true;
     frontWallGroup.add(frontWall);
-    wallSlab(wallThick, PARTITION_Z - BACK_MIN_Z, -HALF_X, (BACK_MIN_Z + PARTITION_Z) / 2, M.wallBack);
-    wallSlab(wallThick, PARTITION_Z - BACK_MIN_Z, HALF_X, (BACK_MIN_Z + PARTITION_Z) / 2, M.wallBack);
+    wallSlab(wallThick, PARTITION_Z - minZ, -HALF_X, (minZ + PARTITION_Z) / 2, M.wallBack);
+    wallSlab(wallThick, PARTITION_Z - minZ, HALF_X, (minZ + PARTITION_Z) / 2, M.wallBack);
     wallSlab(wallThick, maxZ - PARTITION_Z, -HALF_X, (PARTITION_Z + maxZ) / 2);
     wallSlab(wallThick, maxZ - PARTITION_Z, HALF_X, (PARTITION_Z + maxZ) / 2);
 
@@ -1058,39 +1109,40 @@
       partitionGroup.add(sign);
     })();
 
-    // ---- divider that turns the level-2 extension into a real second room.
-    // Its doorway lines up with the bud counter so customers heading for the
-    // bud side walk straight through rather than clipping the wall. ----
-    dabWallGroup = null;
-    if (tier >= 1) {
-      var dabWall = new THREE.Group();
-      dabWallGroup = dabWall;
-      roomGroup.add(dabWall);
+    // ---- dividers between the back rooms. One per level, each with a
+    // doorway down the middle so the whole building is walkable end to end.
+    backDividers = [];
+    for (var bd = 1; bd <= tier; bd++) {
+      var dz = backDividerZ(bd);
+      var dw = new THREE.Group();
+      dw.userData.z = dz;
+      roomGroup.add(dw);
+      backDividers.push(dw);
       [-1, 1].forEach(function (sgn) {
         var edge = sgn < 0 ? -HALF_X : HALF_X;
-        var inner = DAB_DOOR_X + sgn * DAB_DOOR_HALF;
+        var inner = BACK_DOOR_X + sgn * BACK_DOOR_HALF;
         var segW2 = Math.abs(edge - inner);
         if (segW2 < 0.1) return;
-        var seg2 = new THREE.Mesh(new THREE.BoxGeometry(segW2, WALL_H, 0.45), M.wallAccent);
-        seg2.position.set((edge + inner) / 2, WALL_H / 2, DAB_WALL_Z);
+        var seg2 = new THREE.Mesh(new THREE.BoxGeometry(segW2, WALL_H, 0.45), M.wallBack);
+        seg2.position.set((edge + inner) / 2, WALL_H / 2, dz);
         seg2.castShadow = true; seg2.receiveShadow = true;
-        dabWall.add(seg2);
+        dw.add(seg2);
       });
       var hdrH = 1.8;
       var hdr = new THREE.Mesh(
-        new THREE.BoxGeometry(DAB_DOOR_HALF * 2 + 0.6, hdrH, 0.5), M.wallAccent);
-      hdr.position.set(DAB_DOOR_X, WALL_H - hdrH / 2, DAB_WALL_Z);
-      dabWall.add(hdr);
+        new THREE.BoxGeometry(BACK_DOOR_HALF * 2 + 0.6, hdrH, 0.5), M.wallBack);
+      hdr.position.set(BACK_DOOR_X, WALL_H - hdrH / 2, dz);
+      dw.add(hdr);
       [-1, 1].forEach(function (sgn) {
         var jamb2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, WALL_H - hdrH, 0.62), M.wallTrim);
-        jamb2.position.set(DAB_DOOR_X + sgn * DAB_DOOR_HALF, (WALL_H - hdrH) / 2, DAB_WALL_Z);
+        jamb2.position.set(BACK_DOOR_X + sgn * BACK_DOOR_HALF, (WALL_H - hdrH) / 2, dz);
         jamb2.castShadow = true;
-        dabWall.add(jamb2);
+        dw.add(jamb2);
       });
-      var dabSign = textSprite("DAB BAR", "#ffc36a");
-      dabSign.scale.set(2.8, 0.66, 1);
-      dabSign.position.set(DAB_DOOR_X, WALL_H - 0.9, DAB_WALL_Z + 0.4);
-      dabWall.add(dabSign);
+      var labSign = textSprite(bd === 1 ? "EXTRACTION LAB" : "LAB BAY " + bd, "#ffc36a");
+      labSign.scale.set(3.4, 0.66, 1);
+      labSign.position.set(BACK_DOOR_X, WALL_H - 0.9, dz + 0.4);
+      dw.add(labSign);
     }
 
     // ---- baseboard + crown molding around the retail floor ----
@@ -1175,97 +1227,8 @@
     spotFixture(roomGroup, SELL_ZONE.x, SELL_ZONE.z - 2, 0xfff1c9);
     spotFixture(roomGroup, PRICE_ZONE.x, PRICE_ZONE.z, 0xfff1c9);
 
-    // ---- retail reveals, unlocked by expanding the store forward ----
-    if (tier >= 1) {
-      var band1 = (retailMaxZForTier(0) + retailMaxZForTier(1)) / 2;
-      var g1 = new THREE.Group();
-      var back1 = new THREE.Mesh(new THREE.BoxGeometry(6.6, 4.6, 0.4), M.woodDark);
-      back1.position.y = 2.3; back1.castShadow = true; back1.receiveShadow = true;
-      g1.add(back1);
-      [1.1, 2.3, 3.5].forEach(function (y) {
-        var shelf = new THREE.Mesh(new THREE.BoxGeometry(6.6, 0.14, 1.3), M.plank);
-        shelf.position.set(0, y, 0.55); shelf.castShadow = true; shelf.receiveShadow = true;
-        g1.add(shelf);
-        addGlow(g1, 0, y - 0.12, 0.95, 4.4, 0xffe3ac, 0.22);
-        for (var j = 0; j < 4; j++) {
-          var jx = -2.4 + j * 1.6;
-          var jar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.32, 0.55, 14), j % 2 ? M.productJar2 : M.productJar);
-          jar.position.set(jx, y + 0.35, 0.55); jar.castShadow = true;
-          g1.add(jar);
-          var lid = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.1, 14), M.jarLid);
-          lid.position.set(jx, y + 0.66, 0.55); lid.castShadow = true;
-          g1.add(lid);
-        }
-      });
-      // right wall: the left side of the dab room is the press and dab bar
-      g1.position.set(11.6, 0, band1);
-      g1.rotation.y = -Math.PI / 2;
-      roomGroup.add(g1);
-      spotFixture(roomGroup, 10.8, band1, 0xfff1c9);
-    }
-
-    if (tier >= 2) {
-      var band2 = (retailMaxZForTier(1) + retailMaxZForTier(2)) / 2;
-      var g2 = new THREE.Group();
-      var seatBase = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.9, 1.8), M.couch);
-      seatBase.position.y = 0.5; seatBase.castShadow = true; seatBase.receiveShadow = true;
-      g2.add(seatBase);
-      var seatBack = new THREE.Mesh(new THREE.BoxGeometry(4.0, 1.4, 0.4), M.couch);
-      seatBack.position.set(0, 1.35, -0.7); seatBack.castShadow = true;
-      g2.add(seatBack);
-      [-1.0, 1.0].forEach(function (px) {
-        var cushion = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.28, 1.6), M.couch);
-        cushion.position.set(px, 1.06, 0.05); cushion.castShadow = true;
-        g2.add(cushion);
-      });
-      var table = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.16, 1.0), M.counterTop);
-      table.position.set(0, 0.55, 1.6); table.castShadow = true;
-      g2.add(table);
-      var potted = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.32, 0.6, 12), M.plantPot);
-      potted.position.set(2.6, 0.3, -0.6); potted.castShadow = true;
-      g2.add(potted);
-      for (var lf = 0; lf < 5; lf++) {
-        var la = (lf / 5) * Math.PI * 2;
-        var leaf = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.85, 5), M.plantDeep);
-        leaf.position.set(2.6 + Math.cos(la) * 0.16, 0.95, -0.6 + Math.sin(la) * 0.16);
-        leaf.rotation.set(Math.sin(la) * 0.5, 0, Math.cos(la) * -0.5);
-        leaf.castShadow = true;
-        g2.add(leaf);
-      }
-      var rug = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.06, 4.4), M.rug);
-      rug.position.set(0, 0.26, 1.0); rug.receiveShadow = true;
-      g2.add(rug);
-      g2.position.set(9.8, 0, band2);
-      g2.rotation.y = -Math.PI / 2;
-      roomGroup.add(g2);
-      spotFixture(roomGroup, 7.4, band2, 0xffd9a0);
-    }
-
-    if (tier >= 3) {
-      var band3 = (retailMaxZForTier(2) + retailMaxZForTier(3)) / 2;
-      var mural = textSprite("PREMIUM STRAINS", "#ffe066");
-      mural.scale.set(5.0, 1.25, 1);
-      mural.position.set(0, 6.4, maxZ - 0.35);
-      roomGroup.add(mural);
-      var g3 = new THREE.Group();
-      var back3 = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.6, 0.35), M.woodDark);
-      back3.position.y = 1.8; back3.castShadow = true;
-      g3.add(back3);
-      [1.0, 2.1].forEach(function (y) {
-        var shelf = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.14, 1.1), M.plank);
-        shelf.position.set(0, y, 0.5); shelf.castShadow = true;
-        g3.add(shelf);
-        for (var k = 0; k < 3; k++) {
-          var jar3 = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 12), k % 2 ? M.productJar : M.productJar2);
-          jar3.position.set(-1.7 + k * 1.7, y + 0.32, 0.5); jar3.castShadow = true;
-          g3.add(jar3);
-        }
-      });
-      g3.position.set(-8.2, 0, band3);
-      g3.rotation.y = Math.PI / 2;
-      roomGroup.add(g3);
-      spotFixture(roomGroup, -7.4, band3, 0xfff1c9);
-    }
+    // Retail no longer changes with level — the floor out front is a
+    // fixed size and the level-up payoff is a whole new back room.
   }
   rebuildRoom();
 
@@ -1523,6 +1486,10 @@
   })();
 
   var counterTiers = [], counterTopMesh = null;
+  // carried-item geometries, declared early so fittings can reuse them
+  var seedGeo = new THREE.BoxGeometry(0.52, 0.66, 0.15);   // seed packet
+  var budGeo = new THREE.ConeGeometry(0.34, 0.62, 6);       // bud, back to a cone
+  var dabGeo = new THREE.IcosahedronGeometry(0.27, 0);      // dab, a glassy blob
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   (function dispensaryCounter() {
     var g = new THREE.Group();
@@ -1667,65 +1634,24 @@
     scene.add(g);
   })();
 
-  // ---- rosin press: bud goes in the hopper, dabs come out the tray ----
-  var pressGroup = new THREE.Group();
-  var pressRam, pressHopper = new THREE.Group(), pressOut = new THREE.Group();
-  (function buildPress() {
-    var g = pressGroup;
-    var base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.2, 2.4), M.pressBody);
-    base.position.y = 0.85; base.castShadow = true; base.receiveShadow = true;
-    g.add(base);
-    // two uprights and a crossbeam, so it reads as a press
-    [-1.3, 1.3].forEach(function (ux) {
-      var post = new THREE.Mesh(new THREE.BoxGeometry(0.34, 3.2, 0.34), M.metalRack);
-      post.position.set(ux, 3.0, 0); post.castShadow = true;
-      g.add(post);
-    });
-    var beam = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.5, 1.0), M.pressBody);
-    beam.position.y = 4.5; beam.castShadow = true;
-    g.add(beam);
-    // the ram that pumps down each time a bud is squeezed
-    pressRam = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.55, 1.5), M.pressPlate);
-    pressRam.position.y = 3.1; pressRam.castShadow = true;
-    g.add(pressRam);
-    var bed = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.3, 1.6), M.metal);
-    bed.position.y = 1.6; bed.receiveShadow = true;
-    g.add(bed);
-    // hopper of waiting bud on the left, finished dabs on the tray at the front
-    pressHopper.position.set(-1.85, 1.75, 0.9);
-    g.add(pressHopper);
-    pressOut.position.set(0, 1.85, 1.5);
-    g.add(pressOut);
-    var outTray = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.08, 0.8), M.metal);
-    outTray.position.set(0, 1.78, 1.5); outTray.receiveShadow = true;
-    g.add(outTray);
-    addGlow(g, 0, 2.0, 1.5, 3.0, 0xffb03f, 0.3);
-    var lbl = textSprite("ROSIN PRESS", "#ffc36a");
-    lbl.scale.set(3.2, 0.7, 1);
-    lbl.position.set(0, 5.4, 0);
-    g.add(lbl);
-    g.position.set(PRESS_ZONE.x, 0, PRESS_ZONE.z);
-    scene.add(g);
-  })();
-
   // ---- dab bar: where finished dabs are set out for customers ----
   var dabPile = new THREE.Group();
   var dabBarGroup = new THREE.Group();
   (function buildDabBar() {
     var g = dabBarGroup;
-    var body = new THREE.Mesh(new THREE.BoxGeometry(6.0, 1.9, 1.7), M.counter);
+    var body = new THREE.Mesh(new THREE.BoxGeometry(4.0, 1.9, 1.6), M.counter);
     body.position.y = 1.05; body.castShadow = true; body.receiveShadow = true;
     g.add(body);
-    var top2 = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.18, 2.0), M.counterStone);
+    var top2 = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.18, 1.9), M.counterStone);
     top2.position.y = 2.05; top2.castShadow = true; top2.receiveShadow = true;
     g.add(top2);
-    var glass = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.9, 0.06), M.counterGlass);
+    var glass = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.9, 0.06), M.counterGlass);
     glass.position.set(0, 1.5, 0.88);
     g.add(glass);
     // Deliberately low: you approach this bar from the press side, so the
     // camera is looking at it from behind you. A tall back panel here hid the
     // player completely.
-    var backBar = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.1, 0.3), M.wallAccent);
+    var backBar = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.1, 0.3), M.wallAccent);
     backBar.position.set(0, 0.75, -1.3); backBar.castShadow = true;
     g.add(backBar);
     addGlow(g, 0, 2.3, -0.6, 4.0, 0xffb03f, 0.3);
@@ -1735,7 +1661,7 @@
     g.add(sign);
     dabPile.position.set(0, 2.14, 0.2);
     g.add(dabPile);
-    var tray2 = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.07, 0.9), M.metal);
+    var tray2 = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.07, 0.85), M.metal);
     tray2.position.set(0, 2.12, 0.2); tray2.receiveShadow = true;
     g.add(tray2);
     g.position.set(DAB_SELL_ZONE.x, 0, DAB_SELL_ZONE.z);
@@ -2080,6 +2006,117 @@
     }
   }
 
+  // ---- one rosin press per grid slot, mirroring how a grow bed is built ----
+  var pressObjects = [];
+  function makePress(i) {
+    var d = pressDefs[i];
+    var g = new THREE.Group();
+    g.position.set(d.x, 0, d.z);
+
+    var base = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.1, 2.2), M.pressBody);
+    base.position.y = 0.8; base.castShadow = true; base.receiveShadow = true;
+    g.add(base);
+    [-1.15, 1.15].forEach(function (ux) {
+      var post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.6, 0.3), M.metalRack);
+      post.position.set(ux, 2.5, 0); post.castShadow = true;
+      g.add(post);
+    });
+    var beam = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.44, 0.9), M.pressBody);
+    beam.position.y = 3.8; beam.castShadow = true;
+    g.add(beam);
+    // the ram pumps while this press is working
+    var ram = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 1.3), M.pressPlate);
+    ram.position.y = 2.7; ram.castShadow = true;
+    g.add(ram);
+    var bed = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.28, 1.4), M.metal);
+    bed.position.y = 1.45; bed.receiveShadow = true;
+    g.add(bed);
+
+    // the bud sitting in it, and the finished dab on the output tray
+    var loaded = new THREE.Mesh(budGeo, M.bud);
+    loaded.position.set(0, 1.8, 0); loaded.visible = false; loaded.castShadow = true;
+    g.add(loaded);
+    var done = new THREE.Mesh(dabGeo, M.dab);
+    done.position.set(0, 1.75, 1.25); done.visible = false; done.castShadow = true;
+    g.add(done);
+    var readyGlow = new THREE.Mesh(
+      new THREE.RingGeometry(1.0, 1.35, 22),
+      new THREE.MeshBasicMaterial({ color: 0xffb03f, transparent: true, opacity: 0.75, side: THREE.DoubleSide })
+    );
+    readyGlow.rotation.x = -Math.PI / 2;
+    readyGlow.position.y = 1.62;
+    readyGlow.visible = false;
+    g.add(readyGlow);
+
+    g.visible = false;
+    scene.add(g);
+    return { group: g, ram: ram, loaded: loaded, done: done, glow: readyGlow };
+  }
+  for (var qi = 0; qi < pressDefs.length; qi++) pressObjects.push(makePress(qi));
+
+  // ---- one pay tile per press row, same widget as the grow-bed rows ----
+  var pressTiles = [];
+  function makePressTile(rowIdx) {
+    var rz = pressDefs[rowIdx * PRESS_COLS].z;
+    var sq = makePaySquare(PRESS_TILE_HALF, 0xffb03f, "#ffc36a", "ADD PRESSES", rz);
+    sq.group.position.set(PRESS_TILE_X, 0, rz);
+    sq.group.visible = false;
+    scene.add(sq.group);
+    return sq;
+  }
+  for (var pti = 0; pti < MAX_PRESS_ROWS; pti++) pressTiles.push(makePressTile(pti));
+
+  // What a press row's tile is selling: build the row, then speed it up.
+  var PRESS_ADD_COLOR = 0xffb03f, PRESS_UP_COLOR = 0x8fd0ff;
+  function pressRowOffer(r) {
+    if (r >= pressRowsAvailable()) return null;      // bay not built yet
+    var built = state.pressRows || 0;
+    if (r > built) return null;                      // can't skip ahead
+    if (r === built) {
+      return {
+        kind: "pressrow", row: r, key: "prow" + r,
+        label: "ADD PRESSES", color: PRESS_ADD_COLOR, hex: "#ffc36a",
+        name: "Add Press Row " + (r + 1),
+        desc: "Install " + PRESS_COLS + " more rosin presses",
+        cost: pressRowCost(r),
+      };
+    }
+    var lv = (state.pressLv && state.pressLv[r]) || 0;
+    if (lv >= MAX_PRESS_LV) return null;
+    var idx0 = r * PRESS_COLS;
+    return {
+      kind: "pressup", row: r, key: "pup" + r,
+      label: "FASTER PRESS", color: PRESS_UP_COLOR, hex: "#bfe8ff",
+      name: lv === 0 ? "Upgrade Press Plates" : "Upgrade Press Plates Lv." + (lv + 1),
+      desc: "Row " + (r + 1) + " · " + pressTimeFor(idx0).toFixed(1) + "s → " +
+            (BASE_PRESS_TIME * Math.pow(0.72, lv + 1) * (boostActive() ? 0.5 : 1)).toFixed(1) + "s per dab",
+      cost: pressUpgradeCost(lv),
+    };
+  }
+
+  function updatePressTiles(now) {
+    for (var i = 0; i < pressTiles.length; i++) {
+      var pt = pressTiles[i];
+      var off = pressRowOffer(i);
+      pt.group.visible = !!off;
+      if (!off) continue;
+      if (pt.lbl.userData.last !== off.label) {
+        updateSpriteText(pt.lbl, off.label, off.hex);
+        pt.tint.material.color.setHex(off.color);
+        pt.lbl.userData.last = off.label;
+        pt.price.userData.last = null;
+      }
+      var paid = state.stationPaid[off.key] || 0;
+      var remain = Math.max(0, Math.ceil(off.cost - paid));
+      if (pt.price.userData.last !== remain) {
+        updateSpriteText(pt.price, "$" + fmt(remain), off.hex);
+        pt.price.userData.last = remain;
+      }
+      setPaySquareProgress(pt, Math.min(1, paid / off.cost));
+      pt.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
+
   // ---- how a bed shows its light level ----
   // Nothing hangs above the bed any more: overhead rigs sat right in the
   // camera's line of sight and hid the beds underneath them. The level now
@@ -2242,9 +2279,6 @@
   })();
 
   var stackMeshes = [];
-  var seedGeo = new THREE.BoxGeometry(0.52, 0.66, 0.15);   // seed packet
-  var budGeo = new THREE.ConeGeometry(0.34, 0.62, 6);       // bud, back to a cone
-  var dabGeo = new THREE.IcosahedronGeometry(0.27, 0);      // dab, a glassy blob
 
   function syncStack() {
     while (stackMeshes.length > player.backpack.length) stackAnchor.remove(stackMeshes.pop());
@@ -2586,10 +2620,24 @@
 
   // Runners work both rooms, so they have to use the doorway — walking a
   // straight line to the counter would take them through the partition wall.
+  // Every doorway in the building sits at x=0, so routing between rooms is
+  // just "walk to the nearest doorway between here and there, then carry on".
+  function roomBoundaries() {
+    var list = [PARTITION_Z];
+    for (var i = 1; i <= (state.roomTier || 0); i++) list.push(backDividerZ(i));
+    return list;
+  }
   function viaDoor(b, tx, tz) {
-    var sameSide = (b.pos.z < PARTITION_Z) === (tz < PARTITION_Z);
-    if (sameSide) return { x: tx, z: tz };
-    return { x: 0, z: PARTITION_Z + (b.pos.z < PARTITION_Z ? 1.0 : -1.0) };
+    var bs = roomBoundaries(), best = null, bestD = Infinity;
+    for (var i = 0; i < bs.length; i++) {
+      var bz = bs[i];
+      var crosses = (b.pos.z > bz && tz < bz) || (b.pos.z < bz && tz > bz);
+      if (!crosses) continue;
+      var d = Math.abs(bz - b.pos.z);
+      if (d < bestD) { bestD = d; best = bz; }
+    }
+    if (best === null) return { x: tx, z: tz };
+    return { x: 0, z: best + (b.pos.z > best ? 1.0 : -1.0) };
   }
 
   // first ready bed nobody else is already running to
@@ -2684,6 +2732,202 @@
 
       for (var c2 = 0; c2 < b.crate.children.length; c2++) {
         b.crate.children[c2].visible = c2 < b.carrying;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  // ===================================================================
+  //  EXTRACTORS — hired staff who work the press line end to end
+  // ===================================================================
+  var extractors = [];
+  var EXT_SPEED = 5.0;
+  var EXT_ACT_TIME = 0.4;
+  var EXT_CARRY = 3;
+
+  (function buildExtractors() {
+    for (var n = 0; n < MAX_EXTRACTORS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.labCoat);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      // goggles, so they read as lab staff at a glance
+      var goggles = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.16, 0.1), M.dark);
+      goggles.position.set(0, 1.98, 0.31); g.add(goggles);
+      var cap = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.35, 0.2, 10), M.labCoat);
+      cap.position.y = 2.24; g.add(cap);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.95, 0.34);
+      for (var c = 0; c < EXT_CARRY; c++) {
+        var it = new THREE.Mesh(dabGeo, M.dab);
+        it.scale.setScalar(0.7);
+        it.position.set((c - 1) * 0.3, 0, 0);
+        it.visible = false;
+        tote.add(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      extractors.push({
+        obj: g, l1: l1, l2: l2, tote: tote,
+        pos: { x: EXTRACT_ZONE.x + 1.4 + n * 0.9, z: EXTRACT_ZONE.z + 1.2 },
+        phase: "toBud", timer: 0, target: -1, carrying: 0, holdingBud: 0,
+        walkPhase: n * 1.3, slot: n,
+      });
+    }
+  })();
+
+  function extFreeThing(self, list, key, want) {
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].state !== want) continue;
+      var taken = false;
+      for (var j = 0; j < extractors.length; j++) {
+        var o = extractors[j];
+        if (o !== self && o.obj.visible && o[key] === i) { taken = true; break; }
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
+  function extStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(EXT_SPEED * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function updateExtractors(now, dt) {
+    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
+    for (var i = 0; i < extractors.length; i++) {
+      var b = extractors[i];
+      var hired = dabsUnlocked() && i < (state.extractorLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.target = -1; b.carrying = 0; b.holdingBud = 0; continue; }
+
+      var walking = false;
+
+      if (b.phase === "toBud") {
+        // harvest a ready bed to feed the presses
+        if (b.holdingBud >= EXT_CARRY) { b.phase = "toPress"; b.target = -1; continue; }
+        if (b.target < 0 || b.target >= state.plotsUnlocked ||
+            state.plots[b.target].state !== "ready") {
+          b.target = extFreeThing(b, state.plots.slice(0, state.plotsUnlocked), "target", "ready");
+        }
+        if (b.target < 0) {
+          if (b.holdingBud > 0) { b.phase = "toPress"; continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        var bd = plotDefs[b.target];
+        var t1 = viaDoor(b, bd.x, bd.z);
+        walking = !extStepTo(b, t1.x, t1.z, dt);
+        if (!walking && t1.x === bd.x && t1.z === bd.z) { b.phase = "pick"; b.timer = EXT_ACT_TIME; }
+
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.target >= 0 && state.plots[b.target].state === "ready") {
+            state.plots[b.target] = { state: "empty" };
+            b.holdingBud++;
+          }
+          b.target = -1;
+          b.phase = "toBud";
+        }
+
+      } else if (b.phase === "toPress") {
+        // load an idle press with a bud we're carrying
+        if (b.holdingBud <= 0) { b.phase = "toBud"; b.target = -1; continue; }
+        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].state !== "idle") {
+          b.target = extFreeThing(b, state.presses.slice(0, builtPresses), "target", "idle");
+        }
+        if (b.target < 0) { b.phase = "toReady"; continue; }
+        var pd = pressDefs[b.target];
+        var t2 = viaDoor(b, pd.x, pd.z);
+        walking = !extStepTo(b, t2.x, t2.z, dt);
+        if (!walking && t2.x === pd.x && t2.z === pd.z) { b.phase = "load"; b.timer = EXT_ACT_TIME; }
+
+      } else if (b.phase === "load") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var li = b.target;
+          if (li >= 0 && li < builtPresses && state.presses[li].state === "idle" && b.holdingBud > 0) {
+            state.presses[li] = {
+              state: "pressing", startedAt: Date.now(), duration: pressTimeFor(li) * 1000,
+            };
+            b.holdingBud--;
+          }
+          b.target = -1;
+          b.phase = b.holdingBud > 0 ? "toPress" : "toReady";
+        }
+
+      } else if (b.phase === "toReady") {
+        // collect finished dabs, then run them out front
+        if (b.carrying >= EXT_CARRY) { b.phase = "toCase"; b.target = -1; continue; }
+        if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].state !== "ready") {
+          b.target = extFreeThing(b, state.presses.slice(0, builtPresses), "target", "ready");
+        }
+        if (b.target < 0) {
+          if (b.carrying > 0) { b.phase = "toCase"; continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        var rd = pressDefs[b.target];
+        var t3 = viaDoor(b, rd.x, rd.z);
+        walking = !extStepTo(b, t3.x, t3.z, dt);
+        if (!walking && t3.x === rd.x && t3.z === rd.z) { b.phase = "grab"; b.timer = EXT_ACT_TIME; }
+
+      } else if (b.phase === "grab") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var gi = b.target;
+          if (gi >= 0 && gi < builtPresses && state.presses[gi].state === "ready") {
+            state.presses[gi] = { state: "idle" };
+            b.carrying++;
+          }
+          b.target = -1;
+          b.phase = "toReady";
+        }
+
+      } else if (b.phase === "toCase") {
+        var cx = DAB_SELL_ZONE.x - 1.0 + b.slot * 1.0, cz = DAB_SELL_ZONE.z + 1.6;
+        var t4 = viaDoor(b, cx, cz);
+        walking = !extStepTo(b, t4.x, t4.z, dt);
+        if (!walking && t4.x === cx && t4.z === cz) { b.phase = "drop"; b.timer = EXT_ACT_TIME; }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          while (b.carrying > 0) { dropDabOnBar(); b.carrying--; }
+          renderUpgrades();
+          b.phase = "toBud";
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.8;
+          if (b.carrying > 0) b.phase = "toCase";
+          else if (b.holdingBud > 0) b.phase = "toPress";
+          else b.phase = "toBud";
+        }
+      }
+
+      for (var c2 = 0; c2 < b.tote.children.length; c2++) {
+        b.tote.children[c2].visible = c2 < b.carrying;
       }
       b.obj.position.set(b.pos.x, 0, b.pos.z);
       var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
@@ -2889,74 +3133,63 @@
     renderUpgrades();
   }
 
-  // ---- the press: drop bud into the hopper, pick finished dabs back up ----
-  var pressAcc = 0;
-  function handlePressZone() {
+  // ---- presses work like beds: load one with bud, wait, collect the dab ----
+  function handlePresses() {
     if (!dabsUnlocked()) return;
-    if (d2(player.pos.x, player.pos.z, PRESS_ZONE.x, PRESS_ZONE.z) > PRESS_ZONE.r + PLAYER_RADIUS) return;
+    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
+    for (var i = 0; i < builtPresses; i++) {
+      var d = pressDefs[i], p = state.presses[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > PRESS_SIZE * 0.7 + PLAYER_RADIUS) continue;
 
-    // feed it whatever bud you're carrying
-    var fed = 0;
-    for (var i = player.backpack.length - 1; i >= 0; i--) {
-      if (state.pressBuds + fed >= PRESS_MAX) break;
-      if (player.backpack[i].type === "bud") { player.backpack.splice(i, 1); fed++; }
-    }
-    if (fed) {
-      state.pressBuds += fed;
-      addFloater(PRESS_ZONE.x, 3.4, PRESS_ZONE.z, "+" + fed + " BUD", "#a8f57a");
-    }
-    // and take back anything it has finished
-    var taken = 0;
-    while (state.pressDabs > 0 && player.backpack.length < backpackCap()) {
-      state.pressDabs--;
-      player.backpack.push({ type: "dab" });
-      taken++;
-    }
-    if (taken) {
-      addFloater(PRESS_ZONE.x, 3.9, PRESS_ZONE.z, "+" + taken + " DAB", "#ffc36a");
-      markTut("press");
-    }
-    if (fed || taken) { syncStack(); renderUpgrades(); }
-  }
-
-  function updatePress(now, dt) {
-    pressGroup.visible = dabsUnlocked();
-    dabBarGroup.visible = dabsUnlocked();
-    if (!dabsUnlocked()) return;
-
-    if (state.pressBuds > 0 && state.pressDabs < PRESS_MAX) {
-      pressAcc += dt;
-      if (pressAcc >= PRESS_SECONDS) {
-        pressAcc -= PRESS_SECONDS;
-        state.pressBuds--;
-        state.pressDabs++;
-        addFloater(PRESS_ZONE.x, 3.0, PRESS_ZONE.z, "DAB!", "#ffc36a");
+      if (p.state === "idle") {
+        for (var b = player.backpack.length - 1; b >= 0; b--) {
+          if (player.backpack[b].type === "bud") {
+            player.backpack.splice(b, 1);
+            syncStack();
+            state.presses[i] = {
+              state: "pressing", startedAt: Date.now(), duration: pressTimeFor(i) * 1000,
+            };
+            addFloater(d.x, 3.0, d.z, "PRESSING", "#ffc36a");
+            markTut("press");
+            break;
+          }
+        }
+      } else if (p.state === "ready" && player.backpack.length < backpackCap()) {
+        player.backpack.push({ type: "dab" });
+        syncStack();
+        state.presses[i] = { state: "idle" };
+        addFloater(d.x, 3.2, d.z, "+DAB", "#ffc36a");
+        markTut("dabgrab");
       }
-    } else {
-      pressAcc = 0;
     }
-    // ram pumps while there's work, rests when the hopper is empty
-    var working = state.pressBuds > 0 && state.pressDabs < PRESS_MAX;
-    var pump = working ? Math.abs(Math.sin(now * 0.006)) : 1;
-    pressRam.position.y = 2.15 + pump * 0.95;
-
-    syncPileGroup(pressHopper, state.pressBuds, budGeo, M.bud, 0.34, 0.42);
-    syncPileGroup(pressOut, state.pressDabs, dabGeo, M.dab, 0.3, 0.36);
   }
 
-  // keeps a little heap of meshes in sync with a count, laid out in rows
-  function syncPileGroup(grp, count, geo, matl, step, lift) {
-    while (grp.children.length > count) grp.remove(grp.children[grp.children.length - 1]);
-    while (grp.children.length < count) {
-      var m = new THREE.Mesh(geo, matl);
-      m.castShadow = true;
-      grp.add(m);
+  function updatePressStates() {
+    for (var i = 0; i < state.presses.length; i++) {
+      var p = state.presses[i];
+      if (p.state === "pressing" && Date.now() - p.startedAt >= p.duration) p.state = "ready";
     }
-    for (var i = 0; i < grp.children.length; i++) {
-      var per = 4;
-      var row = Math.floor(i / per), col = i % per;
-      grp.children[i].position.set((col - (per - 1) / 2) * step, row * lift, 0);
-      grp.children[i].rotation.y = i * 0.7;
+  }
+
+  function updatePressVisuals(now) {
+    var builtPresses = (state.pressRows || 0) * PRESS_COLS;
+    for (var i = 0; i < pressObjects.length; i++) {
+      var po = pressObjects[i];
+      var live = dabsUnlocked() && i < builtPresses;
+      po.group.visible = live;
+      if (!live) continue;
+      var p = state.presses[i];
+      var working = p.state === "pressing";
+      // ram pumps while squeezing, sits down when idle or finished
+      var pump = working ? Math.abs(Math.sin(now * 0.007 + i)) : 1;
+      po.ram.position.y = 1.85 + pump * 0.85;
+      po.loaded.visible = working;
+      po.done.visible = p.state === "ready";
+      po.glow.visible = p.state === "ready";
+      if (p.state === "ready") {
+        po.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
+        po.done.rotation.y = now * 0.002;
+      }
     }
   }
 
@@ -3180,7 +3413,7 @@
     m.userData.restY = 0.14 + Math.floor(row / 3) * 0.3;
     m.userData.bornAt = performance.now();
     m.userData.value = dabValue();   // locked in at drop-off time
-    m.position.set(-1.6 + col * 0.62, m.userData.restY + 2.2, -0.25 + (row % 3) * 0.28);
+    m.position.set(-1.3 + col * 0.52, m.userData.restY + 2.2, -0.22 + (row % 3) * 0.26);
     m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
     dabMeshes.push(m);
   }
@@ -3261,7 +3494,7 @@
     player.pos.z += v.z * spd * dt;
     // keep the player inside the compound (with a little room at the gate)
     player.pos.x = Math.max(-HALF_X + 1, Math.min(HALF_X - 1, player.pos.x));
-    player.pos.z = Math.max(BACK_MIN_Z + 1.4, Math.min(retailMaxZForTier(state.roomTier) - 1.4, player.pos.z));
+    player.pos.z = Math.max(backMinZForTier(state.roomTier) + 1.4, Math.min(RETAIL_MAX_Z - 1.4, player.pos.z));
     player.obj.position.set(player.pos.x, 0, player.pos.z);
 
     if (moving) {
@@ -3324,8 +3557,14 @@
     if (partitionGroup) {
       partitionGroup.visible = !(player.pos.z < PARTITION_Z && camZ > PARTITION_Z);
     }
-    if (dabWallGroup) {
-      dabWallGroup.visible = !(player.pos.z < DAB_WALL_Z && camZ > DAB_WALL_Z);
+    // Same trick for every back-room divider the camera might be behind, plus
+    // a proximity fade: tap-to-move raycasts against the floor, so a solid
+    // wall in the way means you can't tap the room beyond it to walk there.
+    for (var bwi = 0; bwi < backDividers.length; bwi++) {
+      var bw = backDividers[bwi], bz = bw.userData.z;
+      var behind = player.pos.z < bz && camZ > bz;
+      var approaching = player.pos.z > bz && player.pos.z < bz + 11;
+      bw.visible = !(behind || approaching);
     }
   }
 
@@ -3354,8 +3593,9 @@
   // all of them the bar goes away for good.
   var TUT_STEPS = [
     { key: "collect", text: "💵 Grab your cash by the till" },
-    { key: "dabsell", text: "🍯 Set your dabs out on the dab bar" },
-    { key: "press",   text: "⚙️ Feed bud into the rosin press" },
+    { key: "dabsell", text: "🍯 Take your dabs out to the display case" },
+    { key: "dabgrab", text: "🍯 A press is done — grab the dab" },
+    { key: "press",   text: "⚙️ Load a press with bud out in the lab" },
     { key: "sell",    text: "🏪 Take your buds out to the counter" },
     { key: "harvest", text: "🌾 A bed is ready — harvest it" },
     { key: "plant",   text: "🌱 Stand on an empty bed to plant" },
@@ -3379,8 +3619,20 @@
       if (state.plots[b].state === "ready") anyReady = true;
       if (state.plots[b].state === "empty") anyEmpty = true;
     }
+    var hasDab = false, anyPressReady = false, anyPressIdle = false;
+    for (var c0 = 0; c0 < player.backpack.length; c0++) {
+      if (player.backpack[c0].type === "dab") hasDab = true;
+    }
+    var builtP = (state.pressRows || 0) * PRESS_COLS;
+    for (var c1 = 0; c1 < builtP; c1++) {
+      if (state.presses[c1].state === "ready") anyPressReady = true;
+      if (state.presses[c1].state === "idle") anyPressIdle = true;
+    }
     var applies = {
       collect: pendingCash > 0,
+      dabsell: hasDab,
+      dabgrab: anyPressReady,
+      press:   anyPressIdle && hasBud,
       sell:    hasBud,
       harvest: anyReady,
       plant:   hasSeed && anyEmpty,
@@ -3509,6 +3761,28 @@
       },
     },
     {
+      id: "extractor", label: "EXTRACTOR", icon: "\u2697\ufe0f", x: EXTRACT_ZONE.x, z: EXTRACT_ZONE.z,
+      color: 0x8fd0ff, kiosk: false,
+      hidden: function () { return !dabsUnlocked(); },
+      name: function () {
+        return (state.extractorLv || 0) === 0 ? "Hire an Extractor" : "Hire Another Extractor";
+      },
+      desc: function () {
+        var n = state.extractorLv || 0;
+        return n >= MAX_EXTRACTORS
+          ? "Your full lab crew is on shift"
+          : (n === 0
+              ? "They load presses with bud and run dabs out to the case"
+              : n + " on staff \u00b7 hire one more to press faster");
+      },
+      cost: costExtractor,
+      maxed: function () { return (state.extractorLv || 0) >= MAX_EXTRACTORS; },
+      buy: function () {
+        state.extractorLv = (state.extractorLv || 0) + 1;
+        toast("\u2697\ufe0f Extractor hired \u2014 they'll work the press line!");
+      },
+    },
+    {
       id: "promo", label: "PROMOTION", icon: "\ud83d\udce3", x: PROMO_ZONE.x, z: PROMO_ZONE.z,
       color: 0xffb63f, kiosk: false,
       name: function () { return "Run a Promotion"; },
@@ -3626,6 +3900,9 @@
   function refreshStationTags() {
     stationDefs.forEach(function (st) {
       var sq = st.sq;
+      // some stations only exist once their room does
+      if (st.hidden && st.hidden()) { st.obj.visible = false; return; }
+      st.obj.visible = true;
       if (st.maxed && st.maxed()) {
         if (sq.price.userData.last !== "MAX") {
           updateSpriteText(sq.price, "MAX", "#9fb0a6");
@@ -3689,8 +3966,34 @@
         };
       })(off, rz);
     }
+    // press rows work identically, from their own tile out in the lab
+    for (var pr = 0; pr < MAX_PRESS_ROWS; pr++) {
+      var pz = pressDefs[pr * PRESS_COLS].z;
+      if (!inBox(player.pos.x, player.pos.z, PRESS_TILE_X, pz, PRESS_TILE_HALF)) continue;
+      var poff = pressRowOffer(pr);
+      if (!poff) break;
+      return (function (o, zz) {
+        return {
+          kind: o.kind, key: o.key, slot: "presstile" + o.row,
+          name: o.name, desc: o.desc,
+          cost: o.cost, maxed: false,
+          x: PRESS_TILE_X, z: zz, y: 1.2,
+          complete: function () {
+            if (o.kind === "pressrow") {
+              state.pressRows = o.row + 1;
+              addFloater(PRESS_TILE_X, 2.6, zz, "PRESSES IN!", "#ffc36a");
+              toast("⚙️ New row of presses installed!");
+            } else {
+              state.pressLv[o.row] = (state.pressLv[o.row] || 0) + 1;
+              addFloater(PRESS_TILE_X, 2.6, zz, "FASTER!", "#bfe8ff");
+            }
+          },
+        };
+      })(poff, pz);
+    }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
+      if (st.hidden && st.hidden()) continue;
       if (inBox(player.pos.x, player.pos.z, st.x, st.z, STATION_PAD_HALF)) {
         return {
           kind: "station", key: st.id, slot: "station" + st.id,
@@ -3860,20 +4163,23 @@
     handleSeedZone(Date.now());
     handlePlots();
     handleSellZone();
-    handlePressZone();
+    handlePresses();
     handleDabSellZone();
     updatePlotVisuals(now);
     updateRowTiles(now);
+    updatePressTiles(now);
     updateStack(now);
     updateCounterPile(now, dt);
     updateDabPile(now);
-    updatePress(now, dt);
+    updatePressStates();
+    updatePressVisuals(now);
     updateCashDrops(now, dt);
     payIntoZone(dt);
     updateCoins(dt);
     updateNpcs(now, dt);
     updateBotanists(now, dt);
     updateRunners(now, dt);
+    updateExtractors(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
