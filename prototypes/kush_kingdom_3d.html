@@ -444,14 +444,14 @@
   // The shop grows backwards, never forwards. The retail floor with the
   // register is a fixed size at every level; each level instead adds another
   // back room behind the last, which is where production happens.
-  var RETAIL_MAX_Z = 2;            // storefront wall — never moves
+  var RETAIL_MAX_Z = 13;           // storefront wall — never moves
   var GROW_ROOM_MIN_Z = -32;       // back wall of the grow room
   var BACK_ROOM_DEPTH = 18;        // each added back room is this deep
   var ROOM_TIERS = [
-    { camDist: 22 },               // level 1: grow room only
-    { camDist: 30 },               // level 2: + extraction lab
-    { camDist: 36 },               // level 3: + second lab bay
-    { camDist: 42 },               // level 4: + third lab bay
+    { camDist: 26 },               // level 1: grow room only
+    { camDist: 32 },               // level 2: + extraction lab
+    { camDist: 37 },               // level 3: + edibles kitchen
+    { camDist: 42 },               // level 4: + fourth room
   ];
   // rear-most wall for a given tier: one more room every level
   function backMinZForTier(t) { return GROW_ROOM_MIN_Z - t * BACK_ROOM_DEPTH; }
@@ -490,9 +490,10 @@
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
-  // Kept left of x=0.35: the Street Value Lv.2 counter grows a side cabinet
-  // run that reaches that far and used to sit right on top of this pad.
-  var CASH_PAD  = { x: -1.6, z: -4.2, half: 1.45 }; // payout tray beside the till
+  // Tucked in behind the till on the staff side. Kept clear of the side
+  // cabinet run the counter grows at Street Value Lv.2, which used to sit
+  // right on top of this pad.
+  var CASH_PAD  = { x: 2.0, z: -7.8, half: 1.45 }; // payout tray beside the till
   var PRICE_ZONE = { x: -9.0, z: -5.0 };           // pricing station
   var EXPAND_STATION = { x: 10.5, z: -8.0 };       // expand-store terminal
   // Sits in the open floor between the door and the pricing kiosk. Kept off
@@ -502,16 +503,23 @@
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
   var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
   var HOPPER_ZONE  = { x: -10.0, z: -35.0 };       // bigger press hoppers
+  var PURITY_ZONE  = { x: -10.0, z: -41.0 };       // what a dab is worth
   // HR corner of the break room: upgrades that apply to every hired hand
   var HR_ZONE = { x: 11.0, z: -28.5 };
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
   var MAX_EXTRACTORS = 3;
 
   // dab display case, on the fixed retail floor beside the bud counter
-  var BASE_DAB_VALUE = 25;                         // a dab starts at $25
+  var BASE_DAB_VALUE = 40;                         // a dab starts at $40
+  var MAX_DAB_LV = 10;                             // purity upgrades on top
   function dabsUnlocked() { return (state.roomTier || 0) >= 1; }
-  // tracks the strain you are selling, so dabs keep pace with bud upgrades
-  function dabValue() { return BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE); }
+  // Tracks the strain you are selling so dabs keep pace with bud upgrades,
+  // then purity multiplies on top of that.
+  function dabValue() {
+    return BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE) *
+           (1 + 0.35 * (state.dabLv || 0));
+  }
+  function costDabLv() { return Math.round(1500 * Math.pow(1.75, state.dabLv || 0)); }
 
   // ---- extraction lab: rosin presses bought one machine at a time ----
   // The lab opens empty. Each slot has its own pay square, and only the next
@@ -614,6 +622,7 @@
       pressCount: 0,          // rosin presses bought, one machine at a time
       presses: pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; }),
       hopperLv: 0,            // how much bud a press holds at once
+      dabLv: 0,               // purity: what a dab fetches at the counter
       lastSaveTime: Date.now(),
     };
   }
@@ -670,6 +679,7 @@
         merged.presses = pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; });
       }
       merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
+      merged.dabLv = Math.max(0, Math.min(MAX_DAB_LV, merged.dabLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
@@ -1357,8 +1367,70 @@
     spotFixture(roomGroup, SELL_ZONE.x, SELL_ZONE.z - 2, 0xfff1c9);
     spotFixture(roomGroup, PRICE_ZONE.x, PRICE_ZONE.z, 0xfff1c9);
 
-    // Retail no longer changes with level — the floor out front is a
-    // fixed size and the level-up payoff is a whole new back room.
+    // ---- permanent shop fittings. The floor out front is one fixed size at
+    // every level, so these are always here rather than unlocking. ----
+    (function shopFloor() {
+      // wall of product jars down the left
+      var g1 = new THREE.Group();
+      var back1 = new THREE.Mesh(new THREE.BoxGeometry(6.6, 4.6, 0.4), M.woodDark);
+      back1.position.y = 2.3; back1.castShadow = true; back1.receiveShadow = true;
+      g1.add(back1);
+      [1.1, 2.3, 3.5].forEach(function (y) {
+        var shelf = new THREE.Mesh(new THREE.BoxGeometry(6.6, 0.14, 1.3), M.plank);
+        shelf.position.set(0, y, 0.55); shelf.castShadow = true; shelf.receiveShadow = true;
+        g1.add(shelf);
+        addGlow(g1, 0, y - 0.12, 0.95, 4.4, 0xffe3ac, 0.22);
+        for (var j = 0; j < 4; j++) {
+          var jx = -2.4 + j * 1.6;
+          var jar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.32, 0.55, 14),
+            j % 2 ? M.productJar2 : M.productJar);
+          jar.position.set(jx, y + 0.35, 0.55); jar.castShadow = true;
+          g1.add(jar);
+          var lid = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.1, 14), M.jarLid);
+          lid.position.set(jx, y + 0.66, 0.55); lid.castShadow = true;
+          g1.add(lid);
+        }
+      });
+      g1.position.set(-12.2, 0, 6.0);
+      g1.rotation.y = Math.PI / 2;
+      roomGroup.add(g1);
+      spotFixture(roomGroup, -10.6, 6.0, 0xfff1c9);
+
+      // customer lounge on the right
+      var g2 = new THREE.Group();
+      var seatBase = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.9, 1.8), M.couch);
+      seatBase.position.y = 0.5; seatBase.castShadow = true; seatBase.receiveShadow = true;
+      g2.add(seatBase);
+      var seatBack = new THREE.Mesh(new THREE.BoxGeometry(4.0, 1.4, 0.4), M.couch);
+      seatBack.position.set(0, 1.35, -0.7); seatBack.castShadow = true;
+      g2.add(seatBack);
+      [-1.0, 1.0].forEach(function (px) {
+        var cushion = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.28, 1.6), M.couch);
+        cushion.position.set(px, 1.06, 0.05); cushion.castShadow = true;
+        g2.add(cushion);
+      });
+      var table = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.16, 1.0), M.counterTop);
+      table.position.set(0, 0.55, 1.6); table.castShadow = true;
+      g2.add(table);
+      var potted = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.32, 0.6, 12), M.plantPot);
+      potted.position.set(2.6, 0.3, -0.6); potted.castShadow = true;
+      g2.add(potted);
+      for (var lf = 0; lf < 5; lf++) {
+        var la = (lf / 5) * Math.PI * 2;
+        var leaf = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.85, 5), M.plantDeep);
+        leaf.position.set(2.6 + Math.cos(la) * 0.16, 0.95, -0.6 + Math.sin(la) * 0.16);
+        leaf.rotation.set(Math.sin(la) * 0.5, 0, Math.cos(la) * -0.5);
+        leaf.castShadow = true;
+        g2.add(leaf);
+      }
+      var rug = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.06, 4.4), M.rug);
+      rug.position.set(0, 0.26, 1.0); rug.receiveShadow = true;
+      g2.add(rug);
+      g2.position.set(11.8, 0, 6.5);
+      g2.rotation.y = -Math.PI / 2;
+      roomGroup.add(g2);
+      spotFixture(roomGroup, 10.2, 6.5, 0xffd9a0);
+    })();
   }
   rebuildRoom();
 
@@ -1850,6 +1922,41 @@
   // ===================================================================
   //  PLOTS + BUILD PADS
   // ===================================================================
+  // ---- floating status bar, used over presses and grow beds ----
+  // A dark track with a fill that scales from the left. Anchored high enough
+  // to clear the machine but low enough to read from the follow camera.
+  function makeStatusBar(width, color) {
+    var g = new THREE.Group();
+    var track = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, 0.32),
+      new THREE.MeshBasicMaterial({ color: 0x0d2b18, transparent: true, opacity: 0.85, depthTest: false })
+    );
+    g.add(track);
+    var fill = new THREE.Mesh(
+      new THREE.PlaneGeometry(width - 0.08, 0.22),
+      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.95, depthTest: false })
+    );
+    fill.position.z = 0.01;
+    g.add(fill);
+    g.userData.w = width - 0.08;
+    g.userData.fill = fill;
+    g.renderOrder = 5;
+    return g;
+  }
+  // bars always face the camera, so drive them from the render loop
+  var statusBars = [];
+  function setBar(bar, frac) {
+    frac = Math.max(0, Math.min(1, frac));
+    var f = bar.userData.fill, w = bar.userData.w;
+    f.scale.x = Math.max(0.001, frac);
+    f.position.x = -(w / 2) * (1 - frac);
+  }
+  function faceBarsAtCamera() {
+    for (var i = 0; i < statusBars.length; i++) {
+      if (statusBars[i].visible) statusBars[i].quaternion.copy(camera.quaternion);
+    }
+  }
+
   var plotObjects = [];
 
   function makePlant() {
@@ -1973,11 +2080,16 @@
     glow.visible = false;
     g.add(glow);
 
+    var bar = makeStatusBar(2.4, 0x6fd68a);
+    bar.position.set(0, 3.4, 0);
+    bar.visible = false;
+    g.add(bar); statusBars.push(bar);
+
     scene.add(g);
 
     return {
       group: g, frame: frame, soil: soil, plant: plant, glow: glow,
-      tray: tray, rack: rack,
+      tray: tray, rack: rack, bar: bar,
     };
   }
   for (var pi = 0; pi < plotDefs.length; pi++) plotObjects.push(makePlot(pi));
@@ -2155,9 +2267,18 @@
     readyGlow.visible = false;
     g.add(readyGlow);
 
+    // hopper level on top, finished dabs underneath
+    var barIn = makeStatusBar(2.6, 0x6fd68a);
+    barIn.position.set(0, 5.0, 0);
+    g.add(barIn); statusBars.push(barIn);
+    var barOut = makeStatusBar(2.6, 0xffb03f);
+    barOut.position.set(0, 4.6, 0);
+    g.add(barOut); statusBars.push(barOut);
+
     g.visible = false;
     scene.add(g);
-    return { group: g, ram: ram, loaded: loaded, done: done, glow: readyGlow };
+    return { group: g, ram: ram, loaded: loaded, done: done, glow: readyGlow,
+             barIn: barIn, barOut: barOut };
   }
   for (var qi = 0; qi < pressDefs.length; qi++) pressObjects.push(makePress(qi));
 
@@ -3310,6 +3431,9 @@
       po.loaded.visible = working;
       po.done.visible = p.dabs > 0;
       po.glow.visible = p.dabs > 0;
+      // how full the hopper is, and how many dabs are waiting to be collected
+      setBar(po.barIn, p.buds / hopperCap());
+      setBar(po.barOut, p.dabs / hopperCap());
       if (p.dabs > 0) {
         po.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
         po.done.rotation.y = now * 0.002;
@@ -3631,6 +3755,7 @@
         po.frame.visible = false; po.soil.visible = false;
         po.tray.visible = false; po.rack.visible = false;
         po.plant.visible = false; po.glow.visible = false;
+        po.bar.visible = false;
         continue;
       }
 
@@ -3642,8 +3767,11 @@
 
       if (plot.state === "empty") {
         po.plant.visible = false; po.glow.visible = false;
+        po.bar.visible = false;
       } else if (plot.state === "growing") {
         var pct = Math.min(1, (Date.now() - plot.startedAt) / plot.duration);
+        po.bar.visible = true;
+        setBar(po.bar, pct);
         po.plant.visible = true;
         var sc = 0.2 + 0.8 * pct;
         po.plant.scale.set(sc, sc, sc);
@@ -3651,6 +3779,7 @@
         po.plant.userData.bud.visible = false;
         po.glow.visible = false;
       } else {
+        po.bar.visible = false;
         po.plant.visible = true;
         var bob = 1 + Math.sin(now * 0.005 + i9) * 0.03;
         po.plant.scale.set(bob, bob, bob);
@@ -3953,6 +4082,25 @@
           state.staffLoadLv = (state.staffLoadLv || 0) + 1;
           toast("\ud83e\uddf3 Bigger crates \u2014 the crew hauls more per trip!");
         }
+      },
+    },
+    {
+      id: "purity", label: "PURITY", icon: "\u2728", x: PURITY_ZONE.x, z: PURITY_ZONE.z,
+      color: 0xffd75e, kiosk: false,
+      hidden: function () { return !dabsUnlocked(); },
+      name: function () { return "Refine Your Dabs"; },
+      desc: function () {
+        var next = BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE) *
+                   (1 + 0.35 * ((state.dabLv || 0) + 1));
+        return (state.dabLv || 0) >= MAX_DAB_LV
+          ? "Your dabs are as clean as they come"
+          : "$" + fmt(dabValue()) + " \u2192 $" + fmt(next) + " a dab";
+      },
+      cost: costDabLv,
+      maxed: function () { return (state.dabLv || 0) >= MAX_DAB_LV; },
+      buy: function () {
+        state.dabLv = (state.dabLv || 0) + 1;
+        toast("\u2728 Cleaner extract \u2014 dabs fetch $" + fmt(dabValue()) + "!");
       },
     },
     {
@@ -4398,6 +4546,7 @@
     hudAcc += dt;
     if (hudAcc > 0.1) { renderHud(); renderPrompt(); hudAcc = 0; }
 
+    faceBarsAtCamera();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
