@@ -608,7 +608,9 @@
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
   var MAX_EXTRACTORS = 3;
   // kitchen pass: hire bakers to run the oven line
-  var BAKER_ZONE = { x: -10.0, z: -52.5 };
+  var BAKER_ZONE  = { x: -10.0, z: -52.0 };        // hire bakers
+  var TRAY_ZONE   = { x:  -3.3, z: -52.0 };        // more trays per oven
+  var RECIPE_ZONE = { x:   3.3, z: -52.0 };        // what an edible is worth
   var MAX_BAKERS = 2;
 
   // dab display case, on the fixed retail floor beside the bud counter
@@ -677,10 +679,20 @@
   })();
   var OVEN_PAD_HALF = (OVEN_SIZE + 0.5) / 2;
   var BASE_BAKE_TIME = 9;                          // seconds per edible
-  var OVEN_CAP = 5;                                // dabs an oven holds
+  var BASE_OVEN_CAP = 5;                           // dabs an oven holds
+  var MAX_TRAY_LV = 3;                             // extra trays, 4 looks in all
+  var MAX_EDIBLE_LV = 10;                          // recipe tiers on top
   var BASE_EDIBLE_VALUE = 140;
   function ediblesUnlocked() { return (state.roomTier || 0) >= 2; }
-  function edibleValue() { return BASE_EDIBLE_VALUE * (sellValue() / BASE_SELL_VALUE); }
+  // Trays are the kitchen's answer to press hoppers, and the recipe track is
+  // its answer to dab purity — the lab had both and the kitchen had neither.
+  function ovenCap() { return BASE_OVEN_CAP + 4 * (state.trayLv || 0); }
+  function trayCost(lv) { return Math.round(90000 * Math.pow(2.4, lv)); }
+  function edibleValue() {
+    return BASE_EDIBLE_VALUE * (sellValue() / BASE_SELL_VALUE) *
+           (1 + 0.35 * (state.edibleLv || 0));
+  }
+  function costEdibleLv() { return Math.round(60000 * Math.pow(1.7, state.edibleLv || 0)); }
   function bakeTimeFor() {
     var t = BASE_BAKE_TIME;
     if (boostActive()) t *= 0.5;
@@ -818,6 +830,8 @@
       dabLv: 0,               // purity: what a dab fetches at the counter
       ovenCount: 0,           // ovens bought in the kitchen
       bakerLv: 0,             // bakers hired to work the oven line
+      trayLv: 0,              // trays per oven — also how an oven looks
+      edibleLv: 0,            // recipe: what an edible fetches
       // ---- loading dock ----
       pallets: { bud: 0, dab: 0, edible: 0 },   // stock stacked ready to ship
       bayCount: 1,            // garage doors in service
@@ -884,6 +898,8 @@
       }
       merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
       merged.dabLv = Math.max(0, Math.min(MAX_DAB_LV, merged.dabLv || 0));
+      merged.trayLv = Math.max(0, Math.min(MAX_TRAY_LV, merged.trayLv || 0));
+      merged.edibleLv = Math.max(0, Math.min(MAX_EDIBLE_LV, merged.edibleLv || 0));
       merged.ovenCount = Math.max(0, Math.min(MAX_OVENS, merged.ovenCount || 0));
       if (!Array.isArray(merged.ovens) || merged.ovens.length !== ovenDefs.length) {
         merged.ovens = ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; });
@@ -3310,6 +3326,68 @@
     readyGlow.visible = false;
     g.add(readyGlow);
 
+    // ---- higher-tier oven fittings, revealed as trays are fitted ----
+    // The grow beds change shape as they are upgraded and the ovens did not,
+    // so a maxed kitchen looked exactly like a brand new one.
+
+    // tier 1: a proper range top — four burners and a warming shelf
+    var range = new THREE.Group();
+    [[-0.85, -0.55], [0.85, -0.55], [-0.85, 0.55], [0.85, 0.55]].forEach(function (bp) {
+      var ring = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.07, 6, 14), M.metalRack);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(bp[0], 2.9, bp[1]);
+      range.add(ring);
+      var flame = new THREE.Mesh(new THREE.CircleGeometry(0.2, 12), M.ovenGlow);
+      flame.rotation.x = -Math.PI / 2;
+      flame.position.set(bp[0], 2.88, bp[1]);
+      range.add(flame);
+    });
+    var splash = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.9, 0.12), M.steel);
+    splash.position.set(0, 3.32, -1.1); splash.castShadow = true;
+    range.add(splash);
+    range.visible = false;
+    g.add(range);
+
+    // tier 2: side prep cabinet and an extraction canopy overhead
+    var cabinet = new THREE.Group();
+    var cab = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.4, 2.2), M.steelDk);
+    cab.position.set(-2.4, 1.3, 0); cab.castShadow = true; cab.receiveShadow = true;
+    cabinet.add(cab);
+    var cabTop = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.14, 2.4), M.steel);
+    cabTop.position.set(-2.4, 2.58, 0); cabTop.castShadow = true;
+    cabinet.add(cabTop);
+    // Sits over the back half only. Spanning the whole oven put it directly
+    // above the cooling rack, which from this camera hid the one cue that
+    // tells you an edible is ready.
+    var canopy = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.5, 1.7), M.steel);
+    canopy.position.set(-0.6, 4.5, -1.0); canopy.castShadow = true;
+    cabinet.add(canopy);
+    var canopyLip = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.5, 0.16), M.steelDk);
+    canopyLip.position.set(-0.6, 4.2, -0.2);
+    cabinet.add(canopyLip);
+    cabinet.visible = false;
+    g.add(cabinet);
+
+    // tier 3: a second deck stacked on top, with its own door and twin flues
+    var deck = new THREE.Group();
+    var body2 = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.9, 2.2), M.steel);
+    body2.position.y = 5.9; body2.castShadow = true; body2.receiveShadow = true;
+    deck.add(body2);
+    var door2 = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 0.1), M.counterGlass);
+    door2.position.set(0, 5.9, 1.15);
+    deck.add(door2);
+    var inner2 = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.95), M.ovenGlow);
+    inner2.position.set(0, 5.9, 1.08);
+    deck.add(inner2);
+    var deckTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.16, 2.4), M.metal);
+    deckTop.position.y = 6.93; deckTop.castShadow = true;
+    deck.add(deckTop);
+    var flue2 = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 2.4, 10), M.metalRack);
+    flue2.position.set(-1.1, 8.1, -0.7); flue2.castShadow = true;
+    deck.add(flue2);
+    deck.visible = false;
+    g.add(deck);
+
     var barIn = makeStatusBar(2.6, 0xffb03f);
     barIn.position.set(0, 5.4, 0);
     g.add(barIn); statusBars.push(barIn);
@@ -3319,7 +3397,32 @@
 
     g.visible = false;
     scene.add(g);
-    return { group: g, inner: inner, out: out, glow: readyGlow, barIn: barIn, barOut: barOut };
+    return {
+      group: g, body: body, inner: inner, out: out, glow: readyGlow,
+      range: range, cabinet: cabinet, deck: deck, inner2: inner2,
+      hob: hob, flue: flue, barIn: barIn, barOut: barOut,
+    };
+  }
+
+  // Swap each oven between its four looks, and lift everything that sits on
+  // top of it so the cooling rack and gauges stay clear of the new fittings.
+  function refreshOvenTiers() {
+    var lv = state.trayLv || 0;
+    for (var i = 0; i < ovenObjects.length; i++) {
+      var oo = ovenObjects[i];
+      oo.range.visible = lv >= 1;
+      oo.cabinet.visible = lv >= 2;
+      oo.deck.visible = lv >= 3;
+      // the burner top replaces the plain hob, and the stack doubles at tier 3
+      oo.hob.visible = lv < 1;
+      oo.flue.position.x = lv >= 3 ? 1.1 : (lv >= 2 ? 1.6 : 1.1);
+      oo.flue.position.y = lv >= 3 ? 8.1 : 4.0;
+      var topY = lv >= 3 ? 7.15 : (lv >= 1 ? 3.6 : 2.98);
+      oo.out.position.y = topY;
+      oo.glow.position.y = topY - 0.08;
+      oo.barIn.position.y = topY + 2.5;
+      oo.barOut.position.y = topY + 2.1;
+    }
   }
   for (var oi = 0; oi < ovenDefs.length; oi++) ovenObjects.push(makeOven(oi));
 
@@ -4372,8 +4475,8 @@
 
       } else if (b.phase === "toOven") {
         if (b.holdingDab <= 0) { b.phase = "toDab"; b.target = -1; continue; }
-        if (b.target < 0 || b.target >= builtOvens || state.ovens[b.target].dabs >= OVEN_CAP) {
-          b.target = bakFreeOven(b, function (oo) { return oo.dabs < OVEN_CAP; });
+        if (b.target < 0 || b.target >= builtOvens || state.ovens[b.target].dabs >= ovenCap()) {
+          b.target = bakFreeOven(b, function (oo) { return oo.dabs < ovenCap(); });
         }
         if (b.target < 0) { b.phase = "toBaked"; continue; }
         var od = ovenDefs[b.target];
@@ -4385,7 +4488,7 @@
         if (b.timer <= 0) {
           var li = b.target;
           if (li >= 0 && li < builtOvens && b.holdingDab > 0 &&
-              state.ovens[li].dabs < OVEN_CAP) {
+              state.ovens[li].dabs < ovenCap()) {
             state.ovens[li].dabs++;
             b.holdingDab--;
           }
@@ -4733,7 +4836,7 @@
 
       var fed = 0;
       for (var b = player.backpack.length - 1; b >= 0; b--) {
-        if (o.dabs + fed >= OVEN_CAP) break;
+        if (o.dabs + fed >= ovenCap()) break;
         if (player.backpack[b].type === "dab") { player.backpack.splice(b, 1); fed++; }
       }
       if (fed) {
@@ -4778,14 +4881,15 @@
       var o = state.ovens[i];
       var baking = o.dabs > 0;
       oo.inner.visible = baking;
+      if (oo.inner2) oo.inner2.visible = baking;
       oo.out.visible = o.cooked > 0;
       oo.glow.visible = o.cooked > 0;
       if (o.cooked > 0) {
         oo.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
         oo.out.rotation.y = now * 0.0015;
       }
-      setBar(oo.barIn, o.dabs / OVEN_CAP);
-      setBar(oo.barOut, o.cooked / OVEN_CAP);
+      setBar(oo.barIn, o.dabs / ovenCap());
+      setBar(oo.barOut, o.cooked / ovenCap());
     }
   }
 
@@ -5620,7 +5724,7 @@
     var builtO = ovenOwned();
     for (var e1 = 0; e1 < builtO; e1++) {
       if (state.ovens[e1].cooked > 0) anyOvenReady = true;
-      if (state.ovens[e1].dabs < OVEN_CAP) anyOvenRoom = true;
+      if (state.ovens[e1].dabs < ovenCap()) anyOvenRoom = true;
     }
     var anyStock = false, anyTruck = false, anyPalletStock = false;
     for (var d0 = 0; d0 < player.backpack.length; d0++) {
@@ -5854,6 +5958,44 @@
       buy: function () {
         state.bakerLv = (state.bakerLv || 0) + 1;
         toast("\ud83d\udc68\u200d\ud83c\udf73 Baker hired \u2014 they'll run the oven line!");
+      },
+    },
+    {
+      id: "tray", label: "TRAYS", icon: "\ud83c\udf73", x: TRAY_ZONE.x, z: TRAY_ZONE.z,
+      color: 0xffd0a0, kiosk: false,
+      hidden: function () { return !ediblesUnlocked(); },
+      name: function () { return "Fit More Trays"; },
+      desc: function () {
+        return (state.trayLv || 0) >= MAX_TRAY_LV
+          ? "Every oven is racked out full"
+          : "Every oven holds " + ovenCap() + " \u2192 " + (ovenCap() + 4) +
+            " dabs \u00b7 and gets a bigger range";
+      },
+      cost: function () { return trayCost(state.trayLv || 0); },
+      maxed: function () { return (state.trayLv || 0) >= MAX_TRAY_LV; },
+      buy: function () {
+        state.trayLv = (state.trayLv || 0) + 1;
+        refreshOvenTiers();
+        toast("\ud83c\udf73 Trays fitted \u2014 ovens hold " + ovenCap() + " dabs now!");
+      },
+    },
+    {
+      id: "recipe", label: "RECIPE", icon: "\ud83d\udcdc", x: RECIPE_ZONE.x, z: RECIPE_ZONE.z,
+      color: 0xe0a06a, kiosk: false,
+      hidden: function () { return !ediblesUnlocked(); },
+      name: function () { return "Perfect the Recipe"; },
+      desc: function () {
+        if ((state.edibleLv || 0) >= MAX_EDIBLE_LV) return "The recipe cannot be improved on";
+        var cur = edibleValue();
+        var nxt = cur + BASE_EDIBLE_VALUE * (sellValue() / BASE_SELL_VALUE) * 0.35;
+        var step = fmtStep(cur, nxt);
+        return "Edibles fetch $" + step[0] + " \u2192 $" + step[1] + " each";
+      },
+      cost: costEdibleLv,
+      maxed: function () { return (state.edibleLv || 0) >= MAX_EDIBLE_LV; },
+      buy: function () {
+        state.edibleLv = (state.edibleLv || 0) + 1;
+        toast("\ud83d\udcdc Recipe improved \u2014 edibles fetch $" + fmt(edibleValue()) + "!");
       },
     },
     {
@@ -6295,6 +6437,7 @@
       counterTopMesh.material = state.sellLv >= 4 ? M.counterStone : M.counterTop;
     }
     kitchenFit.visible = ediblesUnlocked();
+    refreshOvenTiers();
     dockFit.visible = dockUnlocked();
   }
 
