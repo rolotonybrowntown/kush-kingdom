@@ -603,6 +603,7 @@
   var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
   var HOPPER_ZONE  = { x: -10.0, z: -35.0 };       // bigger press hoppers
   var PURITY_ZONE  = { x: -10.0, z: -41.0 };       // what a dab is worth
+  var RAM_ZONE     = { x:  10.0, z: -41.0 };       // how fast a press squeezes
   // HR corner of the break room: upgrades that apply to every hired hand
   var HR_ZONE = { x: 11.0, z: -28.5 };
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
@@ -611,6 +612,7 @@
   var BAKER_ZONE  = { x: -10.0, z: -52.0 };        // hire bakers
   var TRAY_ZONE   = { x:  -3.3, z: -52.0 };        // more trays per oven
   var RECIPE_ZONE = { x:   3.3, z: -52.0 };        // what an edible is worth
+  var FAN_ZONE    = { x:  10.0, z: -52.0 };        // how fast an oven bakes
   var MAX_BAKERS = 2;
 
   // dab display case, on the fixed retail floor beside the bud counter
@@ -647,15 +649,19 @@
   var MAX_PRESSES = pressDefs.length;
   var PRESS_PAD_HALF = (PRESS_SIZE + 0.5) / 2;
   var BASE_PRESS_TIME = 7;                         // seconds to squeeze one bud
+  var MAX_RAM_LV = 4;                              // hydraulic upgrades on top
   var BASE_HOPPER = 7;                             // buds a press holds at once
   var MAX_HOPPER_LV = 4;
   var MAX_SPEED_LV = 5;            // read by the save migration below
   function hopperCap() { return BASE_HOPPER + 3 * (state.hopperLv || 0); }
+  // Each level takes 22% off the cycle, so a maxed ram runs a press at about
+  // 2.7x the throughput it started with. Feed still stacks on top of that.
   function pressTimeFor() {
-    var t = BASE_PRESS_TIME;
+    var t = BASE_PRESS_TIME * Math.pow(0.78, state.ramLv || 0);
     if (boostActive()) t *= 0.5;
     return Math.max(t, 0.8);
   }
+  function ramCost(lv) { return Math.round(12000 * Math.pow(2.6, lv)); }
   // the whole line opens with the lab; you just have to afford the machines
   function pressSlotsAvailable() { return dabsUnlocked() ? MAX_PRESSES : 0; }
   function pressCost(n) { return Math.round(3000 * Math.pow(1.95, n)); }
@@ -679,6 +685,7 @@
   })();
   var OVEN_PAD_HALF = (OVEN_SIZE + 0.5) / 2;
   var BASE_BAKE_TIME = 9;                          // seconds per edible
+  var MAX_FAN_LV = 4;                              // convection upgrades on top
   var BASE_OVEN_CAP = 5;                           // dabs an oven holds
   var MAX_TRAY_LV = 3;                             // extra trays, 4 looks in all
   var MAX_EDIBLE_LV = 10;                          // recipe tiers on top
@@ -693,11 +700,13 @@
            (1 + 0.35 * (state.edibleLv || 0));
   }
   function costEdibleLv() { return Math.round(60000 * Math.pow(1.7, state.edibleLv || 0)); }
+  // Same shape as the press ram: 22% off the bake per level.
   function bakeTimeFor() {
-    var t = BASE_BAKE_TIME;
+    var t = BASE_BAKE_TIME * Math.pow(0.78, state.fanLv || 0);
     if (boostActive()) t *= 0.5;
     return Math.max(1, t);
   }
+  function fanCost(lv) { return Math.round(80000 * Math.pow(2.6, lv)); }
   function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
   // An oven is a level-3 purchase, by which point the shop is turning over
   // real money — the old $4K opener was pocket change.
@@ -827,10 +836,12 @@
       pressCount: 0,          // rosin presses bought, one machine at a time
       presses: pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; }),
       hopperLv: 0,            // how much bud a press holds at once
+      ramLv: 0,               // how fast a press squeezes
       dabLv: 0,               // purity: what a dab fetches at the counter
       ovenCount: 0,           // ovens bought in the kitchen
       bakerLv: 0,             // bakers hired to work the oven line
       trayLv: 0,              // trays per oven — also how an oven looks
+      fanLv: 0,               // convection: how fast an oven bakes
       edibleLv: 0,            // recipe: what an edible fetches
       // ---- loading dock ----
       pallets: { bud: 0, dab: 0, edible: 0 },   // stock stacked ready to ship
@@ -898,6 +909,8 @@
       }
       merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
       merged.dabLv = Math.max(0, Math.min(MAX_DAB_LV, merged.dabLv || 0));
+      merged.ramLv = Math.max(0, Math.min(MAX_RAM_LV, merged.ramLv || 0));
+      merged.fanLv = Math.max(0, Math.min(MAX_FAN_LV, merged.fanLv || 0));
       merged.trayLv = Math.max(0, Math.min(MAX_TRAY_LV, merged.trayLv || 0));
       merged.edibleLv = Math.max(0, Math.min(MAX_EDIBLE_LV, merged.edibleLv || 0));
       merged.ovenCount = Math.max(0, Math.min(MAX_OVENS, merged.ovenCount || 0));
@@ -2015,8 +2028,9 @@
     splash(12.6, (KZ_FAR + KZ_NEAR) / 2, KZ_NEAR - KZ_FAR - 1.0, -1);
     fridge(11.3, KZ_FAR + 2.8);
     fridge(11.3, KZ_FAR + 6.2);
-    prepBench(11.4, KZ_FAR + 11.5, 5.0);
-    panShelf(12.2, KZ_FAR + 11.5, 5.0, 1);
+    // set back from the entrance so the convection pad has its own space
+    prepBench(11.4, KZ_FAR + 9.5, 5.0);
+    panShelf(12.2, KZ_FAR + 9.5, 5.0, 1);
   })();
 
   // ===================================================================
@@ -5961,6 +5975,26 @@
       },
     },
     {
+      id: "ram", label: "HYDRAULICS", icon: "\u2699\ufe0f", x: RAM_ZONE.x, z: RAM_ZONE.z,
+      color: 0xff9b5e, kiosk: false,
+      hidden: function () { return !dabsUnlocked(); },
+      name: function () { return "Stronger Hydraulics"; },
+      desc: function () {
+        if ((state.ramLv || 0) >= MAX_RAM_LV) return "The rams are wound up as tight as they go";
+        var cur = BASE_PRESS_TIME * Math.pow(0.78, state.ramLv || 0);
+        var nxt = cur * 0.78;
+        return "Presses squeeze a dab every " + cur.toFixed(1) + "s \u2192 " +
+               nxt.toFixed(1) + "s";
+      },
+      cost: function () { return ramCost(state.ramLv || 0); },
+      maxed: function () { return (state.ramLv || 0) >= MAX_RAM_LV; },
+      buy: function () {
+        state.ramLv = (state.ramLv || 0) + 1;
+        toast("\u2699\ufe0f Hydraulics upgraded \u2014 a dab every " +
+              pressTimeFor().toFixed(1) + "s now!");
+      },
+    },
+    {
       id: "tray", label: "TRAYS", icon: "\ud83c\udf73", x: TRAY_ZONE.x, z: TRAY_ZONE.z,
       color: 0xffd0a0, kiosk: false,
       hidden: function () { return !ediblesUnlocked(); },
@@ -5996,6 +6030,26 @@
       buy: function () {
         state.edibleLv = (state.edibleLv || 0) + 1;
         toast("\ud83d\udcdc Recipe improved \u2014 edibles fetch $" + fmt(edibleValue()) + "!");
+      },
+    },
+    {
+      id: "fan", label: "CONVECTION", icon: "\ud83c\udf2c\ufe0f", x: FAN_ZONE.x, z: FAN_ZONE.z,
+      color: 0x9fdcff, kiosk: false,
+      hidden: function () { return !ediblesUnlocked(); },
+      name: function () { return "Convection Fans"; },
+      desc: function () {
+        if ((state.fanLv || 0) >= MAX_FAN_LV) return "These ovens cannot run any hotter";
+        var cur = BASE_BAKE_TIME * Math.pow(0.78, state.fanLv || 0);
+        var nxt = cur * 0.78;
+        return "Ovens turn out an edible every " + cur.toFixed(1) + "s \u2192 " +
+               nxt.toFixed(1) + "s";
+      },
+      cost: function () { return fanCost(state.fanLv || 0); },
+      maxed: function () { return (state.fanLv || 0) >= MAX_FAN_LV; },
+      buy: function () {
+        state.fanLv = (state.fanLv || 0) + 1;
+        toast("\ud83c\udf2c\ufe0f Convection fitted \u2014 an edible every " +
+              bakeTimeFor().toFixed(1) + "s now!");
       },
     },
     {
