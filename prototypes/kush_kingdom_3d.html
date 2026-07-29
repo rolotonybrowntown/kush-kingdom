@@ -92,6 +92,11 @@
   .chip.promo.on { display: flex; }
   .chip.promo .icon { background: linear-gradient(180deg, #ffd05c, #c06a12); }
   .chip.promo span { color: #ffd98a; }
+  /* only shown out at the farm, where the weather actually does something */
+  .chip.weather { display: none; }
+  .chip.weather.on { display: flex; }
+  .chip.weather .icon { background: linear-gradient(180deg, #bfe4f5, #5b8fa8); }
+  .chip.weather span { color: #d8f0ff; font-size: 13px; }
 
   /* shop level, riding on the corner of the cash chip */
   .chip.cash { position: relative; overflow: visible; }
@@ -461,6 +466,7 @@
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
       <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
+      <div class="chip weather" id="weather-chip"><div class="icon" id="weather-icon">☀️</div><span id="weather-val">Clear</span></div>
     </div>
   </div>
 
@@ -953,6 +959,54 @@
   })();
   var FARM_PLOTS = farmPlotDefs.length;              // 48
   var FARM_BASE_GROW = 25;                           // seconds at 1x weather
+
+  // ---- weather and seasons ----
+  // Derived entirely from wall-clock time. Nothing is stored, which means it
+  // survives a reload, agrees across sessions, and lets the offline catch-up
+  // integrate exactly what the weather WAS while you were gone rather than
+  // guessing. Indoor grow lights were a flat multiplier you bought once;
+  // this is a rhythm you plan around.
+  var WEATHER_SLOT_MS = 45000;      // one weather beat
+  var SEASON_SLOTS = 8;             // 6 minutes a season
+  var WEATHERS = {
+    sun:   { id: "sun",   label: "Clear",    icon: "\u2600\ufe0f",  grow: 1.25, sky: 0x9fd9ef, sun: 0.72, hemi: 0.46 },
+    cloud: { id: "cloud", label: "Cloudy",   icon: "\u2601\ufe0f",  grow: 0.95, sky: 0xb8c6d0, sun: 0.44, hemi: 0.40 },
+    rain:  { id: "rain",  label: "Rain",     icon: "\ud83c\udf27\ufe0f", grow: 1.45, sky: 0x8fa3b3, sun: 0.32, hemi: 0.36 },
+    storm: { id: "storm", label: "Storm",    icon: "\u26c8\ufe0f",  grow: 0.55, sky: 0x6b7987, sun: 0.24, hemi: 0.30 },
+    heat:  { id: "heat",  label: "Heatwave", icon: "\ud83d\udd25", grow: 0.60, sky: 0xf0d9a8, sun: 0.86, hemi: 0.52 },
+    frost: { id: "frost", label: "Frost",    icon: "\u2744\ufe0f",  grow: 0.35, sky: 0xd8e8f2, sun: 0.50, hemi: 0.48 },
+  };
+  // Each season weights the draw, so you learn the pattern: summer bakes,
+  // winter bites, and the shoulder seasons are where the yield lives.
+  var SEASONS = [
+    { name: "Spring", icon: "\ud83c\udf31", bag: ["rain", "rain", "sun", "cloud", "sun", "cloud"] },
+    { name: "Summer", icon: "\u2600\ufe0f", bag: ["sun", "sun", "heat", "sun", "cloud", "heat"] },
+    { name: "Autumn", icon: "\ud83c\udf42", bag: ["cloud", "rain", "rain", "cloud", "storm", "sun"] },
+    { name: "Winter", icon: "\u2744\ufe0f", bag: ["frost", "storm", "cloud", "frost", "cloud", "rain"] },
+  ];
+  function weatherSlot(t) { return Math.floor(t / WEATHER_SLOT_MS); }
+  function seasonAt(t) {
+    return SEASONS[Math.floor(weatherSlot(t) / SEASON_SLOTS) % SEASONS.length];
+  }
+  // xorshift on the slot index: varied but reproducible, so the sky is the
+  // same every time you look at a given minute.
+  function slotHash(n) {
+    n = (n ^ 61) ^ (n >>> 16);
+    n = n + (n << 3);
+    n = n ^ (n >>> 4);
+    n = Math.imul(n, 0x27d4eb2d);
+    n = n ^ (n >>> 15);
+    return (n >>> 0);
+  }
+  function weatherAt(t) {
+    var bag = seasonAt(t).bag;
+    return WEATHERS[bag[slotHash(weatherSlot(t)) % bag.length]];
+  }
+  function weatherNow() { return weatherAt(Date.now()); }
+  function seasonNow() { return seasonAt(Date.now()); }
+  function weatherSecsLeft() {
+    return Math.max(0, Math.ceil((WEATHER_SLOT_MS - (Date.now() % WEATHER_SLOT_MS)) / 1000));
+  }
   var FARM_ROW_TILE_X = -((FARM_COLS - 1) * FARM_SPACING_X) / 2 - FARM_SPACING_X + 1.2;
   var FARM_ROW_TILE_HALF = (FARM_PLOT_SIZE + 0.5) / 2;
   function farmRowOf(idx) { return Math.floor(idx / FARM_COLS); }
@@ -966,11 +1020,28 @@
   function siloCost(lv) { return Math.round(5000000 * Math.pow(2.3, lv)); }
 
   // Courier: the placeholder freight run. Drains the silo into the shop's
-  // intake pile at a steady rate while you stand on its pad.
+  // intake pile at a steady rate while you stand on its pad — or, once a
+  // hauler is hired, whenever the hauler is there instead of you.
   var FARM_COURIER = { x: -15.0, z: FARM_CZ + 21.0 };
   var MAX_COURIER_LV = 4;
   function courierRate() { return 2.5 + 2.5 * (state.farm && state.farm.courierLv || 0); }
   function courierCost(lv) { return Math.round(4000000 * Math.pow(2.4, lv)); }
+
+  // Farm staff. Priced in the same millions bracket as the silo/courier
+  // upgrades, since these are farm-tier purchases, not shop-tier ones.
+  var FIELD_ZONE   = { x: -34.0, z: FARM_CZ + 26.0 };   // outside the barn door
+  var HAULER_ZONE  = { x: -28.0, z: FARM_CZ + 26.0 };
+  var MANAGER_ZONE = { x: -22.0, z: FARM_CZ + 26.0 };
+  var MAX_FIELD_HANDS = 4;   // the field is 3x the indoor grid — it earns the crew
+  var MAX_HAULERS = 2;
+  function costFieldHand() { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.handLv || 0)); }
+  function costHauler()    { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.haulerLv || 0)); }
+
+  // A hired manager keeps a site's staff working while you are standing
+  // somewhere else entirely — without one, farm staff still work FROM the
+  // farm, but only while you are actually there to run it.
+  var FARM_MANAGER_COST = 25000000;
+  function siteActive(id) { return state.site === id || !!(state.managers && state.managers[id]); }
 
   // Where farm bud lands at the shop. Deliberately NOT one of PALLET_DEFS —
   // those are the outbound wholesale stacks and handlePallets would sweep
@@ -1037,6 +1108,8 @@
         silo: 0,
         siloLv: 0,
         courierLv: 0,
+        handLv: 0,
+        haulerLv: 0,
       },
       lastSaveTime: Date.now(),
     };
@@ -1074,12 +1147,24 @@
       }
       merged.farm.rowsUnlocked = Math.max(FARM_COLS,
         Math.min(FARM_PLOTS, Math.ceil(merged.farm.rowsUnlocked / FARM_COLS) * FARM_COLS));
+      // Plot state and rowsUnlocked have to agree, or you get ripe crops on
+      // ground you never bought and dead squares on ground you did.
+      for (var fq = 0; fq < merged.farm.plots.length; fq++) {
+        if (fq < merged.farm.rowsUnlocked) {
+          if (merged.farm.plots[fq].state === "locked") merged.farm.plots[fq] = { state: "empty", prog: 0 };
+        } else {
+          merged.farm.plots[fq] = { state: "locked", prog: 0 };
+        }
+      }
       merged.farm.siloLv = Math.max(0, Math.min(MAX_SILO_LV, merged.farm.siloLv || 0));
       merged.farm.courierLv = Math.max(0, Math.min(MAX_COURIER_LV, merged.farm.courierLv || 0));
+      merged.farm.handLv = Math.max(0, Math.min(MAX_FIELD_HANDS, merged.farm.handLv || 0));
+      merged.farm.haulerLv = Math.max(0, Math.min(MAX_HAULERS, merged.farm.haulerLv || 0));
       merged.farm.silo = Math.max(0, Math.min(siloCapFor(merged.farm.siloLv), merged.farm.silo || 0));
       merged.farm.unlocked = !!merged.farm.unlocked;
       merged.intake = Math.max(0, Math.min(INTAKE_CAP, merged.intake || 0));
       if (!merged.managers || typeof merged.managers !== "object") merged.managers = {};
+      merged.managers.farm = !!merged.managers.farm;
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = { shop: null, farm: null };
       ["shop", "farm"].forEach(function (k) {
         var p = merged.sitePos[k];
@@ -1302,6 +1387,7 @@
 
   var scene = new THREE.Scene();
   var SKY_DEFAULT = new THREE.Color(0x7fd2f5);
+  var FARM_SKY = new THREE.Color(0x9fd9ef);   // rewritten from the weather
   scene.background = SKY_DEFAULT;
   scene.fog = new THREE.Fog(0x9fe0fa, 55, 105);
 
@@ -1312,7 +1398,8 @@
   // thing lifting the scene out of shadow.
   var hemi = new THREE.HemisphereLight(0xeaf4ff, 0x9c8a6e, 0.42);
   scene.add(hemi);
-  var sun = new THREE.DirectionalLight(0xfff4dd, 0.62);
+  var SUN_BASE = 0.62, HEMI_BASE = 0.42;   // the indoor baseline to ease back to
+  var sun = new THREE.DirectionalLight(0xfff4dd, SUN_BASE);
   sun.position.set(11, 26, -9);
   sun.castShadow = true;
   sun.shadow.mapSize.width = 2048;
@@ -3031,6 +3118,273 @@
     }
   }
 
+  // ===================================================================
+  //  FIELD HANDS — hired staff who plant and harvest the outdoor field
+  // ===================================================================
+  // Modelled on the botanist (straw hat, seed pack) crossed with the runner
+  // (carries a crate to a drop point) because out here one person does both
+  // jobs — the field is one room, not a shelf and a bed on opposite walls.
+  var fieldHands = [];
+  var FIELD_SPEED = 5.6, FIELD_ACT_TIME = 0.5, FIELD_CARRY = 5;
+
+  (function buildFieldHands() {
+    for (var n = 0; n < MAX_FIELD_HANDS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.shirt);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.1), M.apron);
+      apron.position.set(0, 1.02, 0.3); apron.castShadow = true; g.add(apron);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var hat = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.33, 0.22, 10), M.strawHat);
+      hat.position.y = 2.24; g.add(hat);
+      var brim = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.06, 12), M.strawHatDk);
+      brim.position.y = 2.13; brim.castShadow = true; g.add(brim);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // a basket of harvested bud, shown only on the walk to the silo
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.7, 0.5);
+      var totes = [];
+      for (var c = 0; c < FIELD_CARRY + MAX_STAFF_LOAD_LV; c++) {
+        var it = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.4), M.crateBud);
+        it.position.set(0, c * 0.32, 0);
+        it.visible = false;
+        tote.add(it);
+        totes.push(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      fieldHands.push({
+        obj: g, l1: l1, l2: l2, tote: tote, totes: totes,
+        pos: { x: FIELD_ZONE.x + 1.6 + n * 0.9, z: FIELD_ZONE.z + 1.5 },
+        phase: "toPlot", timer: 0, plotIdx: -1, mode: "",
+        carrying: 0, walkPhase: n * 1.4, slot: n,
+      });
+    }
+  })();
+
+  function fieldStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(FIELD_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function fieldClaimed(self, idx) {
+    for (var j = 0; j < fieldHands.length; j++) {
+      var o = fieldHands[j];
+      if (o !== self && o.obj.visible && o.plotIdx === idx) return true;
+    }
+    return false;
+  }
+
+  // Ripe crops are the visible failure state, so a field hand always clears
+  // them before planting anything new — same priority the dock pickers give
+  // finished product over raw stock.
+  function fieldFindJob(self) {
+    var unlocked = farmRowsUnlocked();
+    for (var i = 0; i < unlocked; i++) {
+      if (state.farm.plots[i].state === "ready" && !fieldClaimed(self, i)) {
+        return { idx: i, mode: "harvest" };
+      }
+    }
+    for (var j = 0; j < unlocked; j++) {
+      if (state.farm.plots[j].state === "empty" && !fieldClaimed(self, j)) {
+        return { idx: j, mode: "plant" };
+      }
+    }
+    return null;
+  }
+
+  function updateFieldHands(now, dt) {
+    for (var i = 0; i < fieldHands.length; i++) {
+      var b = fieldHands[i];
+      var hired = farmUnlocked() && siteActive("farm") && i < (state.farm.handLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.plotIdx = -1; b.mode = ""; b.carrying = 0; continue; }
+
+      var walking = false;
+      var cap = FIELD_CARRY + staffCarryBonus();
+
+      if (b.phase === "toPlot") {
+        if (b.carrying >= cap) { b.phase = "toSilo"; b.plotIdx = -1; continue; }
+        var stillGood = b.plotIdx >= 0 &&
+          ((b.mode === "harvest" && state.farm.plots[b.plotIdx].state === "ready") ||
+           (b.mode === "plant" && state.farm.plots[b.plotIdx].state === "empty"));
+        if (!stillGood) {
+          var job = fieldFindJob(b);
+          if (!job) {
+            if (b.carrying > 0) { b.phase = "toSilo"; continue; }
+            b.plotIdx = -1; b.mode = "";
+            b.phase = "idle"; b.timer = 0.7; continue;
+          }
+          b.plotIdx = job.idx; b.mode = job.mode;
+        }
+        var pd = farmPlotDefs[b.plotIdx];
+        walking = !fieldStepTo(b, pd.x, pd.z, dt);
+        if (!walking) { b.phase = "work"; b.timer = FIELD_ACT_TIME; }
+
+      } else if (b.phase === "work") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var idx = b.plotIdx;
+          if (b.mode === "harvest" && idx >= 0 && state.farm.plots[idx].state === "ready") {
+            state.farm.plots[idx] = { state: "empty", prog: 0 };
+            b.carrying++;
+          } else if (b.mode === "plant" && idx >= 0 && state.farm.plots[idx].state === "empty") {
+            state.farm.plots[idx] = { state: "growing", prog: 0 };
+          }
+          b.plotIdx = -1; b.mode = "";
+          b.phase = "toPlot";
+        }
+
+      } else if (b.phase === "toSilo") {
+        if (b.carrying <= 0) { b.phase = "toPlot"; continue; }
+        if ((state.farm.silo || 0) >= siloCap()) { b.phase = "idle"; b.timer = 1.2; continue; }
+        walking = !fieldStepTo(b, FARM_SILO.x, FARM_SILO.z + 4.6, dt);
+        if (!walking) { b.phase = "dump"; b.timer = FIELD_ACT_TIME; }
+
+      } else if (b.phase === "dump") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var room = siloCap() - (state.farm.silo || 0);
+          var put = Math.min(room, b.carrying);
+          if (put > 0) {
+            state.farm.silo = (state.farm.silo || 0) + put;
+            b.carrying -= put;
+            addFloater(FARM_SILO.x, 4.0, FARM_SILO.z + 4.6, "+" + put, "#8ef0a4");
+          }
+          b.phase = b.carrying > 0 ? "idle" : "toPlot";
+          b.timer = 1.0;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.7;
+          b.phase = b.carrying > 0 ? "toSilo" : "toPlot";
+        }
+      }
+
+      for (var c2 = 0; c2 < b.totes.length; c2++) {
+        b.totes[c2].visible = c2 < b.carrying;
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  // ===================================================================
+  //  HAULER — runs the silo down to the courier bay without you
+  // ===================================================================
+  // Reuses the same courierAcc-based transfer the player triggers by
+  // standing on the pad; the hauler just stands there for you.
+  var haulers = [];
+  var HAUL_SPEED = 5.6, HAUL_ACT_TIME = 0.6;
+
+  (function buildHaulers() {
+    for (var n = 0; n < MAX_HAULERS; n++) {
+      var g = new THREE.Group();
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), M.truckTrim);
+      torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+      var vest = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.72, 0.66), M.hiVis);
+      vest.position.y = 1.16; vest.castShadow = true; g.add(vest);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin : M.skin2);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var hat = new THREE.Mesh(new THREE.SphereGeometry(0.36, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.truckCab);
+      hat.position.y = 2.18; hat.castShadow = true; g.add(hat);
+      var brim = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 0.3), M.truckCab);
+      brim.position.set(0, 2.19, 0.3); g.add(brim);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      haulers.push({
+        obj: g, l1: l1, l2: l2,
+        pos: { x: HAULER_ZONE.x + 1.6 + n * 0.9, z: HAULER_ZONE.z + 1.5 },
+        phase: "toSilo", timer: 0, walkPhase: n * 1.6, slot: n,
+      });
+    }
+  })();
+
+  function haulStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(HAUL_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function updateHaulers(now, dt) {
+    for (var i = 0; i < haulers.length; i++) {
+      var b = haulers[i];
+      var hired = farmUnlocked() && siteActive("farm") && i < (state.farm.haulerLv || 0);
+      b.obj.visible = hired;
+      if (!hired) continue;
+
+      var walking = false;
+
+      if (b.phase === "toSilo") {
+        if ((state.farm.silo || 0) <= 0) { b.phase = "wait"; b.timer = 1.0; continue; }
+        walking = !haulStepTo(b, FARM_SILO.x, FARM_SILO.z + 4.6, dt);
+        if (!walking) { b.phase = "load"; b.timer = HAUL_ACT_TIME; }
+
+      } else if (b.phase === "load") {
+        b.timer -= dt;
+        if (b.timer <= 0) b.phase = "toBay";
+
+      } else if (b.phase === "toBay") {
+        walking = !haulStepTo(b, FARM_COURIER.x, FARM_COURIER.z, dt);
+        if (!walking) { b.phase = "ship"; b.timer = 0.2; }
+
+      } else if (b.phase === "ship") {
+        // stand on the pad; haulerAtCourier() below lets updateCourier run
+        // its usual per-second transfer without needing the player there
+        b.timer -= dt;
+        if (b.timer <= 0 || (state.farm.silo || 0) <= 0) { b.phase = "toSilo"; b.timer = 0.6; }
+
+      } else if (b.phase === "wait") {
+        b.timer -= dt;
+        if (b.timer <= 0) b.phase = "toSilo";
+      }
+
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  // true while any hired hauler is standing on the courier pad, working it
+  function haulerAtCourier() {
+    for (var i = 0; i < haulers.length; i++) {
+      var b = haulers[i];
+      if (b.obj.visible && b.phase === "ship") return true;
+    }
+    return false;
+  }
+
   // ---- delivery drivers: pallet to truck, all day long ----
   var drivers = [];
   var DRV_SPEED = 5.2, DRV_ACT_TIME = 0.35, DRV_CARRY = 4;
@@ -3841,7 +4195,22 @@
   // Growth is a 0..1 progress advanced by dt, NOT a startedAt/duration race
   // like the indoor beds. That is what will let weather change the rate
   // partway through a grow without rewriting every plot's timer.
-  function farmGrowMult() { return boostActive() ? 2 : 1; }
+  function farmGrowMult() {
+    return weatherNow().grow * (boostActive() ? 2 : 1);
+  }
+  // Growth across a stretch that may span several weather slots. The offline
+  // catch-up needs this: it cannot just multiply elapsed time by the sky it
+  // happens to find when you come back.
+  function farmGrowthBetween(fromMs, toMs) {
+    var total = 0, t = fromMs;
+    while (t < toMs) {
+      var slotEnd = (Math.floor(t / WEATHER_SLOT_MS) + 1) * WEATHER_SLOT_MS;
+      var end = Math.min(slotEnd, toMs);
+      total += ((end - t) / 1000) * weatherAt(t).grow;
+      t = end;
+    }
+    return total / FARM_BASE_GROW;
+  }
 
   function updateFarmPlots(dt) {
     if (!farmUnlocked()) return;
@@ -3862,7 +4231,7 @@
       fo.group.visible = live;
       if (!live) continue;
       var p = state.farm.plots[i];
-      if (p.state === "empty") {
+      if (p.state === "empty" || p.state === "locked") {
         fo.plant.visible = false; fo.glow.visible = false; fo.bar.visible = false;
       } else if (p.state === "growing") {
         fo.bar.visible = true;
@@ -4268,6 +4637,17 @@
     walkPhase: 0,
     lastSeed: 0,
   };
+  // The line above always spawns at the shop's doorway. Resume wherever the
+  // save actually left off instead — travelTo() handles this mid-session,
+  // but a page load never calls it, so a save with state.site === "farm"
+  // needs this once here or the player starts the frame 400 units from
+  // where the camera and the ground raycast think they are.
+  (function () {
+    var s0 = SITES[state.site] || SITES.shop;
+    var saved0 = state.sitePos && state.sitePos[state.site];
+    var at0 = (saved0 && typeof saved0.x === "number") ? saved0 : s0.spawn;
+    player.pos.set(at0.x, 0, at0.z);
+  })();
   var stackAnchor = new THREE.Group();
   var legL, legR, armL, armR, bodyGroup;
 
@@ -5853,14 +6233,16 @@
   }
 
   // The courier: Phase-1 stand-in for real freight trucks. Stand on the pad
-  // at the farm gate and it walks the silo down to the shop a crate at a time.
+  // at the farm gate and it walks the silo down to the shop a crate at a
+  // time — or, once a hauler is hired, the hauler stands there instead,
+  // and it runs whether or not you're the one watching it.
   var courierAcc = 0;
   function updateCourier(dt) {
-    if (state.site !== "farm" || !farmUnlocked()) { courierAcc = 0; return; }
-    if (d2(player.pos.x, player.pos.z, FARM_COURIER.x, FARM_COURIER.z) > 2.6 + PLAYER_RADIUS) {
-      courierAcc = 0;
-      return;
-    }
+    if (!farmUnlocked()) { courierAcc = 0; return; }
+    var playerHere = state.site === "farm" &&
+      d2(player.pos.x, player.pos.z, FARM_COURIER.x, FARM_COURIER.z) <= 2.6 + PLAYER_RADIUS;
+    var haulerHere = siteActive("farm") && haulerAtCourier();
+    if (!playerHere && !haulerHere) { courierAcc = 0; return; }
     if ((state.farm.silo || 0) <= 0 || (state.intake || 0) >= INTAKE_CAP) return;
     courierAcc += dt * courierRate();
     var move = Math.floor(courierAcc);
@@ -5870,7 +6252,11 @@
     if (move <= 0) return;
     state.farm.silo -= move;
     state.intake += move;
-    addFloater(FARM_COURIER.x, 3.6, FARM_COURIER.z, "→ " + move + " SHIPPED", "#ffd75e");
+    // only worth drawing a floater where someone can actually see it —
+    // otherwise a manager running unattended piles up sprites for nobody
+    if (state.site === "farm") {
+      addFloater(FARM_COURIER.x, 3.6, FARM_COURIER.z, "→ " + move + " SHIPPED", "#ffd75e");
+    }
     markTut("farmship");
   }
 
@@ -6446,7 +6832,10 @@
   var CAM_CATCHUP = 4.5;            // higher = camera snaps to the player faster
   // The camera pulls back as the store expands — starts tight on a small
   // room, eases out to camDistTarget whenever a new tier is unlocked.
-  var camDist = camDistForTier(state.roomTier);
+  // curSite() rather than camDistForTier() directly, so a save that starts
+  // at the farm gets the farm's wider establishing shot instead of whatever
+  // the shop's room tier happens to compute.
+  var camDist = curSite().camDist();
   var camDistTarget = camDist;
 
   function placeCameraAt(dist) {
@@ -6477,7 +6866,19 @@
     sun.target.position.set(CAM_TARGET.x, 0, CAM_TARGET.z);
     sun.target.updateMatrixWorld();
 
-    scene.background = curSite().skyColor || SKY_DEFAULT;
+    // Out on the farm the sky and the light are the weather; indoors they are
+    // fixed, because the shop has its own lighting rig.
+    if (state.site === "farm") {
+      var wx = weatherNow();
+      FARM_SKY.setHex(wx.sky);
+      scene.background = FARM_SKY;
+      sun.intensity += (wx.sun - sun.intensity) * Math.min(1, dt * 1.5);
+      hemi.intensity += (wx.hemi - hemi.intensity) * Math.min(1, dt * 1.5);
+    } else {
+      scene.background = curSite().skyColor || SKY_DEFAULT;
+      sun.intensity += (SUN_BASE - sun.intensity) * Math.min(1, dt * 1.5);
+      hemi.intensity += (HEMI_BASE - hemi.intensity) * Math.min(1, dt * 1.5);
+    }
 
     // The camera trails the player in +Z, so near the storefront it ends up
     // outside the building looking in. That's the only wall left that can get
@@ -6657,6 +7058,9 @@
   var boostChip = document.getElementById("boost-chip");
   var boostVal = document.getElementById("boost-val");
   var promoChip = document.getElementById("promo-chip");
+  var weatherChip = document.getElementById("weather-chip");
+  var weatherIcon = document.getElementById("weather-icon");
+  var weatherVal = document.getElementById("weather-val");
   var promoVal = document.getElementById("promo-val");
   var levelVal = document.getElementById("level-val");
 
@@ -6693,6 +7097,15 @@
       promoVal.textContent = promoSecsLeft() + "s";
     } else {
       promoChip.classList.remove("on");
+    }
+    // weather chip: season, sky and how long this spell has left to run
+    if (state.site === "farm" && farmUnlocked()) {
+      var wx = weatherNow(), sn = seasonNow();
+      weatherChip.classList.add("on");
+      weatherIcon.textContent = wx.icon;
+      weatherVal.textContent = sn.name + " · " + wx.label + " " + weatherSecsLeft() + "s";
+    } else {
+      weatherChip.classList.remove("on");
     }
     levelVal.textContent = storeLevel();
   }
@@ -6964,6 +7377,70 @@
       buy: function () {
         state.farm.courierLv = (state.farm.courierLv || 0) + 1;
         toast("\ud83d\ude9a Faster couriers \u2014 " + courierRate().toFixed(1) + " bud a second!");
+      },
+    },
+    {
+      id: "fieldhand", label: "FIELD HAND", icon: "\ud83c\udf3e", x: FIELD_ZONE.x, z: FIELD_ZONE.z,
+      site: "farm", color: 0x8ef0a4, kiosk: false,
+      hidden: function () { return !farmUnlocked(); },
+      name: function () {
+        return (state.farm.handLv || 0) === 0 ? "Hire a Field Hand" : "Hire Another Field Hand";
+      },
+      desc: function () {
+        var n = state.farm.handLv || 0;
+        return n >= MAX_FIELD_HANDS
+          ? "The whole field crew is on shift"
+          : (n === 0
+              ? "They plant, harvest and carry the crop to the silo for you"
+              : n + " on shift \u00b7 hire one more to keep the field moving");
+      },
+      cost: costFieldHand,
+      maxed: function () { return (state.farm.handLv || 0) >= MAX_FIELD_HANDS; },
+      buy: function () {
+        state.farm.handLv = (state.farm.handLv || 0) + 1;
+        toast("\ud83c\udf3e Field hand hired \u2014 they'll work the crop for you!");
+      },
+    },
+    {
+      id: "hauler", label: "HAULER", icon: "\ud83d\ude9a", x: HAULER_ZONE.x, z: HAULER_ZONE.z,
+      site: "farm", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !farmUnlocked(); },
+      name: function () {
+        return (state.farm.haulerLv || 0) === 0 ? "Hire a Hauler" : "Hire Another Hauler";
+      },
+      desc: function () {
+        var n = state.farm.haulerLv || 0;
+        return n >= MAX_HAULERS
+          ? "The silo run is fully staffed"
+          : (n === 0
+              ? "They run the silo down to the shop without you standing on the pad"
+              : n + " on shift \u00b7 hire one more to keep the road covered");
+      },
+      cost: costHauler,
+      maxed: function () { return (state.farm.haulerLv || 0) >= MAX_HAULERS; },
+      buy: function () {
+        state.farm.haulerLv = (state.farm.haulerLv || 0) + 1;
+        toast("\ud83d\ude9a Hauler hired \u2014 the silo run covers itself!");
+      },
+    },
+    {
+      // One-time purchase, unlike everything else here \u2014 there's only ever
+      // one manager. This is what turns the field hands and hauler from
+      // "workers who show up when you do" into "the farm runs itself".
+      id: "manager", label: "MANAGER", icon: "\ud83d\udcbc", x: MANAGER_ZONE.x, z: MANAGER_ZONE.z,
+      site: "farm", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !farmUnlocked(); },
+      name: function () { return "Hire a Farm Manager"; },
+      desc: function () {
+        return state.managers.farm
+          ? "Kingdom Farms runs itself, whether you're here or at the shop"
+          : "Keeps the field hands and hauler working while you're away";
+      },
+      cost: function () { return FARM_MANAGER_COST; },
+      maxed: function () { return !!state.managers.farm; },
+      buy: function () {
+        state.managers.farm = true;
+        toast("\ud83d\udcbc Farm Manager hired \u2014 Kingdom Farms runs itself now!");
       },
     },
     {
@@ -7443,16 +7920,33 @@
   //  OFFLINE CATCH-UP
   // ===================================================================
   (function () {
-    var el = Date.now() - (state.lastSaveTime || Date.now());
+    var lastMs = state.lastSaveTime || Date.now();
+    var el = Date.now() - lastMs;
     if (el < 8000) return;
+    var found = false;
     for (var i10 = 0; i10 < plotDefs.length; i10++) {
       var p = state.plots[i10];
-      if (p.state === "growing" && Date.now() - p.startedAt >= p.duration) {
-        setTimeout(function () {
-          toast("🌤️ Welcome back — crops finished while you were away");
-        }, 700);
-        break;
+      if (p.state === "growing" && Date.now() - p.startedAt >= p.duration) { found = true; break; }
+    }
+    // The indoor beds compare against wall-clock time already, so they catch
+    // up for free. The outdoor field advances `prog` by dt every frame
+    // instead — the only way weather can vary the rate mid-grow — which
+    // means no frames ran while you were away, means no growth happened.
+    // farmGrowthBetween() replays exactly what the weather WAS across the
+    // slots you missed, rather than guessing with whatever's on screen now.
+    if (farmUnlocked()) {
+      var unlocked = farmRowsUnlocked();
+      for (var f10 = 0; f10 < unlocked; f10++) {
+        var fp = state.farm.plots[f10];
+        if (!fp || fp.state !== "growing") continue;
+        fp.prog += farmGrowthBetween(lastMs, Date.now());
+        if (fp.prog >= 1) { fp.prog = 1; fp.state = "ready"; found = true; }
       }
+    }
+    if (found) {
+      setTimeout(function () {
+        toast("🌤️ Welcome back — crops finished while you were away");
+      }, 700);
     }
   })();
 
@@ -7505,6 +7999,8 @@
     updateFarmPlots(dt);
     updateFarmPlotVisuals(now);
     updateFarmRowTiles(now);
+    updateFieldHands(now, dt);
+    updateHaulers(now, dt);
     updateCourier(dt);
     updateIntakeVisuals();
     updatePickers(now, dt);
