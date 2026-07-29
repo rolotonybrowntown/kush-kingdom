@@ -560,7 +560,13 @@
   var MAX_ROOM_TIER = ROOM_TIERS.length - 1;
   function camDistForTier(t)    { return ROOM_TIERS[t].camDist; }
   // cost to expand FROM (t-1) TO t
-  function expandCost(t) { return Math.round(200 * Math.pow(3.2, t - 1)); }
+  // Each unlock is priced just under the tier it opens, so buying the room is
+  // the last thing you save for before a whole new price bracket begins.
+  //   Lv.2 lab $3K · Lv.3 kitchen $60K · Lv.4 dock $750K
+  // These used to be $200 / $640 / $2,048 — the dock cost less than a single
+  // oven, which is a large part of why money stopped meaning anything.
+  var EXPAND_COSTS = [0, 3000, 60000, 750000];
+  function expandCost(t) { return EXPAND_COSTS[t] || 0; }
   // what each level physically adds, so the upgrade card promises something
   // concrete rather than an abstract "tier 1 -> 2"
   var LEVEL_REVEALS = [
@@ -615,7 +621,7 @@
     return BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE) *
            (1 + 0.35 * (state.dabLv || 0));
   }
-  function costDabLv() { return Math.round(1500 * Math.pow(1.75, state.dabLv || 0)); }
+  function costDabLv() { return Math.round(6000 * Math.pow(1.9, state.dabLv || 0)); }
 
   // ---- extraction lab: rosin presses bought one machine at a time ----
   // The lab opens empty. Each slot has its own pay square, and only the next
@@ -650,8 +656,8 @@
   }
   // the whole line opens with the lab; you just have to afford the machines
   function pressSlotsAvailable() { return dabsUnlocked() ? MAX_PRESSES : 0; }
-  function pressCost(n) { return Math.round(700 * Math.pow(1.9, n)); }
-  function hopperCost(lv) { return Math.round(900 * Math.pow(2.2, lv)); }
+  function pressCost(n) { return Math.round(3000 * Math.pow(1.95, n)); }
+  function hopperCost(lv) { return Math.round(6000 * Math.pow(2.5, lv)); }
 
   // ---- kitchen: ovens that bake dabs into edibles, unlocked at level 3 ----
   // Same shape as the press line, one bay further back: buy ovens one at a
@@ -683,7 +689,7 @@
   function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
   // An oven is a level-3 purchase, by which point the shop is turning over
   // real money — the old $4K opener was pocket change.
-  function ovenCost(n) { return Math.round(20000 * Math.pow(1.75, n)); }
+  function ovenCost(n) { return Math.round(60000 * Math.pow(1.95, n)); }
 
   // ---- loading dock: wholesale, unlocked at level 4 ----
   // The retail counter sells to walk-ins one unit at a time. The dock sells
@@ -713,13 +719,13 @@
   var BAY_X = [-9.0, -3.0, 3.0, 9.0];
   var BAY_HALF_W = 2.6;
   function bayCount() { return Math.max(1, Math.min(MAX_BAYS, state.bayCount || 1)); }
-  function bayCost(n) { return Math.round(60000 * Math.pow(2.4, n - 1)); }
+  function bayCost(n) { return Math.round(1000000 * Math.pow(2.6, n - 1)); }
 
   // Bigger trucks haul more per run, which is the whole point of wholesale:
   // one trip moves what the counter would take a hundred customers to shift.
   var BASE_TRUCK_LOAD = 10, MAX_TRUCK_LV = 5;
   function truckCap() { return BASE_TRUCK_LOAD + 8 * (state.truckLv || 0); }
-  function truckCost(lv) { return Math.round(24000 * Math.pow(2.2, lv)); }
+  function truckCost(lv) { return Math.round(1000000 * Math.pow(2.3, lv)); }
   var TRUCK_ARRIVE_TIME = 2.6;    // seconds reversing onto the bay
   var TRUCK_DEPART_TIME = 2.6;    // seconds pulling away once loaded
   var TRUCK_GAP = 3.0;            // seconds before the next one backs in
@@ -742,8 +748,8 @@
   var BAY_ZONE    = { x:  11.5, z: -71.5 };        // add another loading bay
   var MAX_DRIVERS = 3;
   var MAX_PICKERS = 3;
-  function costDriver() { return Math.round(9000 * Math.pow(2.6, state.driverLv || 0)); }
-  function costPicker() { return Math.round(7000 * Math.pow(2.6, state.pickerLv || 0)); }
+  function costDriver() { return Math.round(1000000 * Math.pow(2.7, state.driverLv || 0)); }
+  function costPicker() { return Math.round(1000000 * Math.pow(2.7, state.pickerLv || 0)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -975,10 +981,10 @@
   function costSell()  { return Math.round(69 * Math.pow(1.36, state.sellLv)); }
   function costBotanist() { return Math.round(350 * Math.pow(2.6, state.botanistLv || 0)); }
   function costRunner() { return Math.round(500 * Math.pow(2.6, state.runnerLv || 0)); }
-  function costExtractor() { return Math.round(1200 * Math.pow(2.6, state.extractorLv || 0)); }
-  function costBaker() { return Math.round(6000 * Math.pow(2.6, state.bakerLv || 0)); }
-  function costStaffSpeed() { return Math.round(600 * Math.pow(2.9, state.staffSpeedLv || 0)); }
-  function costStaffLoad() { return Math.round(800 * Math.pow(3.0, state.staffLoadLv || 0)); }
+  function costExtractor() { return Math.round(8000 * Math.pow(2.8, state.extractorLv || 0)); }
+  function costBaker() { return Math.round(100000 * Math.pow(2.8, state.bakerLv || 0)); }
+  function costStaffSpeed() { return Math.round(4000 * Math.pow(3.4, state.staffSpeedLv || 0)); }
+  function costStaffLoad() { return Math.round(6000 * Math.pow(3.5, state.staffLoadLv || 0)); }
   // one multiplier and one carry bonus, shared by every hired hand. Four
   // levels taking staff up to a bit over twice their starting pace.
   function staffSpeedMult() { return 1 + 0.32 * (state.staffSpeedLv || 0); }
@@ -1003,7 +1009,7 @@
   }
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
-  function costPromo() { return Math.round(sellValue() * 22); }
+  function costPromo() { return Math.round(sellValue() * 150); }
 
   // Both ends of an upgrade have to look different even when they round to the
   // same abbreviation. "$1.0K → $1.0K" reads as a broken upgrade even when
