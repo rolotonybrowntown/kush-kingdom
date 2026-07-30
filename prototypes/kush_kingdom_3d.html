@@ -732,6 +732,19 @@
   var FARM_DEED_COST = 2500000;
   function farmUnlocked() { return !!(state.farm && state.farm.unlocked); }
 
+  // Third location. Placed well past the farm — farm's own worst-case fog
+  // reach (camDist 58 * 4.2 = 243.6) from its far edge (~-445 including the
+  // ground mesh's visual overhang) means anything past roughly z = -688
+  // clears it with margin. LOUNGE_CZ's own near edge (-739.5) leaves ~51
+  // units of slack; re-check this arithmetic if the room ever grows past
+  // camDist 40 (reach 168, near edge fog reaches back only to -571.5).
+  var LOUNGE_CZ = -760;
+  var LOUNGE_HALF_X = 18, LOUNGE_HALF_Z = 22;   // one interior room, far smaller than the farm's open field
+  var LOUNGE_GROUND_TOP = FLOOR_TOP_BACK;       // floorTopAt(z) already returns this for any z this negative — free ride
+  var LOUNGE_DEED_COST = 6000000;
+  var LOUNGE_INTAKE_CAP = 48;   // per kind, above PALLET_CAP (36) so a full pallet can drain in one go
+  function loungeUnlocked() { return !!(state.lounge && state.lounge.unlocked); }
+
   var SITES = {
     shop: {
       id: "shop", name: "Kush Kingdom", icon: "🏪",
@@ -764,9 +777,40 @@
           minZ: FARM_CZ - FARM_HALF_Z + 1.5, maxZ: FARM_CZ + FARM_HALF_Z - 1.5,
         };
       },
+      deedCost: FARM_DEED_COST,
+      onUnlock: function () {
+        state.farm.unlocked = true;
+        // the deed comes with the first row already worked
+        for (var i = 0; i < FARM_COLS; i++) state.farm.plots[i] = { state: "empty", prog: 0 };
+        refreshFarm();
+        toast("🌾 Deed signed — Kingdom Farms is yours!");
+      },
+    },
+    lounge: {
+      id: "lounge", name: "Downtown Lounge", icon: "🍸",
+      skyColor: new THREE.Color(0x4a3a5c),   // moodier than the shop/farm's daylight blues
+      sub: function () {
+        return loungeUnlocked() ? "Sit-down bar · sells bud, dabs and edibles by the table"
+                                 : "Buy the deed to open a bar downtown";
+      },
+      spawn: { x: 0, z: LOUNGE_CZ + LOUNGE_HALF_Z - 6 },
+      camDist: function () { return 40; },
+      groundOf: function () { return loungeGround; },
+      unlocked: loungeUnlocked,
+      bounds: function () {
+        return {
+          minX: -LOUNGE_HALF_X + 1.5, maxX: LOUNGE_HALF_X - 1.5,
+          minZ: LOUNGE_CZ - LOUNGE_HALF_Z + 1.5, maxZ: LOUNGE_CZ + LOUNGE_HALF_Z - 1.5,
+        };
+      },
+      deedCost: LOUNGE_DEED_COST,
+      onUnlock: function () {
+        state.lounge.unlocked = true;
+        toast("🍸 Deed signed — the Downtown Lounge is yours!");
+      },
     },
   };
-  var SITE_LIST = [SITES.shop, SITES.farm];
+  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge];
   function curSite() { return SITES[state.site] || SITES.shop; }
 
   // what each level physically adds, so the upgrade card promises something
@@ -907,6 +951,18 @@
     return Math.max(1, t);
   }
   function fanCost(lv) { return Math.round(80000 * Math.pow(2.6, lv)); }
+
+  // ---- Lounge menu: rides the shop's own value curves via a flat markup,
+  // exactly the way dabValue()/edibleValue() already ride sellValue() — so
+  // buying strain/purity/recipe upgrades at the shop raises lounge prices
+  // too, automatically, with no separate lounge value-upgrade track needed.
+  var LOUNGE_MARKUP = 2.5;
+  var LOUNGE_TIP_MIN = 0.10, LOUNGE_TIP_MAX = 0.30;
+  function loungeValue(kind) {
+    var base = kind === "edible" ? edibleValue() : kind === "dab" ? dabValue() : sellValue();
+    return base * LOUNGE_MARKUP;
+  }
+  function loungeTipPct() { return LOUNGE_TIP_MIN + Math.random() * (LOUNGE_TIP_MAX - LOUNGE_TIP_MIN); }
   function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
   // An oven is a level-3 purchase, by which point the shop is turning over
   // real money — the old $4K opener was pocket change.
@@ -1189,9 +1245,11 @@
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       // ---- empire ----
       site: "shop",                     // which location you are standing in
-      sitePos: { shop: null, farm: null },  // where you left off at each one
+      sitePos: { shop: null, farm: null, lounge: null },  // where you left off at each one
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
+      loungeIntake: { bud: 0, dab: 0, edible: 0 },   // stock delivered to the lounge, also its sellable stock
+      lounge: { unlocked: false },
       farm: {
         unlocked: false,
         rowsUnlocked: FARM_COLS,        // one row free with the deed
@@ -1262,8 +1320,15 @@
       merged.intake = Math.max(0, Math.min(INTAKE_CAP, merged.intake || 0));
       if (!merged.managers || typeof merged.managers !== "object") merged.managers = {};
       merged.managers.farm = !!merged.managers.farm;
-      if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = { shop: null, farm: null };
-      ["shop", "farm"].forEach(function (k) {
+      if (!merged.lounge || typeof merged.lounge !== "object") merged.lounge = { unlocked: false };
+      merged.lounge.unlocked = !!merged.lounge.unlocked;
+      if (!merged.loungeIntake || typeof merged.loungeIntake !== "object") merged.loungeIntake = { bud: 0, dab: 0, edible: 0 };
+      ["bud", "dab", "edible"].forEach(function (k) {
+        var v = merged.loungeIntake[k];
+        merged.loungeIntake[k] = (typeof v === "number" && isFinite(v)) ? Math.max(0, Math.min(LOUNGE_INTAKE_CAP, v)) : 0;
+      });
+      if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = { shop: null, farm: null, lounge: null };
+      ["shop", "farm", "lounge"].forEach(function (k) {
         var p = merged.sitePos[k];
         if (!p || typeof p.x !== "number" || typeof p.z !== "number") merged.sitePos[k] = null;
       });
@@ -1271,7 +1336,9 @@
       // ground to raycast against — a rolled-back save could do exactly that.
       // Tested against `merged` rather than SITES[].unlocked(), because those
       // hooks read the global `state`, which does not exist yet down here.
-      if (merged.site !== "shop" && !(merged.site === "farm" && merged.farm.unlocked)) {
+      if (merged.site !== "shop" &&
+          !(merged.site === "farm" && merged.farm.unlocked) &&
+          !(merged.site === "lounge" && merged.lounge.unlocked)) {
         merged.site = "shop";
       }
       // Beds unlock a whole row at a time now — round an older save's count up
@@ -2984,6 +3051,222 @@
       g.add(bale);
     }
   })();
+
+  // ===================================================================
+  //  DOWNTOWN LOUNGE — the third location
+  // ===================================================================
+  // One fixed interior room: bar counter along the far wall, tables between
+  // it and the door. No room-tier growth here, unlike the shop — see the
+  // Lounge plan's "out of scope for v1" list.
+  var loungeGroup = new THREE.Group();
+  scene.add(loungeGroup);
+  var loungeGround;
+  var LOUNGE_TABLE_DEFS = [
+    { x: -9, z: LOUNGE_CZ - 4 }, { x: 9, z: LOUNGE_CZ - 4 },
+    { x: -9, z: LOUNGE_CZ + 6 }, { x: 9, z: LOUNGE_CZ + 6 },
+  ];
+  var LOUNGE_SEATS = [];
+  LOUNGE_TABLE_DEFS.forEach(function (t) {
+    LOUNGE_SEATS.push({ x: t.x - 1.1, z: t.z, tableX: t.x, tableZ: t.z });
+    LOUNGE_SEATS.push({ x: t.x + 1.1, z: t.z, tableX: t.x, tableZ: t.z });
+  });
+  var LOUNGE_BAR_Z = LOUNGE_CZ - LOUNGE_HALF_Z + 3;
+  var LOUNGE_STOCK_DEFS = [
+    { kind: "bud",    label: "BUD",     color: 0x6fd68a, mat: null, x: -3.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
+    { kind: "dab",    label: "DABS",    color: 0xffc36a, mat: null, x:  0.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
+    { kind: "edible", label: "EDIBLES", color: 0xd7996a, mat: null, x:  3.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
+  ];
+  var loungeStockPiles = [];
+
+  (function buildLounge() {
+    var g = loungeGroup;
+
+    loungeGround = new THREE.Mesh(
+      new THREE.BoxGeometry(LOUNGE_HALF_X * 2 + 6, 0.3, LOUNGE_HALF_Z * 2 + 6), M.woodDark);
+    loungeGround.position.set(0, LOUNGE_GROUND_TOP - 0.15, LOUNGE_CZ);
+    loungeGround.receiveShadow = true;
+    g.add(loungeGround);
+
+    // ---- four walls, door gap on the entrance (south, +Z) wall ----
+    var wallThick = 0.4, wallH = 9;
+    var minX = -LOUNGE_HALF_X, maxX = LOUNGE_HALF_X;
+    var minZ = LOUNGE_CZ - LOUNGE_HALF_Z, maxZ = LOUNGE_CZ + LOUNGE_HALF_Z;
+    function wallSlab(sizeX, sizeZ, x, z) {
+      var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, wallH, sizeZ), M.woodDark);
+      wall.position.set(x, wallH / 2, z);
+      wall.receiveShadow = true; wall.castShadow = true;
+      g.add(wall);
+    }
+    wallSlab(maxX - minX + wallThick * 2, wallThick, 0, minZ);           // far (bar) wall
+    wallSlab(wallThick, maxZ - minZ, minX, LOUNGE_CZ);                   // west
+    wallSlab(wallThick, maxZ - minZ, maxX, LOUNGE_CZ);                   // east
+    var doorHalf = 3.0;
+    wallSlab(maxX - doorHalf, wallThick, (minX + maxX - doorHalf) / 2 - 0.15, maxZ);   // south, left of door
+    wallSlab(maxX - doorHalf, wallThick, -(minX + maxX - doorHalf) / 2 + 0.15, maxZ);  // south, right of door — mirrors the left segment
+    var lintel = new THREE.Mesh(new THREE.BoxGeometry(doorHalf * 2, wallH - 6.4, wallThick), M.woodDark);
+    lintel.position.set(0, 6.4 + (wallH - 6.4) / 2, maxZ);
+    g.add(lintel);
+    var doorSign = textSprite("DOWNTOWN LOUNGE", "#e8c9ff");
+    doorSign.scale.set(6.6, 1.4, 1);
+    doorSign.position.set(0, 6.9, maxZ);
+    g.add(doorSign);
+
+    // ---- bar counter along the far wall ----
+    var counter = new THREE.Mesh(new THREE.BoxGeometry(10, 1.3, 1.6), M.counterTop);
+    counter.position.set(0, 0.65 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
+    counter.castShadow = true; counter.receiveShadow = true;
+    g.add(counter);
+    var counterTop = new THREE.Mesh(new THREE.BoxGeometry(10.3, 0.12, 1.8), M.counterStone);
+    counterTop.position.set(0, 1.36 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
+    g.add(counterTop);
+
+    // ---- stock crates behind the counter, one small pile per product ----
+    LOUNGE_STOCK_DEFS.forEach(function (def) {
+      var pg = new THREE.Group();
+      var crate = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.85, 1.0),
+        def.kind === "bud" ? M.bud : def.kind === "dab" ? M.dab : M.edible);
+      crate.position.set(0, LOUNGE_GROUND_TOP + 0.45, 0);
+      crate.castShadow = true;
+      pg.add(crate);
+      var bar = makeStatusBar(1.6, def.color);
+      bar.position.set(0, 2.2, 0);
+      pg.add(bar);
+      var lbl = textSprite(def.label, "#ffffff");
+      lbl.scale.set(1.7, 0.44, 1);
+      lbl.position.set(0, 2.7, 0);
+      pg.add(lbl);
+      pg.position.set(def.x, 0, def.z);
+      g.add(pg);
+      loungeStockPiles.push({ group: pg, crate: crate, bar: bar });
+    });
+
+    // ---- tables + seats/stools ----
+    LOUNGE_TABLE_DEFS.forEach(function (t) {
+      var top = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 0.12, 16), M.counterTop);
+      top.position.set(t.x, LOUNGE_GROUND_TOP + 1.05, t.z);
+      top.castShadow = true; top.receiveShadow = true;
+      g.add(top);
+      var leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 1.0, 10), M.metalRack);
+      leg.position.set(t.x, LOUNGE_GROUND_TOP + 0.5, t.z);
+      leg.castShadow = true;
+      g.add(leg);
+      [[-1.1, 0], [1.1, 0]].forEach(function (so) {
+        var stool = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.1, 12), M.counterStone);
+        stool.position.set(t.x + so[0], LOUNGE_GROUND_TOP + 0.62, t.z + so[1]);
+        stool.castShadow = true;
+        g.add(stool);
+        var stoolLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8), M.metalRack);
+        stoolLeg.position.set(t.x + so[0], LOUNGE_GROUND_TOP + 0.3, t.z + so[1]);
+        g.add(stoolLeg);
+      });
+    });
+  })();
+
+  // ---- table-based customers: a variant of the counter's queue, not a
+  // reskin of it. Fixed seats instead of queue lanes, and an extra "linger"
+  // phase — a seat stays occupied for a while after the order's filled,
+  // which is what makes a table read as slower/higher-margin than a
+  // walk-up sale. Order-filling only runs during "order"; once that window
+  // closes the seat is just ambience even if loungeIntake ran dry mid-order,
+  // so an understocked bar reads as "slow service" rather than a customer
+  // waiting forever for stock that never comes.
+  var loungeNpcs = [];
+  var MAX_LOUNGE_CUSTOMERS = LOUNGE_SEATS.length;
+  (function buildLoungeNpcs() {
+    var colors = [M.npc1, M.npc2, M.npc3];
+    for (var n = 0; n < MAX_LOUNGE_CUSTOMERS; n++) {
+      var g = new THREE.Group();
+      var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), colors[n % colors.length]);
+      t.position.y = 1.1; t.castShadow = true; g.add(t);
+      var h = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.64, 0.62), n % 2 ? M.skin2 : M.skin);
+      h.position.y = 1.9; h.castShadow = true; g.add(h);
+      var cap = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.4, 0.3, 7), M.dark);
+      cap.position.y = 2.26; g.add(cap);
+      var lgeo = new THREE.BoxGeometry(0.27, 0.7, 0.27);
+      var l1 = new THREE.Mesh(lgeo, M.pants); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.pants); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      var bubble = makeBubbleSprite();
+      bubble.position.y = 3.6;
+      bubble.visible = false;
+      g.add(bubble);
+      g.scale.setScalar(0.95);
+      scene.add(g);
+      loungeNpcs.push({
+        obj: g, l1: l1, l2: l2, bubble: bubble,
+        phase: n * 1.7, seat: n, kind: "bud",
+        want: 0, shown: -1, buyAcc: 0, lastPhase: null,
+      });
+    }
+  })();
+
+  // A sit-down order is a round, not a bulk buy — deliberately smaller than
+  // the counter's rollOrder().
+  function rollLoungeOrder() { return 1 + Math.floor(Math.random() * 2); }
+
+  // Timing is where "slower throughput, higher margin" actually lives — a
+  // seat's total occupied time (walk*2 + ORDER + LINGER) is the throughput
+  // cap, tuned independently of the counter's own NPC_SPEED/NPC_WAIT.
+  var LOUNGE_SPEED = 5.0;
+  var LOUNGE_ORDER_TIME = 5.0;
+  var LOUNGE_ORDER_EVERY = 1.4;
+  var LOUNGE_LINGER_TIME = 11.0;
+
+  function updateLoungeNpcs(now, dt) {
+    var startZ = LOUNGE_CZ + LOUNGE_HALF_Z - 6;   // the door
+    loungeNpcs.forEach(function (npc, idx) {
+      var seat = LOUNGE_SEATS[idx];
+      var walkTime = Math.abs(startZ - seat.z) / LOUNGE_SPEED;
+      var cycle = walkTime * 2 + LOUNGE_ORDER_TIME + LOUNGE_LINGER_TIME;
+      var t = ((now / 1000) + npc.phase) % cycle;
+      var z, phase, walking;
+      if (t < walkTime) {
+        z = startZ + (seat.z - startZ) * (t / walkTime);
+        walking = true; phase = "sit";
+      } else if (t < walkTime + LOUNGE_ORDER_TIME) {
+        z = seat.z; walking = false; phase = "order";
+      } else if (t < walkTime + LOUNGE_ORDER_TIME + LOUNGE_LINGER_TIME) {
+        z = seat.z; walking = false; phase = "linger";
+      } else {
+        var p2 = (t - walkTime - LOUNGE_ORDER_TIME - LOUNGE_LINGER_TIME) / walkTime;
+        z = seat.z + (startZ - seat.z) * p2;
+        walking = true; phase = "leave";
+      }
+
+      if (phase === "sit" && npc.lastPhase !== "sit") {
+        var roll = Math.random();
+        npc.kind = (ediblesUnlocked() && roll < 0.2) ? "edible"
+                 : (dabsUnlocked() && roll < 0.5) ? "dab" : "bud";
+        npc.want = rollLoungeOrder();
+        npc.shown = -1; npc.buyAcc = 0;
+      }
+      if (phase === "order") {
+        npc.buyAcc += dt;
+        while (npc.want > 0 && npc.buyAcc >= LOUNGE_ORDER_EVERY) {
+          npc.buyAcc -= LOUNGE_ORDER_EVERY;
+          if (!customerBuyLounge(npc.kind)) break;
+          npc.want--;
+        }
+      }
+      npc.lastPhase = phase;
+
+      var showBubble = phase === "sit" || (phase === "order" && npc.want > 0);
+      npc.bubble.visible = showBubble;
+      if (showBubble && npc.shown !== npc.want) {
+        updateBubbleSprite(npc.bubble,
+          (npc.kind === "edible" ? "🍪" : npc.kind === "dab" ? "🍯" : "🌿") + " x" + npc.want,
+          npc.kind === "edible" ? "#c9743a" : npc.kind === "dab" ? "#e09a2c" : "#4faa62");
+        npc.shown = npc.want;
+      }
+
+      npc.obj.position.set(seat.x, walking ? Math.abs(Math.sin(now * 0.014 + idx)) * 0.06 : 0, z);
+      npc.obj.rotation.y = (phase === "order" || phase === "linger")
+        ? Math.atan2(seat.tableX - seat.x, seat.tableZ - z)
+        : (walking && phase === "leave" ? Math.PI : 0);
+      var swing = walking ? Math.sin(now * 0.014 + idx) * 0.5 : 0;
+      npc.l1.rotation.x = swing; npc.l2.rotation.x = -swing;
+    });
+  }
 
   // ---- pickers: production floor to pallet ----
   // The counter staff (runners, extractors, bakers) all feed the till out
@@ -6228,6 +6511,96 @@
     state.pallets[kind] = Math.max(0, Math.min(PALLET_CAP, palletCount(kind) + n));
   }
 
+  // ---- Lounge Run: hauls dock pallet stock to the Lounge, mirroring the
+  // farm's courierActive()/updateCourier() drain shape. Draws down the exact
+  // same state.pallets[kind] pool a loaded wholesale truck reads for gross —
+  // the deliberate tension: send a pallet to a truck for quick cash, or to
+  // the Lounge for a bigger per-unit payout at a slower drip. Neither system
+  // needs to know the other exists. No hireable role for this in v1 — it's a
+  // manual, active choice, on purpose (see the Lounge plan's out-of-scope
+  // list for why Bartenders are deferred).
+  var LOUNGE_RUN_ZONE = { x: 11.0, z: -79.0 };
+  var LOUNGE_RUN_RATE = 2.0;   // units/sec combined across all 3 kinds
+  function loungeRunActive() {
+    if (!loungeUnlocked()) return false;
+    var playerHere = state.site === "shop" &&
+      d2(player.pos.x, player.pos.z, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z) <= 2.0 + PLAYER_RADIUS;
+    if (!playerHere) return false;
+    for (var i = 0; i < PALLET_DEFS.length; i++) {
+      var k = PALLET_DEFS[i].kind;
+      if (palletCount(k) > 0 && (state.loungeIntake[k] || 0) < LOUNGE_INTAKE_CAP) return true;
+    }
+    return false;
+  }
+  var loungeRunAcc = 0, loungeRunCursor = 0;
+  function updateLoungeRun(dt) {
+    if (!loungeRunActive()) { loungeRunAcc = 0; return; }
+    loungeRunAcc += dt * LOUNGE_RUN_RATE;
+    var moves = Math.floor(loungeRunAcc);
+    if (moves <= 0) return;
+    loungeRunAcc -= moves;
+    for (var m = 0; m < moves; m++) {
+      // round-robin across bud/dab/edible so one product doesn't starve
+      // the others the way a fixed priority order would
+      for (var tries = 0; tries < PALLET_DEFS.length; tries++) {
+        var def = PALLET_DEFS[loungeRunCursor % PALLET_DEFS.length];
+        loungeRunCursor++;
+        if (palletCount(def.kind) > 0 && (state.loungeIntake[def.kind] || 0) < LOUNGE_INTAKE_CAP) {
+          palletAdd(def.kind, -1);
+          state.loungeIntake[def.kind] = (state.loungeIntake[def.kind] || 0) + 1;
+          if (state.site === "shop") {
+            addFloater(LOUNGE_RUN_ZONE.x, 3.6, LOUNGE_RUN_ZONE.z, "→ " + def.label, "#c76ee0");
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  (function buildLoungeRunPad() {
+    var g = new THREE.Group();
+    var y0 = floorTopAt(LOUNGE_RUN_ZONE.z);
+    var half = 2.0;
+    var halo = new THREE.Mesh(
+      new THREE.PlaneGeometry(half * 3.6, half * 3.6),
+      new THREE.MeshBasicMaterial({
+        map: glowTex, color: 0xc76ee0, transparent: true,
+        opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = y0 + 0.005;
+    g.add(halo);
+    var tint = new THREE.Mesh(
+      new THREE.PlaneGeometry(half * 2, half * 2),
+      new THREE.MeshBasicMaterial({ color: 0xc76ee0, transparent: true, opacity: 0.7, depthWrite: false })
+    );
+    tint.rotation.x = -Math.PI / 2;
+    tint.position.y = y0 + 0.01;
+    g.add(tint);
+    var dash = new THREE.Mesh(
+      new THREE.PlaneGeometry(half * 2 + 0.5, half * 2 + 0.5),
+      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
+    );
+    dash.rotation.x = -Math.PI / 2;
+    dash.position.y = y0 + 0.02;
+    g.add(dash);
+    var lbl = textSprite("LOUNGE RUN", "#ffffff");
+    lbl.scale.set(3.4, 0.86, 1);
+    lbl.position.set(0, y0 + 1.6, 0);
+    g.add(lbl);
+    g.position.set(LOUNGE_RUN_ZONE.x, 0, LOUNGE_RUN_ZONE.z);
+    scene.add(g);
+  })();
+
+  function updateLoungeStockVisuals() {
+    LOUNGE_STOCK_DEFS.forEach(function (def, i) {
+      var n = state.loungeIntake[def.kind] || 0;
+      loungeStockPiles[i].crate.visible = n > 0;
+      setBar(loungeStockPiles[i].bar, n / LOUNGE_INTAKE_CAP);
+    });
+  }
+
   // Walk onto a pallet with matching stock in your pack and it goes on. Walk
   // onto one empty-handed instead and it loads YOU up — a manual relay to
   // the bays that works alongside drivers rather than replacing them, for
@@ -6757,95 +7130,162 @@
     renderUpgrades();
   }
 
-  // ---- one continuously-growing pallet of cash on the payout tray ----
-  // Bricks tile a layer across the tray footprint, then a new layer starts
-  // directly on top once the layer below fills — leave it uncollected long
-  // enough and it becomes a genuinely tall stack.
-  var pendingCash = 0;
-  var cashBricks = [];
-  var BRICK_VALUE = 8;
-  var BRICK_COLS = 4, BRICK_ROWS = 4;
-  var BRICK_MAX_LAYERS = 24;
-  // solid chunky block with a printed "$" on top — reads as a brick of cash
-  // sitting on the floor, not a stack of thin sheets
-  var BRICK_W = 0.68, BRICK_D = 0.5, BRICK_H = 0.32;
-  var brickGeo = new THREE.BoxGeometry(BRICK_W, BRICK_H, BRICK_D);
-  var brickMats = [M.cashSide, M.cashSide, M.cashTop, M.cashSide, M.cashSide, M.cashSide];
+  // ---- a "till": a fixed floor pad that piles cash bricks until walked
+  // into. One continuously-growing pallet of cash — bricks tile a layer
+  // across the tray footprint, then a new layer starts directly on top
+  // once the layer below fills — leave it uncollected long enough and it
+  // becomes a genuinely tall stack. Factored out so each location (shop,
+  // lounge) gets its own pad/pile without copy-pasting the geometry and
+  // animation code — every call site keeps calling the same functions it
+  // always did (payOutCash === shopTill.payOut).
+  function makeTill(pad, padColor, label) {
+    var pendingCash = 0;
+    var cashBricks = [];
+    var BRICK_VALUE = 8;
+    var BRICK_COLS = 4, BRICK_ROWS = 4;
+    var BRICK_MAX_LAYERS = 24;
+    // solid chunky block with a printed "$" on top — reads as a brick of
+    // cash sitting on the floor, not a stack of thin sheets
+    var BRICK_W = 0.68, BRICK_D = 0.5, BRICK_H = 0.32;
+    var brickGeo = new THREE.BoxGeometry(BRICK_W, BRICK_H, BRICK_D);
+    var brickMats = [M.cashSide, M.cashSide, M.cashTop, M.cashSide, M.cashSide, M.cashSide];
 
-  function brickSpot(i) {
-    var perLayer = BRICK_COLS * BRICK_ROWS;
-    var layer = Math.floor(i / perLayer);
-    var within = i % perLayer;
-    var col = within % BRICK_COLS, row = Math.floor(within / BRICK_COLS);
-    var margin = 0.42;
-    var stepX = (CASH_PAD.half * 2 - margin * 2) / (BRICK_COLS - 1);
-    var stepZ = (CASH_PAD.half * 2 - margin * 2) / (BRICK_ROWS - 1);
-    return {
-      x: CASH_PAD.x - (CASH_PAD.half - margin) + col * stepX,
-      z: CASH_PAD.z - (CASH_PAD.half - margin) + row * stepZ,
-      y: floorTopAt(CASH_PAD.z) + BRICK_H / 2 + 0.01 + layer * BRICK_H,
-    };
+    function brickSpot(i) {
+      var perLayer = BRICK_COLS * BRICK_ROWS;
+      var layer = Math.floor(i / perLayer);
+      var within = i % perLayer;
+      var col = within % BRICK_COLS, row = Math.floor(within / BRICK_COLS);
+      var margin = 0.42;
+      var stepX = (pad.half * 2 - margin * 2) / (BRICK_COLS - 1);
+      var stepZ = (pad.half * 2 - margin * 2) / (BRICK_ROWS - 1);
+      return {
+        x: pad.x - (pad.half - margin) + col * stepX,
+        z: pad.z - (pad.half - margin) + row * stepZ,
+        y: floorTopAt(pad.z) + BRICK_H / 2 + 0.01 + layer * BRICK_H,
+      };
+    }
+
+    function addCashBrick() {
+      var spot = brickSpot(cashBricks.length);
+      var body = new THREE.Mesh(brickGeo, brickMats);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      body.position.set(spot.x, spot.y + 2.2, spot.z);
+      body.rotation.y = (Math.random() - 0.5) * 0.08;
+      scene.add(body);
+      cashBricks.push({ obj: body, restY: spot.y, bornAt: performance.now() });
+    }
+
+    function removeCashBrick() {
+      var b = cashBricks.pop();
+      if (b) scene.remove(b.obj);
+    }
+
+    function refreshCashPile() {
+      var target = Math.min(BRICK_COLS * BRICK_ROWS * BRICK_MAX_LAYERS, Math.floor(pendingCash / BRICK_VALUE));
+      while (cashBricks.length < target) addCashBrick();
+      while (cashBricks.length > target) removeCashBrick();
+    }
+
+    // the payout spot itself: a marked floor square, same tinted/dashed
+    // language as every other pay-here square in the game
+    (function buildTillPad() {
+      var g = new THREE.Group();
+      var cpY = floorTopAt(pad.z);
+      var halo = new THREE.Mesh(
+        new THREE.PlaneGeometry(pad.half * 3.6, pad.half * 3.6),
+        new THREE.MeshBasicMaterial({
+          map: glowTex, color: padColor, transparent: true,
+          opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      halo.rotation.x = -Math.PI / 2;
+      halo.position.y = cpY + 0.005;
+      g.add(halo);
+      var tint = new THREE.Mesh(
+        new THREE.PlaneGeometry(pad.half * 2, pad.half * 2),
+        new THREE.MeshBasicMaterial({ color: padColor, transparent: true, opacity: 0.78, depthWrite: false })
+      );
+      tint.rotation.x = -Math.PI / 2;
+      tint.position.y = cpY + 0.01;
+      g.add(tint);
+      var dash = new THREE.Mesh(
+        new THREE.PlaneGeometry(pad.half * 2 + 0.5, pad.half * 2 + 0.5),
+        new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
+      );
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.y = cpY + 0.02;
+      g.add(dash);
+      var lbl = textSprite(label, "#ffffff");
+      lbl.scale.set(3.6, 0.92, 1);
+      lbl.position.set(0, cpY + 1.5, 0);
+      g.add(lbl);
+      g.position.set(pad.x, 0, pad.z);
+      scene.add(g);
+    })();
+
+    function payOut(amount) {
+      if (amount <= 0) return;
+      pendingCash += amount;
+      refreshCashPile();
+    }
+
+    // onClaim(claimed), optional, runs any location-specific side effects
+    // (shop's tutorial hint, station-tag refresh) after the generic claim.
+    function update(now, onClaim) {
+      for (var i = 0; i < cashBricks.length; i++) {
+        var b = cashBricks[i];
+        var t = (now - b.bornAt) / 300;
+        if (t < 1) {
+          var e = 1 - Math.pow(1 - t, 3);
+          b.obj.position.y = b.restY + 2.2 * (1 - e);
+        } else {
+          b.obj.position.y = b.restY;
+        }
+      }
+
+      var onPad = Math.abs(player.pos.x - pad.x) <= pad.half + PLAYER_RADIUS &&
+                  Math.abs(player.pos.z - pad.z) <= pad.half + PLAYER_RADIUS;
+      if (onPad && pendingCash > 0) {
+        var claimed = pendingCash;
+        state.cash += claimed;
+        pendingCash = 0;
+        refreshCashPile();
+        addFloater(pad.x, 2.6, pad.z, "+$" + fmt(claimed), "#8ff5a8");
+        showCashGain(claimed);
+        if (onClaim) onClaim(claimed);
+        renderHud();
+        saveState();
+      }
+    }
+
+    function pending() { return pendingCash; }
+
+    return { payOut: payOut, update: update, pending: pending };
   }
 
-  function addCashBrick() {
-    var spot = brickSpot(cashBricks.length);
-    var body = new THREE.Mesh(brickGeo, brickMats);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    body.position.set(spot.x, spot.y + 2.2, spot.z);
-    body.rotation.y = (Math.random() - 0.5) * 0.08;
-    scene.add(body);
-    cashBricks.push({ obj: body, restY: spot.y, bornAt: performance.now() });
+  var shopTill = makeTill(CASH_PAD, 0xffd75e, "$ COLLECT");
+  var payOutCash = shopTill.payOut;   // every existing call site (customerBuyBud etc.) is untouched
+
+  var LOUNGE_CASH_PAD = { x: 0, z: LOUNGE_BAR_Z + 3.0, half: 1.45 };
+  var loungeTill = makeTill(LOUNGE_CASH_PAD, 0xc76ee0, "$ TIPS");
+
+  function updateLoungeCashDrops(now) {
+    loungeTill.update(now);
   }
 
-  function removeCashBrick() {
-    var b = cashBricks.pop();
-    if (b) scene.remove(b.obj);
+  // Pops one unit off state.loungeIntake[kind] — a plain counter, not a mesh
+  // pile, so there's no per-unit "locked-in value at drop-off" to read like
+  // the counter's pileMeshes; price is just computed at sale time.
+  function customerBuyLounge(kind) {
+    if ((state.loungeIntake[kind] || 0) <= 0) return false;
+    state.loungeIntake[kind]--;
+    var price = loungeValue(kind) * (promoActive() ? PROMO_MULT : 1);
+    var tip = price * loungeTipPct();
+    loungeTill.payOut(price + tip);
+    updateLoungeStockVisuals();
+    return true;
   }
-
-  function refreshCashPile() {
-    var target = Math.min(BRICK_COLS * BRICK_ROWS * BRICK_MAX_LAYERS, Math.floor(pendingCash / BRICK_VALUE));
-    while (cashBricks.length < target) addCashBrick();
-    while (cashBricks.length > target) removeCashBrick();
-  }
-
-  // ---- the payout spot itself: a marked floor square by the till, same
-  // tinted/dashed language as every other pay-here square in the shop ----
-  (function buildCashPad() {
-    var g = new THREE.Group();
-    var cpY = floorTopAt(CASH_PAD.z);
-    // matches the upgrade squares so the whole shop speaks one visual language
-    var halo = new THREE.Mesh(
-      new THREE.PlaneGeometry(CASH_PAD.half * 3.6, CASH_PAD.half * 3.6),
-      new THREE.MeshBasicMaterial({
-        map: glowTex, color: 0xffd75e, transparent: true,
-        opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
-      })
-    );
-    halo.rotation.x = -Math.PI / 2;
-    halo.position.y = cpY + 0.005;
-    g.add(halo);
-    var tint = new THREE.Mesh(
-      new THREE.PlaneGeometry(CASH_PAD.half * 2, CASH_PAD.half * 2),
-      new THREE.MeshBasicMaterial({ color: 0xffd75e, transparent: true, opacity: 0.78, depthWrite: false })
-    );
-    tint.rotation.x = -Math.PI / 2;
-    tint.position.y = cpY + 0.01;
-    g.add(tint);
-    var dash = new THREE.Mesh(
-      new THREE.PlaneGeometry(CASH_PAD.half * 2 + 0.5, CASH_PAD.half * 2 + 0.5),
-      new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
-    );
-    dash.rotation.x = -Math.PI / 2;
-    dash.position.y = cpY + 0.02;
-    g.add(dash);
-    var lbl = textSprite("$ COLLECT", "#ffffff");
-    lbl.scale.set(3.6, 0.92, 1);
-    lbl.position.set(0, cpY + 1.5, 0);
-    g.add(lbl);
-    g.position.set(CASH_PAD.x, 0, CASH_PAD.z);
-    scene.add(g);
-  })();
 
   // ---- a bag of feed that turns up on the shop floor now and then ----
   // It waits there until you walk into it — no expiry — then the next one is
@@ -6902,40 +7342,11 @@
     }
   }
 
-  function payOutCash(amount) {
-    if (amount <= 0) return;
-    pendingCash += amount;
-    refreshCashPile();
-  }
-
   function updateCashDrops(now, dt) {
-    // fresh bricks drop into place, then the whole pallet just sits there
-    // building up until the player walks over and claims it in one sweep
-    for (var i = 0; i < cashBricks.length; i++) {
-      var b = cashBricks[i];
-      var t = (now - b.bornAt) / 300;
-      if (t < 1) {
-        var e = 1 - Math.pow(1 - t, 3);
-        b.obj.position.y = b.restY + 2.2 * (1 - e);
-      } else {
-        b.obj.position.y = b.restY;
-      }
-    }
-
-    var onPad = Math.abs(player.pos.x - CASH_PAD.x) <= CASH_PAD.half + PLAYER_RADIUS &&
-                Math.abs(player.pos.z - CASH_PAD.z) <= CASH_PAD.half + PLAYER_RADIUS;
-    if (onPad && pendingCash > 0) {
+    shopTill.update(now, function () {
       markTut("collect");
-      var claimed = pendingCash;
-      state.cash += claimed;
-      pendingCash = 0;
-      refreshCashPile();
-      addFloater(CASH_PAD.x, 2.6, CASH_PAD.z, "+$" + fmt(claimed), "#8ff5a8");
-      showCashGain(claimed);
-      renderHud();
       refreshStationTags();
-      saveState();
-    }
+    });
   }
 
   // ---- buds visibly stacking on the counter as you drop them off ----
@@ -7390,7 +7801,7 @@
       farmharvest: atFarm && farmReady,
       farmsilo:    atFarm && hasBud,
       farmship:    atFarm && (state.farm.silo || 0) > 0,
-      collect: pendingCash > 0,
+      collect: shopTill.pending() > 0,
       shipping: anyTruck && (anyStock || anyPalletStock),
       pallet:   dockUnlocked() && anyStock,
       ediblesell: hasEdible,
@@ -8460,6 +8871,10 @@
     updateIntakeVisuals();
     updatePickers(now, dt);
     updateDrivers(now, dt);
+    updateLoungeRun(dt);
+    updateLoungeNpcs(now, dt);
+    updateLoungeStockVisuals();
+    updateLoungeCashDrops(now);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
@@ -8545,9 +8960,9 @@
         } else {
           // The deed is the one purchase that cannot be a pay square: you
           // can't go and stand on land you do not own yet.
-          btn.textContent = "$" + fmt(FARM_DEED_COST);
-          btn.disabled = state.cash < FARM_DEED_COST;
-          btn.addEventListener("click", function () { buyFarmDeed(); });
+          btn.textContent = "$" + fmt(s.deedCost);
+          btn.disabled = state.cash < s.deedCost;
+          btn.addEventListener("click", function () { buyDeed(s.id); });
         }
         row.appendChild(btn);
         mapRows.appendChild(row);
@@ -8555,14 +8970,13 @@
     }
   }
 
-  function buyFarmDeed() {
-    if (farmUnlocked() || state.cash < FARM_DEED_COST) return;
-    state.cash -= FARM_DEED_COST;
-    state.farm.unlocked = true;
-    // the deed comes with the first row already worked
-    for (var i = 0; i < FARM_COLS; i++) state.farm.plots[i] = { state: "empty", prog: 0 };
-    refreshFarm();
-    toast("🌾 Deed signed — Kingdom Farms is yours!");
+  // Generic across every lockable site — a site's own onUnlock() does
+  // whatever seeding/toast it needs, this just handles the cash + refresh.
+  function buyDeed(id) {
+    var s = SITES[id];
+    if (!s || s.unlocked() || state.cash < s.deedCost) return;
+    state.cash -= s.deedCost;
+    s.onUnlock();
     renderHud(); renderMap(); renderUpgrades(); saveState();
   }
 
