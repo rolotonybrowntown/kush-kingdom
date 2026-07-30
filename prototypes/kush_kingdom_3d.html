@@ -75,6 +75,30 @@
     flex-shrink: 0;
   }
   .chip.cash .icon { background: linear-gradient(180deg, #6fd68a, #23834f); }
+  /* One row per unlocked product: what strain/purity/recipe level it's at
+     and what it fetches right now, so that's visible without walking to
+     the upgrade pad. Bud's row doubles as the strain counter. */
+  #product-hud {
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--panel);
+    border: 1.5px solid var(--panel-line);
+    border-radius: 14px;
+    padding: 7px 12px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 5px 16px rgba(0,0,0,0.4);
+  }
+  #product-hud.show { display: flex; }
+  .product-row {
+    display: flex; align-items: center; gap: 7px;
+    font-weight: 700; font-size: 12.5px; color: #eafff2;
+    white-space: nowrap;
+  }
+  .product-row .p-icon { font-size: 15px; width: 16px; text-align: center; flex-shrink: 0; }
+  .product-row .p-lv { opacity: 0.72; font-weight: 800; flex-shrink: 0; }
+  .product-row .p-price { color: #ffe066; margin-left: auto; padding-left: 8px; }
   /* the bag chip is a warning now, not a readout: it only appears when full */
   .chip.pack { display: none; }
   .chip.pack.on { display: flex; animation: packpulse 0.9s ease-in-out infinite; }
@@ -140,7 +164,11 @@
 
   #objective {
     position: absolute;
-    top: calc(var(--safe-t) + 118px);
+    /* Cleared 118px before the product panel existed. That panel is always
+       on screen now (cash + up to 3 product rows), so this has to clear it
+       or the tutorial hint overlaps the very numbers a new player is
+       reading while completing it. */
+    top: calc(var(--safe-t) + 168px);
     left: 50%;
     transform: translateX(-50%);
     background: var(--panel);
@@ -220,6 +248,13 @@
     transform: translate(-50%, 0);
     pointer-events: auto;
   }
+  /* tapped from a distance, not standing on it — same card, dimmer and
+     dashed so it doesn't read as "you are being charged right now" */
+  #prompt-card.preview {
+    border-style: dashed;
+    opacity: 0.88;
+  }
+  #prompt-card.preview .pc-bar { display: none; }
   .pc-text { flex: 1; min-width: 0; }
   .pc-name {
     font-weight: 900;
@@ -450,6 +485,40 @@
   #menu-confirm { display: none; margin-top: 12px; }
   #menu-confirm.show { display: block; }
   #menu-confirm p { font-size: 12px; opacity: 0.8; margin: 0 0 4px; line-height: 1.5; }
+
+  /* ---------------- daily login reward ---------------- */
+  /* Same shell as the menu/pause card — appears once, unprompted, so it
+     needs its own top z-index rather than reusing menu-overlay's. */
+  #daily-overlay {
+    position: fixed; inset: 0;
+    background: rgba(4, 14, 9, 0.7);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 30; padding: 24px;
+  }
+  #daily-overlay.show { display: flex; }
+  #daily-card {
+    width: 100%; max-width: 330px;
+    background: linear-gradient(180deg, #1d3420, #102718);
+    border: 2px solid #ffe066;
+    border-radius: 22px;
+    padding: 24px 20px 18px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55);
+    text-align: center;
+  }
+  #daily-card h2 {
+    margin: 0 0 4px; font-size: 21px; letter-spacing: 0.4px;
+    color: var(--gold);
+  }
+  #daily-card p { font-size: 12.5px; opacity: 0.75; margin: 0 0 14px; }
+  #daily-stars { font-size: 26px; letter-spacing: 4px; margin-bottom: 10px; }
+  .daily-star { opacity: 0.25; filter: grayscale(1); }
+  .daily-star.lit { opacity: 1; filter: none; }
+  #daily-reward-amt {
+    font-size: 28px; font-weight: 900; color: var(--gold);
+    margin-bottom: 18px;
+  }
 </style>
 </head>
 <body>
@@ -463,6 +532,7 @@
         <div id="level-star"><span id="level-val">1</span></div>
         <div id="cash-gain"></div>
       </div>
+      <div id="product-hud"></div>
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
       <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
@@ -517,6 +587,16 @@
         <button class="menu-action danger" id="menu-reset-yes">Yes, wipe it</button>
         <button class="menu-action" id="menu-reset-no">Never mind</button>
       </div>
+    </div>
+  </div>
+
+  <div id="daily-overlay">
+    <div id="daily-card">
+      <h2>🎁 Daily Reward</h2>
+      <p id="daily-sub">Day 1 streak — come back tomorrow for more</p>
+      <div id="daily-stars"></div>
+      <div id="daily-reward-amt">$0</div>
+      <button class="menu-action primary" id="daily-close">Nice!</button>
     </div>
   </div>
 
@@ -739,7 +819,6 @@
 
   // dab display case, on the fixed retail floor beside the bud counter
   var BASE_DAB_VALUE = 40;                         // a dab starts at $40
-  var MAX_DAB_LV = 10;                             // purity upgrades on top
   function dabsUnlocked() { return (state.roomTier || 0) >= 1; }
   // Tracks the strain you are selling so dabs keep pace with bud upgrades,
   // then purity multiplies on top of that.
@@ -810,7 +889,6 @@
   var MAX_FAN_LV = 4;                              // convection upgrades on top
   var BASE_OVEN_CAP = 5;                           // dabs an oven holds
   var MAX_TRAY_LV = 3;                             // extra trays, 4 looks in all
-  var MAX_EDIBLE_LV = 10;                          // recipe tiers on top
   var BASE_EDIBLE_VALUE = 140;
   function ediblesUnlocked() { return (state.roomTier || 0) >= 2; }
   // Trays are the kitchen's answer to press hoppers, and the recipe track is
@@ -1032,10 +1110,23 @@
   var FIELD_ZONE   = { x: -34.0, z: FARM_CZ + 26.0 };   // outside the barn door
   var HAULER_ZONE  = { x: -28.0, z: FARM_CZ + 26.0 };
   var MANAGER_ZONE = { x: -22.0, z: FARM_CZ + 26.0 };
+  var GROW_ZONE    = { x: -16.0, z: FARM_CZ + 26.0 };   // faster crop cycle
+  var FARM_HR_ZONE = { x: -10.0, z: FARM_CZ + 26.0 };   // the shop's HR panel, reachable here too
+  var SOIL_ZONE    = { x: -4.0, z: FARM_CZ + 26.0 };    // plot look, not pace
   var MAX_FIELD_HANDS = 4;   // the field is 3x the indoor grid — it earns the crew
   var MAX_HAULERS = 2;
+  var MAX_GROW_LV = 5;
+  var MAX_SOIL_LV = 3;
   function costFieldHand() { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.handLv || 0)); }
   function costHauler()    { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.haulerLv || 0)); }
+  function costGrowLv()    { return Math.round(8000000 * Math.pow(2.5, state.farm && state.farm.growLv || 0)); }
+  // Same shape as the lab's hydraulics/oven's convection tracks: about +22%
+  // pace a level. Stacks with weather and the free-feed boost rather than
+  // replacing them.
+  function farmGrowRateMult() { return Math.pow(1.22, (state.farm && state.farm.growLv) || 0); }
+  var SOIL_TIER_NAMES = ["Bare Furrows", "Raised Beds", "Staked & Trellised", "Hoop House Frames"];
+  function costSoilLv()  { return Math.round(7000000 * Math.pow(2.6, state.farm && state.farm.soilLv || 0)); }
+  function soilLv() { return (state.farm && state.farm.soilLv) || 0; }
 
   // A hired manager keeps a site's staff working while you are standing
   // somewhere else entirely — without one, farm staff still work FROM the
@@ -1110,7 +1201,11 @@
         courierLv: 0,
         handLv: 0,
         haulerLv: 0,
+        growLv: 0,
+        soilLv: 0,
       },
+      dailyStreak: 0,                   // consecutive calendar days played
+      lastLoginDate: null,              // "YYYY-M-D" of the last day a reward was granted
       lastSaveTime: Date.now(),
     };
   }
@@ -1160,6 +1255,8 @@
       merged.farm.courierLv = Math.max(0, Math.min(MAX_COURIER_LV, merged.farm.courierLv || 0));
       merged.farm.handLv = Math.max(0, Math.min(MAX_FIELD_HANDS, merged.farm.handLv || 0));
       merged.farm.haulerLv = Math.max(0, Math.min(MAX_HAULERS, merged.farm.haulerLv || 0));
+      merged.farm.growLv = Math.max(0, Math.min(MAX_GROW_LV, merged.farm.growLv || 0));
+      merged.farm.soilLv = Math.max(0, Math.min(MAX_SOIL_LV, merged.farm.soilLv || 0));
       merged.farm.silo = Math.max(0, Math.min(siloCapFor(merged.farm.siloLv), merged.farm.silo || 0));
       merged.farm.unlocked = !!merged.farm.unlocked;
       merged.intake = Math.max(0, Math.min(INTAKE_CAP, merged.intake || 0));
@@ -1214,11 +1311,14 @@
         merged.presses = pressDefs.map(function () { return { buds: 0, dabs: 0, acc: 0 }; });
       }
       merged.hopperLv = Math.max(0, Math.min(MAX_HOPPER_LV, merged.hopperLv || 0));
-      merged.dabLv = Math.max(0, Math.min(MAX_DAB_LV, merged.dabLv || 0));
+      // Dab purity and edible recipe are uncapped, same as the bud strain
+      // track — floor/non-negative only, no upper Math.min the way the
+      // capacity and speed upgrades below still get.
+      merged.dabLv = Math.max(0, Math.floor(merged.dabLv) || 0);
       merged.ramLv = Math.max(0, Math.min(MAX_RAM_LV, merged.ramLv || 0));
       merged.fanLv = Math.max(0, Math.min(MAX_FAN_LV, merged.fanLv || 0));
       merged.trayLv = Math.max(0, Math.min(MAX_TRAY_LV, merged.trayLv || 0));
-      merged.edibleLv = Math.max(0, Math.min(MAX_EDIBLE_LV, merged.edibleLv || 0));
+      merged.edibleLv = Math.max(0, Math.floor(merged.edibleLv) || 0);
       merged.ovenCount = Math.max(0, Math.min(MAX_OVENS, merged.ovenCount || 0));
       if (!Array.isArray(merged.ovens) || merged.ovens.length !== ovenDefs.length) {
         merged.ovens = ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; });
@@ -1355,10 +1455,24 @@
     return [Math.round(a).toLocaleString(), Math.round(b).toLocaleString()];
   }
 
+  // Short-scale suffixes well past anything a real save should reach — the
+  // old ladder stopped at "B" and silently wrapped a trillion-plus balance
+  // into "2616.18B" instead of turning into trillions. Uncapped upgrades
+  // (see MAX_*_LV removal) make that failure mode routine instead of rare.
+  var FMT_TIERS = [
+    [1e33, "Dc"], [1e30, "No"], [1e27, "Oc"], [1e24, "Sp"], [1e21, "Sx"],
+    [1e18, "Qi"], [1e15, "Qa"], [1e12, "T"], [1e9, "B"], [1e6, "M"],
+  ];
   function fmt(n) {
     n = Math.floor(n);
-    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    for (var i = 0; i < FMT_TIERS.length; i++) {
+      if (n < FMT_TIERS[i][0]) continue;
+      // 999999999999 is one unit shy of a trillion but rounds to "1000.00B"
+      // at two decimals — bump it into the tier above rather than print a
+      // four-digit number in front of the suffix that's supposed to cap it.
+      if (i > 0 && n / FMT_TIERS[i][0] >= 999.995) i--;
+      return (n / FMT_TIERS[i][0]).toFixed(2) + FMT_TIERS[i][1];
+    }
     if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
     return String(n);
   }
@@ -2842,15 +2956,7 @@
     shipLbl.scale.set(3.6, 0.9, 1);
     shipLbl.position.set(FARM_COURIER.x, FARM_GROUND_TOP + 1.7, FARM_COURIER.z);
     g.add(shipLbl);
-    // a parked flatbed so the bay reads as somewhere freight leaves from
-    var flat = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.0, 7.0), M.truckTrim);
-    flat.position.set(FARM_COURIER.x - 5.0, FARM_GROUND_TOP + 1.3, FARM_COURIER.z);
-    flat.castShadow = true;
-    g.add(flat);
-    var flatCab = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 2.6), M.truckCab);
-    flatCab.position.set(FARM_COURIER.x - 5.0, FARM_GROUND_TOP + 2.6, FARM_COURIER.z + 4.4);
-    flatCab.castShadow = true;
-    g.add(flatCab);
+    buildCourierTruck();
 
     // ---- set dressing ----
     var tower = new THREE.Group();
@@ -3130,9 +3236,13 @@
   (function buildFieldHands() {
     for (var n = 0; n < MAX_FIELD_HANDS; n++) {
       var g = new THREE.Group();
-      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.shirt);
+      // Botanists wear this same green indoors, where a walnut floor makes
+      // it pop. Out here it's green-on-green against the field — a real
+      // reason "nobody shows up" even while the AI is working correctly.
+      // Swapped to the runner's warm orange for contrast against grass.
+      var torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.runnerVest);
       torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
-      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.1), M.apron);
+      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.1), M.runnerCap);
       apron.position.set(0, 1.02, 0.3); apron.castShadow = true; g.add(apron);
       var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
       head.position.y = 1.88; head.castShadow = true; g.add(head);
@@ -3458,6 +3568,35 @@
     g.add(lbl);
     g.position.set(HR_ZONE.x, 0, HR_ZONE.z);
     scene.add(g);
+  })();
+
+  // ---- a second HR desk out at the farm, same panel as the shop's ----
+  // Field hands and the hauler already read staffSpeedMult()/staffCarryBonus(),
+  // the same globals the shop's desk sets — this is a folding-table version
+  // of the same office so a farm-only session never has to travel for it.
+  (function farmHrDesk() {
+    var g = new THREE.Group();
+    var y = FARM_GROUND_TOP;
+    var top = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.1, 1.4), M.pallet);
+    top.position.y = y + 1.5; top.castShadow = true; top.receiveShadow = true;
+    g.add(top);
+    [[-1.15, -0.6], [1.15, -0.6], [-1.15, 0.6], [1.15, 0.6]].forEach(function (p) {
+      var leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.1), M.fencePost);
+      leg.position.set(p[0], y + 0.75, p[1]); leg.castShadow = true;
+      g.add(leg);
+    });
+    var clipboard = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.8), M.barnTrim);
+    clipboard.position.set(-0.4, y + 1.57, 0.1); clipboard.rotation.y = 0.3;
+    g.add(clipboard);
+    var stool = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.15, 12), M.fencePost);
+    stool.position.set(0, y + 0.95, 1.3); stool.castShadow = true;
+    g.add(stool);
+    var lbl = textSprite("HR OFFICE", "#ffe066");
+    lbl.scale.set(2.6, 0.58, 1);
+    lbl.position.set(0, y + 2.6, 0);
+    g.add(lbl);
+    g.position.set(FARM_HR_ZONE.x, 0, FARM_HR_ZONE.z);
+    farmGroup.add(g);
   })();
 
   // ---- potting bench in the back corner: where botanists are taken on ----
@@ -4111,8 +4250,36 @@
     mound.receiveShadow = true;
     g.add(mound);
 
+    // Soil tier 1+: a low wooden border, distinct from the indoor beds'
+    // hanging grow lights — this is a ground-level upgrade, not a fixture.
+    var border = new THREE.Group();
+    var half = FARM_PLOT_SIZE / 2;
+    [[0, -half, FARM_PLOT_SIZE, 0], [0, half, FARM_PLOT_SIZE, 0],
+     [-half, 0, 0, FARM_PLOT_SIZE], [half, 0, 0, FARM_PLOT_SIZE]].forEach(function (r) {
+      var plank = new THREE.Mesh(new THREE.BoxGeometry(r[2] || 0.18, 0.34, r[3] || 0.18), M.fencePost);
+      plank.position.set(r[0], FARM_GROUND_TOP + 0.28, r[1]);
+      plank.castShadow = true;
+      border.add(plank);
+    });
+    border.visible = false;
+    g.add(border);
+
+    // Soil tier 2+: corner stakes with a crossbar, like young plants get
+    // staked up in a real garden — the plant is meant to grow into these.
+    var stake = new THREE.Group();
+    [[-half + 0.3, -half + 0.3], [half - 0.3, -half + 0.3],
+     [-half + 0.3, half - 0.3], [half - 0.3, half - 0.3]].forEach(function (sp) {
+      var post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6), M.fencePost);
+      post.position.set(sp[0], FARM_GROUND_TOP + 0.8, sp[1]);
+      post.castShadow = true;
+      stake.add(post);
+    });
+    stake.visible = false;
+    g.add(stake);
+
     // Outdoor plants run bigger than the indoor ones — that scale difference
-    // is most of what sells the field as a different kind of place.
+    // is most of what sells the field as a different kind of place. Soil
+    // tier adds a further bump on top, toward the "taller trees" ask.
     var plant = makePlant();
     plant.position.y = FARM_GROUND_TOP + 0.2;
     plant.scale.setScalar(1.35);
@@ -4134,9 +4301,44 @@
     g.add(bar); statusBars.push(bar);
 
     farmGroup.add(g);
-    return { group: g, mound: mound, plant: plant, glow: glow, bar: bar };
+    return { group: g, mound: mound, border: border, stake: stake, plant: plant, glow: glow, bar: bar };
   }
   for (var fpi = 0; fpi < farmPlotDefs.length; fpi++) farmPlotObjects.push(makeFarmPlot(fpi));
+
+  // Soil tier 3: one hoop-house frame per row, spanning its full width —
+  // ribs only, deliberately no glazing panels between them so the crop
+  // stays in view. Built once per row rather than per plot; a real hoop
+  // house is one structure over several plants, not one per plant.
+  var farmHoopFrames = [];
+  function makeFarmHoopFrame(rowIdx) {
+    var g = new THREE.Group();
+    var rowZ = farmPlotDefs[rowIdx * FARM_COLS].z;
+    var span = (FARM_COLS - 1) * FARM_SPACING_X + FARM_PLOT_SIZE;
+    var x0 = farmPlotDefs[rowIdx * FARM_COLS].x;
+    var apexY = FARM_GROUND_TOP + 3.6, footY = FARM_GROUND_TOP, halfW = FARM_PLOT_SIZE * 0.62;
+    var ribCount = Math.ceil(FARM_COLS / 2) + 1;
+    for (var r = 0; r < ribCount; r++) {
+      var rx = x0 + (span * (r / (ribCount - 1)));
+      // each rib is two angled beams meeting at a peak — a cheap arch that
+      // reads fine at this scale without needing curved geometry
+      [-1, 1].forEach(function (side) {
+        var beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.3, 0.12), M.metalRack);
+        beam.position.set(rx, (apexY + footY) / 2, side * halfW * 0.5);
+        beam.rotation.x = side * 0.62;
+        beam.castShadow = true;
+        g.add(beam);
+      });
+    }
+    // ridge beam tying the rib peaks together along the row
+    var ridge = new THREE.Mesh(new THREE.BoxGeometry(span + 1.0, 0.12, 0.12), M.metalRack);
+    ridge.position.set(x0 + span / 2, apexY, 0);
+    ridge.castShadow = true;
+    g.add(ridge);
+    g.visible = false;
+    farmGroup.add(g);
+    return g;
+  }
+  for (var fhi = 0; fhi < FARM_ROWS; fhi++) farmHoopFrames.push(makeFarmHoopFrame(fhi));
 
   // one pay tile per field row, same shape as the indoor row tiles
   function makeFarmRowTile(rowIdx) {
@@ -4196,11 +4398,14 @@
   // like the indoor beds. That is what will let weather change the rate
   // partway through a grow without rewriting every plot's timer.
   function farmGrowMult() {
-    return weatherNow().grow * (boostActive() ? 2 : 1);
+    return weatherNow().grow * (boostActive() ? 2 : 1) * farmGrowRateMult();
   }
   // Growth across a stretch that may span several weather slots. The offline
   // catch-up needs this: it cannot just multiply elapsed time by the sky it
-  // happens to find when you come back.
+  // happens to find when you come back. growLv is applied as today's rate
+  // rather than tracked historically — the same simplification the shop's
+  // press/oven speed upgrades make, since replaying exactly when a farm
+  // upgrade was bought isn't worth the bookkeeping.
   function farmGrowthBetween(fromMs, toMs) {
     var total = 0, t = fromMs;
     while (t < toMs) {
@@ -4209,7 +4414,7 @@
       total += ((end - t) / 1000) * weatherAt(t).grow;
       t = end;
     }
-    return total / FARM_BASE_GROW;
+    return total * farmGrowRateMult() / FARM_BASE_GROW;
   }
 
   function updateFarmPlots(dt) {
@@ -4224,12 +4429,19 @@
     }
   }
 
+  // +9% plant size per soil tier — on top of the outdoor-vs-indoor bump —
+  // is most of what reads as "taller trees" as the upgrade goes in.
+  function farmPlantScaleMult() { return 1.35 + soilLv() * 0.12; }
   function updateFarmPlotVisuals(now) {
+    var lv = soilLv();
+    var scaleMult = farmPlantScaleMult();
     for (var i = 0; i < farmPlotObjects.length; i++) {
       var fo = farmPlotObjects[i];
       var live = farmUnlocked() && i < farmRowsUnlocked();
       fo.group.visible = live;
       if (!live) continue;
+      fo.border.visible = lv >= 1;
+      fo.stake.visible = lv >= 2;
       var p = state.farm.plots[i];
       if (p.state === "empty" || p.state === "locked") {
         fo.plant.visible = false; fo.glow.visible = false; fo.bar.visible = false;
@@ -4237,7 +4449,7 @@
         fo.bar.visible = true;
         setBar(fo.bar, p.prog);
         fo.plant.visible = true;
-        var sc = (0.2 + 0.8 * p.prog) * 1.35;
+        var sc = (0.2 + 0.8 * p.prog) * scaleMult;
         fo.plant.scale.set(sc, sc, sc);
         fo.plant.rotation.y = Math.sin(now * 0.0012 + i) * 0.11;
         fo.plant.userData.bud.visible = false;
@@ -4245,7 +4457,7 @@
       } else {
         fo.bar.visible = false;
         fo.plant.visible = true;
-        var bob = 1.35 * (1 + Math.sin(now * 0.005 + i) * 0.03);
+        var bob = scaleMult * (1 + Math.sin(now * 0.005 + i) * 0.03);
         fo.plant.scale.set(bob, bob, bob);
         fo.plant.rotation.y = Math.sin(now * 0.0012 + i) * 0.11;
         fo.plant.userData.bud.visible = true;
@@ -4253,6 +4465,9 @@
         fo.glow.visible = true;
         fo.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
       }
+    }
+    for (var hf = 0; hf < farmHoopFrames.length; hf++) {
+      farmHoopFrames[hf].visible = lv >= MAX_SOIL_LV && farmUnlocked() && hf * FARM_COLS < farmRowsUnlocked();
     }
     if (farmSiloBar) {
       var silo = (state.farm && state.farm.silo) || 0;
@@ -5723,6 +5938,11 @@
   var tapTarget = null;
   var raycaster = new THREE.Raycaster();
   var ndc = new THREE.Vector2();
+  // A tap that lands on a pad previews its card immediately (peekZone,
+  // read by renderPrompt) instead of making the player walk over and wait
+  // to find out what they're buying — the walk itself is unaffected.
+  var peekZone = null, peekUntil = 0;
+  var PEEK_MS = 4000;
   function walkToScreenPoint(clientX, clientY) {
     ndc.x = (clientX / window.innerWidth) * 2 - 1;
     ndc.y = -(clientY / window.innerHeight) * 2 + 1;
@@ -5730,7 +5950,11 @@
     var floor = curSite().groundOf();
     if (!floor) return;
     var hit = raycaster.intersectObject(floor, false);
-    if (hit.length) tapTarget = new THREE.Vector3(hit[0].point.x, 0, hit[0].point.z);
+    if (!hit.length) return;
+    tapTarget = new THREE.Vector3(hit[0].point.x, 0, hit[0].point.z);
+    var pz = currentZone(hit[0].point.x, hit[0].point.z);
+    peekZone = pz;
+    peekUntil = pz ? performance.now() + PEEK_MS : 0;
   }
 
   var joyStartX = 0, joyStartY = 0, joyDragged = false;
@@ -6004,13 +6228,24 @@
     state.pallets[kind] = Math.max(0, Math.min(PALLET_CAP, palletCount(kind) + n));
   }
 
-  // Walk onto a pallet with matching stock in your pack and it goes on.
+  // Walk onto a pallet with matching stock in your pack and it goes on. Walk
+  // onto one empty-handed instead and it loads YOU up — a manual relay to
+  // the bays that works alongside drivers rather than replacing them, for
+  // whenever a stack is full but nobody's hired to run it to a truck yet.
+  // Edge-triggered (only fires the instant you arrive) so standing still
+  // doesn't flicker between depositing and immediately re-withdrawing the
+  // same units it just picked up.
+  var palletVisited = PALLET_DEFS.map(function () { return false; });
   function handlePallets() {
-    if (!dockUnlocked()) return;
+    if (!dockUnlocked()) { for (var z = 0; z < palletVisited.length; z++) palletVisited[z] = false; return; }
     for (var p = 0; p < PALLET_DEFS.length; p++) {
       var def = PALLET_DEFS[p];
-      if (Math.abs(player.pos.x - def.x) > PALLET_HALF + PLAYER_RADIUS) continue;
-      if (Math.abs(player.pos.z - def.z) > PALLET_HALF + PLAYER_RADIUS) continue;
+      var inZone = Math.abs(player.pos.x - def.x) <= PALLET_HALF + PLAYER_RADIUS &&
+        Math.abs(player.pos.z - def.z) <= PALLET_HALF + PLAYER_RADIUS;
+      if (!inZone) { palletVisited[p] = false; continue; }
+      if (palletVisited[p]) continue;
+      palletVisited[p] = true;
+
       var moved = 0;
       for (var i = player.backpack.length - 1; i >= 0; i--) {
         if (palletCount(def.kind) + moved >= PALLET_CAP) break;
@@ -6018,11 +6253,22 @@
         player.backpack.splice(i, 1);
         moved++;
       }
-      if (!moved) continue;
-      palletAdd(def.kind, moved);
+      if (moved) {
+        palletAdd(def.kind, moved);
+        syncStack();
+        addFloater(def.x, 4.2, def.z, "+" + moved + " " + def.label, "#ffd75e");
+        markTut("pallet");
+        renderUpgrades();
+        continue;
+      }
+
+      var room = backpackCap() - player.backpack.length;
+      var take = Math.min(room, palletCount(def.kind));
+      if (take <= 0) continue;
+      for (var k = 0; k < take; k++) player.backpack.push({ type: def.kind });
+      palletAdd(def.kind, -take);
       syncStack();
-      addFloater(def.x, 4.2, def.z, "+" + moved + " " + def.label, "#ffd75e");
-      markTut("pallet");
+      addFloater(def.x, 4.2, def.z, "-" + take + " " + def.label, "#ffe066");
       renderUpgrades();
     }
   }
@@ -6237,13 +6483,18 @@
   // time — or, once a hauler is hired, the hauler stands there instead,
   // and it runs whether or not you're the one watching it.
   var courierAcc = 0;
-  function updateCourier(dt) {
-    if (!farmUnlocked()) { courierAcc = 0; return; }
+  // Shared by the transfer logic and the truck animation below, so the truck
+  // is only ever seen loading when bud is actually moving off the silo.
+  function courierActive() {
+    if (!farmUnlocked()) return false;
     var playerHere = state.site === "farm" &&
       d2(player.pos.x, player.pos.z, FARM_COURIER.x, FARM_COURIER.z) <= 2.6 + PLAYER_RADIUS;
     var haulerHere = siteActive("farm") && haulerAtCourier();
-    if (!playerHere && !haulerHere) { courierAcc = 0; return; }
-    if ((state.farm.silo || 0) <= 0 || (state.intake || 0) >= INTAKE_CAP) return;
+    if (!playerHere && !haulerHere) return false;
+    return (state.farm.silo || 0) > 0 && (state.intake || 0) < INTAKE_CAP;
+  }
+  function updateCourier(dt) {
+    if (!courierActive()) { courierAcc = 0; return; }
     courierAcc += dt * courierRate();
     var move = Math.floor(courierAcc);
     if (move <= 0) return;
@@ -6258,6 +6509,86 @@
       addFloater(FARM_COURIER.x, 3.6, FARM_COURIER.z, "→ " + move + " SHIPPED", "#ffd75e");
     }
     markTut("farmship");
+  }
+
+  // The freight truck itself: replaces the old "stand on a pad" abstraction
+  // with something that visibly drives up, sits loading while courierActive()
+  // is true, then pulls out through the gate and loops back — the same beat
+  // as the shop's dock trucks, just simpler since there's no bay queue here.
+  var COURIER_HOME_X = FARM_COURIER.x - 5.0;
+  var COURIER_DRIVE_Z = 26;          // clears the gate (FZF = FARM_CZ + 34) and then some
+  var COURIER_DRIVE_SEC = 1.8, COURIER_AWAY_SEC = 1.3, COURIER_CYCLE_SEC = 5.5;
+  // buildCourierTruck() runs during buildFarm(), well before this line
+  // executes — no initializer here, or it would stomp that assignment back
+  // to null the moment the script reaches this point.
+  var courierTruckObj;
+  var courierPhase = "parked", courierPhaseT = 0, courierCycleAcc = 0;
+  function buildCourierTruck() {
+    var g = new THREE.Group();
+    var bed = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.0, 7.0), M.truckTrim);
+    bed.position.y = 1.3; bed.castShadow = true;
+    g.add(bed);
+    var cab = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.4, 2.6), M.truckCab);
+    cab.position.set(0, 2.6, 4.4); cab.castShadow = true;
+    g.add(cab);
+    var wheelGeo = new THREE.CylinderGeometry(0.75, 0.75, 0.46, 12);
+    [[-1.55, -3.2], [1.55, -3.2], [-1.55, 0.3], [1.55, 0.3], [-1.55, 3.0], [1.55, 3.0]]
+      .forEach(function (wp) {
+        var wheel = new THREE.Mesh(wheelGeo, M.tyre);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(wp[0], 0.75, wp[1]);
+        wheel.castShadow = true;
+        g.add(wheel);
+      });
+    // crates on the bed, shown only while actively loading
+    var crateGroup = new THREE.Group();
+    [[-0.75, -1.6], [0.75, -1.6], [0, 0.1]].forEach(function (cp) {
+      var crate = new THREE.Mesh(new THREE.BoxGeometry(1.15, 1.0, 1.15), M.pallet);
+      crate.position.set(cp[0], 1.85, cp[1]); crate.castShadow = true;
+      crateGroup.add(crate);
+    });
+    g.add(crateGroup);
+    g.userData.crateGroup = crateGroup;
+    g.position.set(COURIER_HOME_X, 0, FARM_COURIER.z);
+    farmGroup.add(g);
+    courierTruckObj = g;
+  }
+  function updateCourierTruck(dt) {
+    if (!courierTruckObj) return;
+    if (!farmUnlocked()) { courierTruckObj.visible = false; return; }
+    var active = courierActive();
+    if (courierPhase === "parked") {
+      courierTruckObj.visible = true;
+      courierTruckObj.position.z = FARM_COURIER.z;
+      courierTruckObj.userData.crateGroup.visible = active;
+      if (active) {
+        courierCycleAcc += dt;
+        if (courierCycleAcc >= COURIER_CYCLE_SEC) {
+          courierCycleAcc = 0;
+          courierPhase = "leaving"; courierPhaseT = 0;
+        }
+      } else {
+        courierCycleAcc = 0;
+      }
+    } else if (courierPhase === "leaving") {
+      courierPhaseT += dt;
+      var e = Math.min(1, courierPhaseT / COURIER_DRIVE_SEC);
+      courierTruckObj.position.z = FARM_COURIER.z + e * COURIER_DRIVE_Z;
+      if (e >= 1) { courierPhase = "away"; courierPhaseT = 0; courierTruckObj.visible = false; }
+    } else if (courierPhase === "away") {
+      courierPhaseT += dt;
+      if (courierPhaseT >= COURIER_AWAY_SEC) {
+        courierPhase = "arriving"; courierPhaseT = 0;
+        courierTruckObj.visible = true;
+        courierTruckObj.userData.crateGroup.visible = false;
+        courierTruckObj.position.z = FARM_COURIER.z + COURIER_DRIVE_Z;
+      }
+    } else if (courierPhase === "arriving") {
+      courierPhaseT += dt;
+      var e2 = Math.min(1, courierPhaseT / COURIER_DRIVE_SEC);
+      courierTruckObj.position.z = FARM_COURIER.z + COURIER_DRIVE_Z * (1 - e2);
+      if (e2 >= 1) { courierPhase = "parked"; courierPhaseT = 0; }
+    }
   }
 
   function updatePalletVisuals() {
@@ -6374,11 +6705,17 @@
           var tk = b.bayIdx >= 0 ? trucks[b.bayIdx] : null;
           if (tk && tk.phase === "loading" && b.carrying > 0 && truckLoadOne(tk, b.carryKind)) {
             b.carrying--;
+            if (b.carrying <= 0) { b.bayIdx = -1; b.phase = "toPallet"; }
+            else b.timer = DRV_ACT_TIME * 0.6;   // keep feeding the same truck
           } else {
+            // Truck filled up, left, or otherwise can't take more. The old
+            // code cleared bayIdx but left phase at "unload" — with no bay
+            // and nothing left to check, the timer just re-armed itself
+            // forever and the driver stood at the door doing nothing. Route
+            // back through toTruck so drvFreeBay picks a new bay instead.
             b.bayIdx = -1;
+            b.phase = b.carrying > 0 ? "toTruck" : "toPallet";
           }
-          if (b.carrying <= 0) { b.bayIdx = -1; b.phase = "toPallet"; }
-          else b.timer = DRV_ACT_TIME * 0.6;
         }
 
       } else if (b.phase === "idle") {
@@ -6941,6 +7278,29 @@
   //  HUD / SHOP
   // ===================================================================
   var cashEl = document.getElementById("cash-val");
+  var productHud = document.getElementById("product-hud");
+  // One row per unlocked product. Bud's row is also the strain counter —
+  // its level is exactly what "Buy a New Strain" has bought up to, 1-based
+  // so a fresh game reads "Lv.1" rather than "Lv.0".
+  function renderProductHud() {
+    var rows = [
+      { icon: "🌿", lv: (state.sellLv || 0) + 1, price: fmt(sellValue()) + "/bud" },
+    ];
+    if (dabsUnlocked()) rows.push({ icon: "🍯", lv: (state.dabLv || 0) + 1, price: fmt(dabValue()) + "/dab" });
+    if (ediblesUnlocked()) rows.push({ icon: "🍪", lv: (state.edibleLv || 0) + 1, price: fmt(edibleValue()) + "/edible" });
+
+    productHud.classList.add("show");
+    productHud.innerHTML = "";
+    rows.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "product-row";
+      var icon = document.createElement("span"); icon.className = "p-icon"; icon.textContent = r.icon;
+      var lv = document.createElement("span"); lv.className = "p-lv"; lv.textContent = "Lv." + r.lv;
+      var price = document.createElement("span"); price.className = "p-price"; price.textContent = "$" + r.price;
+      row.appendChild(icon); row.appendChild(lv); row.appendChild(price);
+      productHud.appendChild(row);
+    });
+  }
   var packChip = document.getElementById("pack-chip");
   var objEl = document.getElementById("objective");
 
@@ -7081,6 +7441,7 @@
 
   function renderHud() {
     cashEl.textContent = fmt(state.cash);
+    renderProductHud();
     // the bag only speaks up when it's full and blocking you
     packChip.classList.toggle("on", player.backpack.length >= backpackCap());
     var obj = objective();
@@ -7194,12 +7555,10 @@
       desc: function () {
         var next = BASE_DAB_VALUE * (sellValue() / BASE_SELL_VALUE) *
                    (1 + 0.35 * ((state.dabLv || 0) + 1));
-        return (state.dabLv || 0) >= MAX_DAB_LV
-          ? "Your dabs are as clean as they come"
-          : "$" + fmt(dabValue()) + " \u2192 $" + fmt(next) + " a dab";
+        var step = fmtStep(dabValue(), next);
+        return "$" + step[0] + " \u2192 $" + step[1] + " a dab";
       },
       cost: costDabLv,
-      maxed: function () { return (state.dabLv || 0) >= MAX_DAB_LV; },
       buy: function () {
         state.dabLv = (state.dabLv || 0) + 1;
         toast("\u2728 Cleaner extract \u2014 dabs fetch $" + fmt(dabValue()) + "!");
@@ -7245,7 +7604,7 @@
       },
     },
     {
-      id: "baker", label: "KITCHEN", icon: "\ud83d\udc68\u200d\ud83c\udf73", x: BAKER_ZONE.x, z: BAKER_ZONE.z,
+      id: "baker", label: "BAKER", icon: "\ud83d\udc68\u200d\ud83c\udf73", x: BAKER_ZONE.x, z: BAKER_ZONE.z,
       color: 0xffd9a8, kiosk: false,
       hidden: function () { return !ediblesUnlocked(); },
       name: function () {
@@ -7311,14 +7670,12 @@
       hidden: function () { return !ediblesUnlocked(); },
       name: function () { return "Perfect the Recipe"; },
       desc: function () {
-        if ((state.edibleLv || 0) >= MAX_EDIBLE_LV) return "The recipe cannot be improved on";
         var cur = edibleValue();
         var nxt = cur + BASE_EDIBLE_VALUE * (sellValue() / BASE_SELL_VALUE) * 0.35;
         var step = fmtStep(cur, nxt);
         return "Edibles fetch $" + step[0] + " \u2192 $" + step[1] + " each";
       },
       cost: costEdibleLv,
-      maxed: function () { return (state.edibleLv || 0) >= MAX_EDIBLE_LV; },
       buy: function () {
         state.edibleLv = (state.edibleLv || 0) + 1;
         toast("\ud83d\udcdc Recipe improved \u2014 edibles fetch $" + fmt(edibleValue()) + "!");
@@ -7345,7 +7702,10 @@
       },
     },
     {
-      id: "silo", label: "SILO", icon: "\ud83c\udfd7\ufe0f", x: FARM_SILO.x, z: FARM_SILO.z - 5.4,
+      // Beside the silo, not behind it \u2014 the silo body itself used to block
+      // the view of this pad from every direction the player actually
+      // walks in from (the field and the barn are both to the west).
+      id: "silo", label: "SILO", icon: "\ud83c\udfd7\ufe0f", x: FARM_SILO.x - 7.5, z: FARM_SILO.z,
       site: "farm", color: 0x8ef0a4, kiosk: false,
       hidden: function () { return !farmUnlocked(); },
       name: function () { return "Extend the Silo"; },
@@ -7441,6 +7801,46 @@
       buy: function () {
         state.managers.farm = true;
         toast("\ud83d\udcbc Farm Manager hired \u2014 Kingdom Farms runs itself now!");
+      },
+    },
+    {
+      // Same shape as the lab's HYDRAULICS and the kitchen's CONVECTION \u2014
+      // shaves time off the process itself, on top of whatever weather and
+      // the free-feed boost are already doing to it.
+      id: "grow", label: "GROW SPEED", icon: "\ud83c\udf31", x: GROW_ZONE.x, z: GROW_ZONE.z,
+      site: "farm", color: 0x8ef0a4, kiosk: false,
+      hidden: function () { return !farmUnlocked(); },
+      name: function () { return "Faster Growing"; },
+      desc: function () {
+        if ((state.farm.growLv || 0) >= MAX_GROW_LV) return "The crop can't be pushed any faster";
+        var cur = FARM_BASE_GROW / farmGrowRateMult();
+        var nxt = cur / 1.22;
+        return "A full-grown crop every " + cur.toFixed(0) + "s \u2192 " + nxt.toFixed(0) + "s, base weather";
+      },
+      cost: costGrowLv,
+      maxed: function () { return (state.farm.growLv || 0) >= MAX_GROW_LV; },
+      buy: function () {
+        state.farm.growLv = (state.farm.growLv || 0) + 1;
+        toast("\ud83c\udf31 Faster growing \u2014 the field cycles quicker now!");
+      },
+    },
+    {
+      // Look, not pace \u2014 a separate track from GROW SPEED so a player who
+      // only cares about output never has to buy this, and one who wants the
+      // field to look the part never has to touch growLv.
+      id: "soil", label: "PLOT UPGRADE", icon: "\ud83c\udfe1", x: SOIL_ZONE.x, z: SOIL_ZONE.z,
+      site: "farm", color: 0xc9a86a, kiosk: false,
+      hidden: function () { return !farmUnlocked(); },
+      name: function () { return "Upgrade the Plots"; },
+      desc: function () {
+        if (soilLv() >= MAX_SOIL_LV) return "The field is fully built out \u2014 a proper hoop house";
+        return SOIL_TIER_NAMES[soilLv()] + " \u2192 " + SOIL_TIER_NAMES[soilLv() + 1] + ", every unlocked row";
+      },
+      cost: costSoilLv,
+      maxed: function () { return soilLv() >= MAX_SOIL_LV; },
+      buy: function () {
+        state.farm.soilLv = soilLv() + 1;
+        toast("\ud83c\udfe1 " + SOIL_TIER_NAMES[state.farm.soilLv] + " \u2014 the field looks the part now!");
       },
     },
     {
@@ -7677,13 +8077,17 @@
   function inBox(px, pz, cx, cz, half) {
     return Math.abs(px - cx) <= half && Math.abs(pz - cz) <= half;
   }
-  function currentZone() {
+  // px/pz default to the player so every existing call site (payIntoZone,
+  // renderPrompt) keeps checking "am I standing here"; walkToScreenPoint
+  // passes the tapped ground point instead, to preview a pad from a distance.
+  function currentZone(px, pz) {
+    if (px === undefined) { px = player.pos.x; pz = player.pos.z; }
     // The farm's field rows, when you're standing out there.
     if (state.site === "farm") {
       var fnr = nextFarmRow();
       if (fnr > 0) {
         var frz = farmPlotDefs[fnr * FARM_COLS].z;
-        if (inBox(player.pos.x, player.pos.z, FARM_ROW_TILE_X, frz, FARM_ROW_TILE_HALF)) {
+        if (inBox(px, pz, FARM_ROW_TILE_X, frz, FARM_ROW_TILE_HALF)) {
           var fo = farmRowOffer(fnr);
           if (fo) {
             return {
@@ -7702,7 +8106,7 @@
     // are never payment zones, so planting and harvesting stay free.
     for (var r = 0; r < PLOT_ROWS && state.site === "shop"; r++) {
       var rz = plotDefs[r * PLOT_COLS].z;
-      if (!inBox(player.pos.x, player.pos.z, ROW_TILE_X, rz, ROW_TILE_HALF)) continue;
+      if (!inBox(px, pz, ROW_TILE_X, rz, ROW_TILE_HALF)) continue;
       var off = rowOffer(r);
       if (!off) break;
       return (function (o, zz) {
@@ -7731,7 +8135,7 @@
     var nps = state.site === "shop" ? nextPressSlot() : -1;
     if (nps >= 0) {
       var npd = pressDefs[nps];
-      if (inBox(player.pos.x, player.pos.z, npd.x, npd.z, PRESS_PAD_HALF)) {
+      if (inBox(px, pz, npd.x, npd.z, PRESS_PAD_HALF)) {
         return (function (idx, dd) {
           return {
             kind: "press", key: "press" + idx, slot: "presspad" + idx,
@@ -7753,7 +8157,7 @@
     var nos = state.site === "shop" ? nextOvenSlot() : -1;
     if (nos >= 0) {
       var nod = ovenDefs[nos];
-      if (inBox(player.pos.x, player.pos.z, nod.x, nod.z, OVEN_PAD_HALF)) {
+      if (inBox(px, pz, nod.x, nod.z, OVEN_PAD_HALF)) {
         return (function (idx, dd) {
           return {
             kind: "oven", key: "oven" + idx, slot: "ovenpad" + idx,
@@ -7775,7 +8179,7 @@
       var st = stationDefs[i];
       if ((st.site || "shop") !== state.site) continue;
       if (st.hidden && st.hidden()) continue;
-      if (inBox(player.pos.x, player.pos.z, st.x, st.z, STATION_PAD_HALF)) {
+      if (inBox(px, pz, st.x, st.z, STATION_PAD_HALF)) {
         return {
           kind: "station", key: st.id, slot: "station" + st.id,
           name: st.name(), desc: st.desc(),
@@ -7882,7 +8286,10 @@
 
   function renderPrompt() {
     var z = currentZone();
+    var previewing = false;
+    if (!z && peekZone && performance.now() < peekUntil) { z = peekZone; previewing = true; }
     if (!z) { promptCard.classList.remove("show"); return; }
+    promptCard.classList.toggle("preview", previewing);
     promptCard.classList.add("show");
     pcName.textContent = z.name;
     pcDesc.textContent = z.desc;
@@ -7951,6 +8358,53 @@
   })();
 
   // ===================================================================
+  //  DAILY LOGIN REWARD
+  // ===================================================================
+  // Calendar days, not a 24h timer — so playing at 11pm and again at 7am
+  // still counts as two days, the way a real "come back tomorrow" streak
+  // should, while an hour spent well past midnight only claims once.
+  var dailyOverlay = document.getElementById("daily-overlay");
+  function dayKey(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+  }
+  var DAILY_STREAK_PCT = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15];
+  function openDailyReward(streakDay, reward) {
+    document.getElementById("daily-sub").textContent =
+      "Day " + streakDay + " streak — come back tomorrow for more";
+    document.getElementById("daily-reward-amt").textContent = "$" + fmt(reward);
+    var starsEl = document.getElementById("daily-stars");
+    starsEl.innerHTML = "";
+    var lit = Math.min(streakDay, 7);
+    for (var i = 1; i <= 7; i++) {
+      var s = document.createElement("span");
+      s.className = "daily-star" + (i <= lit ? " lit" : "");
+      s.textContent = "⭐";
+      starsEl.appendChild(s);
+    }
+    dailyOverlay.classList.add("show");
+  }
+  document.getElementById("daily-close").addEventListener("click", function () {
+    dailyOverlay.classList.remove("show");
+  });
+  (function () {
+    var today = dayKey(Date.now());
+    if (state.lastLoginDate === today) return;   // already claimed today
+    var yesterday = dayKey(Date.now() - 86400000);
+    state.dailyStreak = state.lastLoginDate === yesterday ? (state.dailyStreak || 0) + 1 : 1;
+    state.lastLoginDate = today;
+    var pct = DAILY_STREAK_PCT[Math.min(state.dailyStreak, 7) - 1];
+    // A pure % of cash pays out nothing early game and a fortune late game,
+    // so the sellValue() floor keeps day 1 meaningful at every stage —
+    // roughly what forty sales would earn, times the streak length.
+    var reward = Math.round(Math.max(state.cash * pct, sellValue() * 40 * state.dailyStreak));
+    state.cash += reward;
+    saveState();
+    var streakDay = state.dailyStreak;
+    setTimeout(function () { openDailyReward(streakDay, reward); }, 700);
+  })();
+
+  // ===================================================================
   //  LOOP
   // ===================================================================
   var last = performance.now(), hudAcc = 0;
@@ -8002,6 +8456,7 @@
     updateFieldHands(now, dt);
     updateHaulers(now, dt);
     updateCourier(dt);
+    updateCourierTruck(dt);
     updateIntakeVisuals();
     updatePickers(now, dt);
     updateDrivers(now, dt);
@@ -8169,10 +8624,14 @@
     renderHud(); renderHrPanel(); saveState();
   });
 
-  // walking onto the desk opens it; walking away closes it again
+  // walking onto the desk opens it; walking away closes it again. The farm
+  // gets a second desk into the SAME panel — staffSpeedMult()/staffCarryBonus()
+  // already apply to field hands and the hauler, so "make my workers
+  // faster" only needed a way to reach the office without a trip to the shop.
   var hrWasNear = false;
   function updateHrProximity() {
-    var near = d2(player.pos.x, player.pos.z, HR_ZONE.x, HR_ZONE.z) <= 3.0 + PLAYER_RADIUS;
+    var zone = state.site === "farm" ? FARM_HR_ZONE : HR_ZONE;
+    var near = d2(player.pos.x, player.pos.z, zone.x, zone.z) <= 3.0 + PLAYER_RADIUS;
     if (near && !hrWasNear) openHr();
     if (!near && hrWasNear) closeHr();
     hrWasNear = near;
