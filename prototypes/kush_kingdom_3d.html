@@ -2812,11 +2812,24 @@
       bar.position.set(0, 6.6, 0);
       g.add(bar);
 
+      // The physically last bay doubles as the Lounge's automatic supply
+      // run once the Lounge is owned — this label is the only thing that
+      // marks it as different; toggled each frame in updateTrucks() since
+      // "owned" can change mid-session.
+      var loungeTag = null;
+      if (t === MAX_BAYS - 1) {
+        loungeTag = textSprite("LOUNGE SUPPLY", "#e8c9ff");
+        loungeTag.scale.set(3.2, 0.8, 1);
+        loungeTag.position.set(0, 7.6, 0);
+        loungeTag.visible = false;
+        g.add(loungeTag);
+      }
+
       g.position.set(BAY_X[t], 0, TRUCK_START_Z);
       g.visible = false;
       dockFit.add(g);
       trucks.push({
-        obj: g, bar: bar, bay: t,
+        obj: g, bar: bar, bay: t, loungeTag: loungeTag,
         phase: "gone", timer: TRUCK_GAP * (0.4 + t * 0.5),
         load: 0, manifest: { bud: 0, dab: 0, edible: 0 }, doorOpen: 0,
       });
@@ -6511,49 +6524,36 @@
     state.pallets[kind] = Math.max(0, Math.min(PALLET_CAP, palletCount(kind) + n));
   }
 
-  // ---- Lounge Run: hauls dock pallet stock to the Lounge, mirroring the
-  // farm's courierActive()/updateCourier() drain shape. Draws down the exact
-  // same state.pallets[kind] pool a loaded wholesale truck reads for gross —
-  // the deliberate tension: send a pallet to a truck for quick cash, or to
-  // the Lounge for a bigger per-unit payout at a slower drip. Neither system
-  // needs to know the other exists. No hireable role for this in v1 — it's a
-  // manual, active choice, on purpose (see the Lounge plan's out-of-scope
-  // list for why Bartenders are deferred).
+  // ---- Lounge Run: stand here carrying bud/dab/edible and it empties your
+  // pack straight into the Lounge's stock — the same hand-carry idiom as
+  // handleBayLoading() below, not a background drain. You still have to
+  // get the stock into your hands first (e.g. withdraw it from a pallet via
+  // handlePallets()), which is where the resource tension with the
+  // wholesale trucks actually lives now — a unit pulled off a pallet for
+  // this trip is a unit that truck no longer has. The automatic supply run
+  // (the last dock bay, once the Lounge is owned — see dispatchTruck()) is
+  // the passive counterpart to this manual, active top-up.
   var LOUNGE_RUN_ZONE = { x: 11.0, z: -79.0 };
-  var LOUNGE_RUN_RATE = 2.0;   // units/sec combined across all 3 kinds
-  function loungeRunActive() {
-    if (!loungeUnlocked()) return false;
+  function updateLoungeRun(dt) {
+    if (!loungeUnlocked()) return;
     var playerHere = state.site === "shop" &&
       d2(player.pos.x, player.pos.z, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z) <= 2.0 + PLAYER_RADIUS;
-    if (!playerHere) return false;
-    for (var i = 0; i < PALLET_DEFS.length; i++) {
-      var k = PALLET_DEFS[i].kind;
-      if (palletCount(k) > 0 && (state.loungeIntake[k] || 0) < LOUNGE_INTAKE_CAP) return true;
+    if (!playerHere) return;
+    var moved = 0;
+    for (var i = player.backpack.length - 1; i >= 0; i--) {
+      var kind = player.backpack[i].type;
+      if (kind !== "bud" && kind !== "dab" && kind !== "edible") continue;
+      if ((state.loungeIntake[kind] || 0) >= LOUNGE_INTAKE_CAP) continue;
+      state.loungeIntake[kind] = (state.loungeIntake[kind] || 0) + 1;
+      player.backpack.splice(i, 1);
+      moved++;
     }
-    return false;
-  }
-  var loungeRunAcc = 0, loungeRunCursor = 0;
-  function updateLoungeRun(dt) {
-    if (!loungeRunActive()) { loungeRunAcc = 0; return; }
-    loungeRunAcc += dt * LOUNGE_RUN_RATE;
-    var moves = Math.floor(loungeRunAcc);
-    if (moves <= 0) return;
-    loungeRunAcc -= moves;
-    for (var m = 0; m < moves; m++) {
-      // round-robin across bud/dab/edible so one product doesn't starve
-      // the others the way a fixed priority order would
-      for (var tries = 0; tries < PALLET_DEFS.length; tries++) {
-        var def = PALLET_DEFS[loungeRunCursor % PALLET_DEFS.length];
-        loungeRunCursor++;
-        if (palletCount(def.kind) > 0 && (state.loungeIntake[def.kind] || 0) < LOUNGE_INTAKE_CAP) {
-          palletAdd(def.kind, -1);
-          state.loungeIntake[def.kind] = (state.loungeIntake[def.kind] || 0) + 1;
-          if (state.site === "shop") {
-            addFloater(LOUNGE_RUN_ZONE.x, 3.6, LOUNGE_RUN_ZONE.z, "→ " + def.label, "#c76ee0");
-          }
-          break;
-        }
-      }
+    if (moved) {
+      syncStack();
+      addFloater(LOUNGE_RUN_ZONE.x, 3.6, LOUNGE_RUN_ZONE.z, "→ " + moved + " TO LOUNGE", "#c76ee0");
+      updateLoungeStockVisuals();
+      renderUpgrades();
+      saveState();
     }
   }
 
@@ -6683,8 +6683,34 @@
     }
   }
 
+  // The physically last bay is the Lounge's automatic supply run once the
+  // Lounge is owned — same loading mechanics (drivers/manual loading fill
+  // it exactly like any other bay), only the dispatch destination differs.
+  function isLoungeSupplyBay(t) { return t.bay === MAX_BAYS - 1 && loungeUnlocked(); }
+
   function dispatchTruck(t) {
-    var gross = 0, units = t.load;
+    var units = t.load;
+    if (isLoungeSupplyBay(t)) {
+      var delivered = 0;
+      for (var k2 in t.manifest) {
+        if (!t.manifest[k2]) continue;
+        var room = LOUNGE_INTAKE_CAP - (state.loungeIntake[k2] || 0);
+        var add = Math.min(t.manifest[k2], Math.max(0, room));
+        state.loungeIntake[k2] = (state.loungeIntake[k2] || 0) + add;
+        delivered += add;
+        t.manifest[k2] = 0;
+      }
+      t.load = 0;
+      if (delivered > 0) {
+        addFloater(BAY_X[t.bay], 6.0, DOCK_WALL_Z - 4, "→ LOUNGE", "#c76ee0");
+        toast("🍸 Supply run — " + delivered + " units delivered to the Lounge");
+        updateLoungeStockVisuals();
+        renderHud();
+        saveState();
+      }
+      return;
+    }
+    var gross = 0;
     for (var k in t.manifest) {
       if (!t.manifest[k]) continue;
       gross += wholesaleValue(k) * t.manifest[k];
@@ -6761,6 +6787,7 @@
 
       setBar(t.bar, truckCap() ? t.load / truckCap() : 0);
       t.bar.visible = t.phase === "loading";
+      if (t.loungeTag) t.loungeTag.visible = t.obj.visible && isLoungeSupplyBay(t);
     }
     // doors on bays that have not been bought stay shut and dark
     for (var u = live; u < bayDoors.length; u++) {
