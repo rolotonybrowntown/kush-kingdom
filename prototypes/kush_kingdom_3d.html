@@ -763,6 +763,27 @@
   var LOUNGE_INTAKE_CAP = 48;   // per kind, above PALLET_CAP (36) so a full pallet can drain in one go
   function loungeUnlocked() { return !!(state.lounge && state.lounge.unlocked); }
 
+  // Each tier is a complete reskin of the room, climbing from a dive bar to
+  // a Gatsby-grade gold room. `pop` is the popularity multiplier and does the
+  // same job here that sellLv does for bud: a classier room draws a better
+  // crowd who pay more per head. Tables grow with it, so the top tier pays 8x
+  // AND seats four times as many people. The last two tables are the bigger
+  // "party" tables — four seats instead of two.
+  var LOUNGE_TIERS = [
+    { name: "Dive Bar",      tables: 2, pop: 1.0, cost: 0,
+      adds: "Sticky floors, cheap beer, and a crowd that doesn't mind" },
+    { name: "The Lounge",    tables: 3, pop: 2.0, cost: 20000000,
+      adds: "Proper seating and a rug — a better class of regular" },
+    { name: "Upscale Bar",   tables: 4, pop: 4.0, cost: 80000000,
+      adds: "Stone bar, wall art, and everyone turns up in black tie" },
+    { name: "The Gold Room", tables: 6, pop: 8.0, cost: 320000000,
+      adds: "Chandelier, gold trim and two party tables that seat four" },
+  ];
+  var MAX_LOUNGE_TIER = LOUNGE_TIERS.length - 1;
+  function loungeTier()    { return (state.lounge && state.lounge.tier) || 0; }
+  function loungeTierDef() { return LOUNGE_TIERS[loungeTier()]; }
+  function loungePopMult() { return loungeTierDef().pop; }
+
   var SITES = {
     shop: {
       id: "shop", name: "Kush Kingdom", icon: "🏪",
@@ -808,7 +829,7 @@
       id: "lounge", name: "Downtown Lounge", icon: "🍸",
       skyColor: new THREE.Color(0x4a3a5c),   // moodier than the shop/farm's daylight blues
       sub: function () {
-        return loungeUnlocked() ? "Sit-down bar · sells bud, dabs and edibles by the table"
+        return loungeUnlocked() ? loungeTierDef().name + " · run drinks out to the tables"
                                  : "Buy the deed to open a bar downtown";
       },
       spawn: { x: 0, z: LOUNGE_CZ + LOUNGE_HALF_Z - 6 },
@@ -1267,7 +1288,7 @@
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
       loungeIntake: { bud: 0, dab: 0, edible: 0 },   // stock delivered to the lounge, also its sellable stock
-      lounge: { unlocked: false },
+      lounge: { unlocked: false, tier: 0 },
       farm: {
         unlocked: false,
         rowsUnlocked: FARM_COLS,        // one row free with the deed
@@ -1338,8 +1359,11 @@
       merged.intake = Math.max(0, Math.min(INTAKE_CAP, merged.intake || 0));
       if (!merged.managers || typeof merged.managers !== "object") merged.managers = {};
       merged.managers.farm = !!merged.managers.farm;
-      if (!merged.lounge || typeof merged.lounge !== "object") merged.lounge = { unlocked: false };
+      if (!merged.lounge || typeof merged.lounge !== "object") merged.lounge = { unlocked: false, tier: 0 };
       merged.lounge.unlocked = !!merged.lounge.unlocked;
+      // rebuildLounge() indexes LOUNGE_TIERS with this, so a rolled-back or
+      // corrupt save must never leave it outside the table
+      merged.lounge.tier = Math.max(0, Math.min(MAX_LOUNGE_TIER, Math.floor(merged.lounge.tier) || 0));
       if (!merged.loungeIntake || typeof merged.loungeIntake !== "object") merged.loungeIntake = { bud: 0, dab: 0, edible: 0 };
       ["bud", "dab", "edible"].forEach(function (k) {
         var v = merged.loungeIntake[k];
@@ -1897,6 +1921,13 @@
     hiVis:       mat(0xe8f24a, { map: fabricTex, roughness: 0.85 }),   // driver vest
     asphalt:     mat(0x4a4f55, { map: plasterTex, roughness: 0.95 }),
     threshold:   mat(0xb99248, { roughness: 0.3, metalness: 0.7 }),
+    // brighter and glossier than the brass threshold strip — this is the
+    // Gold Room's trim, and it wants to actually catch the light
+    gold:        mat(0xd8b03c, { roughness: 0.18, metalness: 0.9 }),
+    goldDim:     mat(0x8f6f22, { roughness: 0.35, metalness: 0.8 }),
+    suit:        mat(0x22242e, { roughness: 0.7 }),
+    suitShirt:   mat(0xf2f4f8, { roughness: 0.75 }),
+    neonPink:    mat(0xff5fa8, { emissive: 0xff2f88, emissiveIntensity: 1.5, roughness: 0.4 }),
     pavement:    mat(0x9a9a94, { map: plasterTex, roughness: 0.95 }),
     kerb:        mat(0x7d7d78, { map: plasterTex, roughness: 0.95 }),
     metalRack:   mat(0x7f8894, { roughness: 0.4, metalness: 0.7 }),
@@ -3086,217 +3117,492 @@
   // ===================================================================
   //  DOWNTOWN LOUNGE — the third location
   // ===================================================================
-  // One fixed interior room: bar counter along the far wall, tables between
-  // it and the door. No room-tier growth here, unlike the shop — see the
-  // Lounge plan's "out of scope for v1" list.
+  // One interior room, rebuilt from scratch on every class upgrade —
+  // rebuildLounge() is this location's answer to rebuildRoom(). Tables live
+  // at fixed slots and the tier only decides how many are active, so each
+  // table's tip till can be built once and simply hidden.
   var loungeGroup = new THREE.Group();
   scene.add(loungeGroup);
   var loungeGround;
-  var LOUNGE_TABLE_DEFS = [
-    { x: -9, z: LOUNGE_CZ - 4 }, { x: 9, z: LOUNGE_CZ - 4 },
-    { x: -9, z: LOUNGE_CZ + 6 }, { x: 9, z: LOUNGE_CZ + 6 },
-  ];
-  var LOUNGE_SEATS = [];
-  LOUNGE_TABLE_DEFS.forEach(function (t) {
-    LOUNGE_SEATS.push({ x: t.x - 1.1, z: t.z, tableX: t.x, tableZ: t.z });
-    LOUNGE_SEATS.push({ x: t.x + 1.1, z: t.z, tableX: t.x, tableZ: t.z });
-  });
-  var LOUNGE_BAR_Z = LOUNGE_CZ - LOUNGE_HALF_Z + 3;
-  var LOUNGE_STOCK_DEFS = [
-    { kind: "bud",    label: "BUD",     color: 0x6fd68a, mat: null, x: -3.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
-    { kind: "dab",    label: "DABS",    color: 0xffc36a, mat: null, x:  0.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
-    { kind: "edible", label: "EDIBLES", color: 0xd7996a, mat: null, x:  3.0, z: LOUNGE_CZ - LOUNGE_HALF_Z + 1.6 },
-  ];
-  var loungeStockPiles = [];
 
-  (function buildLounge() {
+  var LOUNGE_BAR_Z    = LOUNGE_CZ - LOUNGE_HALF_Z + 9;   // bar sits forward...
+  var LOUNGE_SHELF_Z  = LOUNGE_CZ - LOUNGE_HALF_Z + 3;   // ...leaving room to work behind it
+  var LOUNGE_TIER_PAD = { x: 13, z: LOUNGE_CZ + 15 };    // by the door, clear of the tables
+
+  // Activation order. Slots 4 and 5 are the bigger party tables the top
+  // tier brings in — four seats each instead of two.
+  var LOUNGE_TABLE_SLOTS = [
+    { x: -8, z: LOUNGE_CZ - 2,  party: false },
+    { x:  8, z: LOUNGE_CZ - 2,  party: false },
+    { x:  0, z: LOUNGE_CZ - 2,  party: false },
+    { x:  0, z: LOUNGE_CZ + 10, party: false },
+    { x: -9, z: LOUNGE_CZ + 10, party: true  },
+    { x:  9, z: LOUNGE_CZ + 10, party: true  },
+  ];
+  function loungeTableCount() { return loungeTierDef().tables; }
+
+  // Every seat across every slot, grouped by table, so the seats belonging
+  // to active tables are always a prefix of the array — that lets the npc
+  // pool be sized once at the maximum and gated by count, exactly the way
+  // activeCustomers() gates the shop's crowd.
+  var LOUNGE_SEATS = [];
+  LOUNGE_TABLE_SLOTS.forEach(function (t, ti) {
+    var offs = t.party
+      ? [[-1.5, 0], [1.5, 0], [0, -1.5], [0, 1.5]]
+      : [[-1.1, 0], [1.1, 0]];
+    offs.forEach(function (o) {
+      LOUNGE_SEATS.push({ x: t.x + o[0], z: t.z + o[1], tableX: t.x, tableZ: t.z, tableIdx: ti });
+    });
+  });
+  function activeLoungeSeats() {
+    var tables = loungeTableCount(), n = 0;
+    for (var i = 0; i < LOUNGE_SEATS.length; i++) if (LOUNGE_SEATS[i].tableIdx < tables) n++;
+    return n;
+  }
+
+  // The three shelves behind the bar. These ARE state.loungeIntake made
+  // visible — the supply chain into them is unchanged.
+  var LOUNGE_SHELF_DEFS = [
+    { kind: "bud",    label: "BUD",     color: 0x6fd68a, x: -7 },
+    { kind: "dab",    label: "DABS",    color: 0xffc36a, x:  0 },
+    { kind: "edible", label: "EDIBLES", color: 0xd7996a, x:  7 },
+  ];
+  var LOUNGE_SHELF_HALF = 2.0;
+  var loungeShelves = [];
+
+  // Per-tier palette and feature flags; index matches LOUNGE_TIERS.
+  var LOUNGE_LOOKS = [
+    { floor: "woodDark",  wall: "wallBack",   bar: "woodDark",     top: "counterTop",
+      trim: null,        neon: true,  art: 0, chandelier: false, rugSize: 13 },
+    { floor: "plank",     wall: "wallPaint",  bar: "wood",         top: "counterTop",
+      trim: null,        neon: false, art: 2, chandelier: false, rugSize: 17 },
+    { floor: "floorDark", wall: "wallAccent", bar: "counterStone", top: "counterStone",
+      trim: "metalRack", neon: false, art: 4, chandelier: false, rugSize: 21 },
+    { floor: "tile",      wall: "wallTrim",   bar: "threshold",    top: "counterStone",
+      trim: "gold",      neon: false, art: 6, chandelier: true,  rugSize: 25 },
+  ];
+  function loungeLook() { return LOUNGE_LOOKS[loungeTier()]; }
+
+  function rebuildLounge() {
     var g = loungeGroup;
+    while (g.children.length) g.remove(g.children[0]);
+    loungeShelves = [];
+
+    var look = loungeLook();
+    var floorMat = M[look.floor], wallMat = M[look.wall];
+    var barMat = M[look.bar], topMat = M[look.top];
+    var trimMat = look.trim ? M[look.trim] : null;
 
     loungeGround = new THREE.Mesh(
-      new THREE.BoxGeometry(LOUNGE_HALF_X * 2 + 6, 0.3, LOUNGE_HALF_Z * 2 + 6), M.woodDark);
+      new THREE.BoxGeometry(LOUNGE_HALF_X * 2 + 6, 0.3, LOUNGE_HALF_Z * 2 + 6), floorMat);
     loungeGround.position.set(0, LOUNGE_GROUND_TOP - 0.15, LOUNGE_CZ);
     loungeGround.receiveShadow = true;
     g.add(loungeGround);
 
-    // ---- four walls, door gap on the entrance (south, +Z) wall ----
+    // ---- rug between the bar and the tables ----
+    var rug = new THREE.Mesh(
+      new THREE.PlaneGeometry(look.rugSize, look.rugSize * 0.72), M.rug);
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(0, LOUNGE_GROUND_TOP + 0.012, LOUNGE_CZ + 2);
+    rug.receiveShadow = true;
+    g.add(rug);
+
+    // ---- four walls, door gap on the entrance (+Z) wall ----
     var wallThick = 0.4, wallH = 9;
     var minX = -LOUNGE_HALF_X, maxX = LOUNGE_HALF_X;
     var minZ = LOUNGE_CZ - LOUNGE_HALF_Z, maxZ = LOUNGE_CZ + LOUNGE_HALF_Z;
     function wallSlab(sizeX, sizeZ, x, z) {
-      var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, wallH, sizeZ), M.woodDark);
+      var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, wallH, sizeZ), wallMat);
       wall.position.set(x, wallH / 2, z);
       wall.receiveShadow = true; wall.castShadow = true;
       g.add(wall);
     }
-    wallSlab(maxX - minX + wallThick * 2, wallThick, 0, minZ);           // far (bar) wall
-    wallSlab(wallThick, maxZ - minZ, minX, LOUNGE_CZ);                   // west
-    wallSlab(wallThick, maxZ - minZ, maxX, LOUNGE_CZ);                   // east
+    wallSlab(maxX - minX + wallThick * 2, wallThick, 0, minZ);   // far (bar) wall
+    wallSlab(wallThick, maxZ - minZ, minX, LOUNGE_CZ);           // west
+    wallSlab(wallThick, maxZ - minZ, maxX, LOUNGE_CZ);           // east
     var doorHalf = 3.0;
-    wallSlab(maxX - doorHalf, wallThick, (minX + maxX - doorHalf) / 2 - 0.15, maxZ);   // south, left of door
-    wallSlab(maxX - doorHalf, wallThick, -(minX + maxX - doorHalf) / 2 + 0.15, maxZ);  // south, right of door — mirrors the left segment
-    var lintel = new THREE.Mesh(new THREE.BoxGeometry(doorHalf * 2, wallH - 6.4, wallThick), M.woodDark);
+    wallSlab(maxX - doorHalf, wallThick, (minX + maxX - doorHalf) / 2 - 0.15, maxZ);
+    wallSlab(maxX - doorHalf, wallThick, -(minX + maxX - doorHalf) / 2 + 0.15, maxZ);
+    var lintel = new THREE.Mesh(new THREE.BoxGeometry(doorHalf * 2, wallH - 6.4, wallThick), wallMat);
     lintel.position.set(0, 6.4 + (wallH - 6.4) / 2, maxZ);
     g.add(lintel);
-    var doorSign = textSprite("DOWNTOWN LOUNGE", "#e8c9ff");
+    var doorSign = textSprite(loungeTierDef().name.toUpperCase(), "#e8c9ff");
     doorSign.scale.set(6.6, 1.4, 1);
     doorSign.position.set(0, 6.9, maxZ);
     g.add(doorSign);
 
-    // ---- bar counter along the far wall ----
-    var counter = new THREE.Mesh(new THREE.BoxGeometry(10, 1.3, 1.6), M.counterTop);
-    counter.position.set(0, 0.65 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
-    counter.castShadow = true; counter.receiveShadow = true;
-    g.add(counter);
-    var counterTop = new THREE.Mesh(new THREE.BoxGeometry(10.3, 0.12, 1.8), M.counterStone);
-    counterTop.position.set(0, 1.36 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
-    g.add(counterTop);
-
-    // ---- stock crates behind the counter, one small pile per product ----
-    LOUNGE_STOCK_DEFS.forEach(function (def) {
-      var pg = new THREE.Group();
-      var crate = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.85, 1.0),
-        def.kind === "bud" ? M.bud : def.kind === "dab" ? M.dab : M.edible);
-      crate.position.set(0, LOUNGE_GROUND_TOP + 0.45, 0);
-      crate.castShadow = true;
-      pg.add(crate);
-      var bar = makeStatusBar(1.6, def.color);
-      bar.position.set(0, 2.2, 0);
-      pg.add(bar);
-      var lbl = textSprite(def.label, "#ffffff");
-      lbl.scale.set(1.7, 0.44, 1);
-      lbl.position.set(0, 2.7, 0);
-      pg.add(lbl);
-      pg.position.set(def.x, 0, def.z);
-      g.add(pg);
-      loungeStockPiles.push({ group: pg, crate: crate, bar: bar });
+    // ---- windows down both side walls ----
+    [-1, 1].forEach(function (side) {
+      [-8, 4].forEach(function (wz) {
+        var frame = new THREE.Mesh(new THREE.BoxGeometry(0.3, 3.6, 5.0),
+          trimMat || M.woodDark);
+        frame.position.set(side * (LOUNGE_HALF_X - 0.1), 4.4, LOUNGE_CZ + wz);
+        g.add(frame);
+        var pane = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.0, 4.4), M.windowGlass);
+        pane.position.set(side * (LOUNGE_HALF_X - 0.24), 4.4, LOUNGE_CZ + wz);
+        g.add(pane);
+      });
     });
 
-    // ---- tables + seats/stools ----
-    LOUNGE_TABLE_DEFS.forEach(function (t) {
-      var top = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 0.12, 16), M.counterTop);
+    // ---- framed pictures / artwork, more of it the classier it gets ----
+    for (var a = 0; a < look.art; a++) {
+      var side = a % 2 === 0 ? -1 : 1;
+      var slotZ = LOUNGE_CZ - 2 + Math.floor(a / 2) * 7;
+      var art = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.4, 3.2),
+        trimMat || M.wallTrim);
+      art.position.set(side * (LOUNGE_HALF_X - 0.3), 5.0, slotZ);
+      g.add(art);
+      var canvasArt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.9, 2.7),
+        a % 3 === 0 ? M.wallAccent : a % 3 === 1 ? M.rug : M.couch);
+      canvasArt.position.set(side * (LOUNGE_HALF_X - 0.42), 5.0, slotZ);
+      g.add(canvasArt);
+    }
+
+    // ---- neon sign, dive-bar only ----
+    if (look.neon) {
+      var neon = new THREE.Mesh(new THREE.BoxGeometry(6.0, 1.6, 0.16), M.neonPink);
+      neon.position.set(0, 6.0, minZ + 0.4);
+      g.add(neon);
+      addGlow(g, 0, 6.0, minZ + 1.0, 7.0, 0xff5fa8, 0.5);
+    }
+
+    // ---- chandelier, top tier only ----
+    if (look.chandelier) {
+      var chand = new THREE.Group();
+      var stem = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 2.0, 8), M.gold);
+      stem.position.y = 8.0; chand.add(stem);
+      var hub = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), M.gold);
+      hub.position.y = 6.9; chand.add(hub);
+      for (var c = 0; c < 8; c++) {
+        var ang = (c / 8) * Math.PI * 2;
+        var arm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 0.09), M.gold);
+        arm.position.set(Math.cos(ang) * 0.8, 6.75, Math.sin(ang) * 0.8);
+        arm.rotation.y = -ang;
+        chand.add(arm);
+        var drop = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 8), M.counterGlass);
+        drop.position.set(Math.cos(ang) * 1.45, 6.4, Math.sin(ang) * 1.45);
+        chand.add(drop);
+      }
+      addGlow(chand, 0, 6.6, 0, 9.0, 0xffe9a8, 0.55);
+      chand.position.set(0, 0, LOUNGE_CZ + 2);
+      g.add(chand);
+    }
+
+    // ---- the bar: long counter, overhang top, foot rail, stools ----
+    var barW = 14;
+    var counter = new THREE.Mesh(new THREE.BoxGeometry(barW, 1.5, 1.8), barMat);
+    counter.position.set(0, 0.75 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
+    counter.castShadow = true; counter.receiveShadow = true;
+    g.add(counter);
+    var counterTop = new THREE.Mesh(new THREE.BoxGeometry(barW + 0.8, 0.16, 2.4), topMat);
+    counterTop.position.set(0, 1.58 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
+    counterTop.castShadow = true;
+    g.add(counterTop);
+    var rail = new THREE.Mesh(new THREE.BoxGeometry(barW, 0.12, 0.12), trimMat || M.metalRack);
+    rail.position.set(0, LOUNGE_GROUND_TOP + 0.35, LOUNGE_BAR_Z + 1.15);
+    g.add(rail);
+    if (trimMat) {
+      var barTrim = new THREE.Mesh(new THREE.BoxGeometry(barW + 0.2, 0.14, 1.9), trimMat);
+      barTrim.position.set(0, 1.45 + LOUNGE_GROUND_TOP, LOUNGE_BAR_Z);
+      g.add(barTrim);
+    }
+    [-4.5, 0, 4.5].forEach(function (sx) {
+      var seat = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.14, 12), M.couch);
+      seat.position.set(sx, LOUNGE_GROUND_TOP + 1.0, LOUNGE_BAR_Z + 2.2);
+      seat.castShadow = true;
+      g.add(seat);
+      var post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.0, 8), trimMat || M.metalRack);
+      post.position.set(sx, LOUNGE_GROUND_TOP + 0.5, LOUNGE_BAR_Z + 2.2);
+      g.add(post);
+    });
+
+    // ---- product shelves against the back wall, one per kind ----
+    LOUNGE_SHELF_DEFS.forEach(function (def) {
+      var sg = new THREE.Group();
+      var backer = new THREE.Mesh(new THREE.BoxGeometry(3.2, 4.4, 0.3), trimMat || M.woodDark);
+      backer.position.set(0, LOUNGE_GROUND_TOP + 2.2, -0.5);
+      sg.add(backer);
+      var boards = [], jars = [];
+      for (var s = 0; s < 3; s++) {
+        var board = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.14, 1.0), trimMat || M.wood);
+        board.position.set(0, LOUNGE_GROUND_TOP + 0.9 + s * 1.35, 0);
+        board.castShadow = true; board.receiveShadow = true;
+        sg.add(board);
+        boards.push(board);
+        // three jars per board, revealed as stock climbs
+        for (var j = 0; j < 3; j++) {
+          var jar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.75, 10),
+            def.kind === "bud" ? M.bud : def.kind === "dab" ? M.dab : M.edible);
+          jar.position.set(-1.0 + j * 1.0, LOUNGE_GROUND_TOP + 1.35 + s * 1.35, 0);
+          jar.castShadow = true;
+          sg.add(jar);
+          jars.push(jar);
+        }
+      }
+      var bar = makeStatusBar(2.2, def.color);
+      bar.position.set(0, 5.2, 0);
+      sg.add(bar);
+      var lbl = textSprite(def.label, "#ffffff");
+      lbl.scale.set(2.2, 0.56, 1);
+      lbl.position.set(0, 5.8, 0);
+      sg.add(lbl);
+      // floor marker so it reads as somewhere you stand
+      var mark = new THREE.Mesh(
+        new THREE.PlaneGeometry(LOUNGE_SHELF_HALF * 2, LOUNGE_SHELF_HALF * 2),
+        new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: 0.3, depthWrite: false }));
+      mark.rotation.x = -Math.PI / 2;
+      mark.position.set(0, LOUNGE_GROUND_TOP + 0.014, 1.6);
+      sg.add(mark);
+      sg.position.set(def.x, 0, LOUNGE_SHELF_Z);
+      g.add(sg);
+      loungeShelves.push({ group: sg, jars: jars, bar: bar, def: def });
+    });
+
+    // ---- tables: only the slots this tier has opened ----
+    var tables = loungeTableCount();
+    LOUNGE_TABLE_SLOTS.forEach(function (t, ti) {
+      if (ti >= tables) return;
+      var r = t.party ? 2.0 : 1.3;
+      var top = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.14, 18), topMat);
       top.position.set(t.x, LOUNGE_GROUND_TOP + 1.05, t.z);
       top.castShadow = true; top.receiveShadow = true;
       g.add(top);
-      var leg = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 1.0, 10), M.metalRack);
+      if (trimMat) {
+        var edge = new THREE.Mesh(new THREE.TorusGeometry(r, 0.07, 8, 24), trimMat);
+        edge.rotation.x = -Math.PI / 2;
+        edge.position.set(t.x, LOUNGE_GROUND_TOP + 1.13, t.z);
+        g.add(edge);
+      }
+      var leg = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.12, r * 0.22, 1.0, 10), trimMat || M.metalRack);
       leg.position.set(t.x, LOUNGE_GROUND_TOP + 0.5, t.z);
       leg.castShadow = true;
       g.add(leg);
-      [[-1.1, 0], [1.1, 0]].forEach(function (so) {
-        var stool = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.1, 12), M.counterStone);
-        stool.position.set(t.x + so[0], LOUNGE_GROUND_TOP + 0.62, t.z + so[1]);
+      var offs = t.party
+        ? [[-1.5, 0], [1.5, 0], [0, -1.5], [0, 1.5]]
+        : [[-1.1, 0], [1.1, 0]];
+      offs.forEach(function (so) {
+        var stool = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.44, 0.12, 12), M.couch);
+        stool.position.set(t.x + so[0] * 1.35, LOUNGE_GROUND_TOP + 0.64, t.z + so[1] * 1.35);
         stool.castShadow = true;
         g.add(stool);
-        var stoolLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8), M.metalRack);
-        stoolLeg.position.set(t.x + so[0], LOUNGE_GROUND_TOP + 0.3, t.z + so[1]);
+        var stoolLeg = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.08, 0.62, 8), trimMat || M.metalRack);
+        stoolLeg.position.set(t.x + so[0] * 1.35, LOUNGE_GROUND_TOP + 0.31, t.z + so[1] * 1.35);
         g.add(stoolLeg);
       });
     });
-  })();
+  }
+  rebuildLounge();
 
-  // ---- table-based customers: a variant of the counter's queue, not a
-  // reskin of it. Fixed seats instead of queue lanes, and an extra "linger"
-  // phase — a seat stays occupied for a while after the order's filled,
-  // which is what makes a table read as slower/higher-margin than a
-  // walk-up sale. Order-filling only runs during "order"; once that window
-  // closes the seat is just ambience even if loungeIntake ran dry mid-order,
-  // so an understocked bar reads as "slow service" rather than a customer
-  // waiting forever for stock that never comes.
+  // ---- table service: customers sit and WAIT until the player brings them
+  // what they ordered. This is a real per-customer state machine with its own
+  // phase + timer, not a position derived from a global clock — "waits until
+  // served" is not something a fixed cycle can express. Same shape as the
+  // runners / pickers / drivers machines.
   var loungeNpcs = [];
   var MAX_LOUNGE_CUSTOMERS = LOUNGE_SEATS.length;
   (function buildLoungeNpcs() {
     var colors = [M.npc1, M.npc2, M.npc3];
     for (var n = 0; n < MAX_LOUNGE_CUSTOMERS; n++) {
       var g = new THREE.Group();
-      var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), colors[n % colors.length]);
+      var torsoMat = colors[n % colors.length];
+      var legMat = M.pants;
+      var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), torsoMat);
       t.position.y = 1.1; t.castShadow = true; g.add(t);
       var h = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.64, 0.62), n % 2 ? M.skin2 : M.skin);
       h.position.y = 1.9; h.castShadow = true; g.add(h);
       var cap = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.4, 0.3, 7), M.dark);
       cap.position.y = 2.26; g.add(cap);
       var lgeo = new THREE.BoxGeometry(0.27, 0.7, 0.27);
-      var l1 = new THREE.Mesh(lgeo, M.pants); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
-      var l2 = new THREE.Mesh(lgeo, M.pants); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
+      var l1 = new THREE.Mesh(lgeo, legMat); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, legMat); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
       g.add(l1); g.add(l2);
       var bubble = makeBubbleSprite();
       bubble.position.y = 3.6;
       bubble.visible = false;
       g.add(bubble);
       g.scale.setScalar(0.95);
+      g.visible = false;
       scene.add(g);
       loungeNpcs.push({
-        obj: g, l1: l1, l2: l2, bubble: bubble,
-        phase: n * 1.7, seat: n, kind: "bud",
-        want: 0, shown: -1, buyAcc: 0, lastPhase: null,
+        obj: g, torso: t, cap: cap, l1: l1, l2: l2, bubble: bubble,
+        baseTorso: torsoMat, baseLeg: legMat,
+        phase: "gone", timer: n * 0.9, walk: 0,
+        kind: "bud", want: 0, ordered: 0, shown: -1,
       });
     }
   })();
 
-  // A sit-down order is a round, not a bulk buy — deliberately smaller than
-  // the counter's rollOrder().
+  // A sit-down order is a round, not a bulk buy.
   function rollLoungeOrder() { return 1 + Math.floor(Math.random() * 2); }
 
-  // Timing is where "slower throughput, higher margin" actually lives — a
-  // seat's total occupied time (walk*2 + ORDER + LINGER) is the throughput
-  // cap, tuned independently of the counter's own NPC_SPEED/NPC_WAIT.
   var LOUNGE_SPEED = 5.0;
-  var LOUNGE_ORDER_TIME = 5.0;
-  var LOUNGE_ORDER_EVERY = 1.4;
-  var LOUNGE_LINGER_TIME = 11.0;
+  var LOUNGE_SERVED_TIME = 3.0;                        // savours it, then leaves
+  var LOUNGE_RESPAWN_MIN = 2.0, LOUNGE_RESPAWN_MAX = 8.0;
+  function loungeDoorZ() { return LOUNGE_CZ + LOUNGE_HALF_Z - 6; }
+  function loungeKindEmoji(k) { return k === "edible" ? "🍪" : k === "dab" ? "🍯" : "🌿"; }
+  function loungeKindTint(k) { return k === "edible" ? "#c9743a" : k === "dab" ? "#e09a2c" : "#4faa62"; }
+
+  // Formal attire from the Upscale Bar up — a material swap on bodies that
+  // are already built, the same trick refreshFitOut() uses on the counter.
+  function refreshLoungeFit() {
+    var posh = loungeTier() >= 2;
+    for (var i = 0; i < loungeNpcs.length; i++) {
+      var npc = loungeNpcs[i];
+      npc.torso.material = posh ? M.suitShirt : npc.baseTorso;
+      npc.l1.material = npc.l2.material = posh ? M.suit : npc.baseLeg;
+      npc.cap.visible = !posh;
+    }
+  }
+
+  function payLoungeTip(npc, seat) {
+    // the whole payment is left on the table: what they drank, scaled by how
+    // classy the room is, plus a tip on top
+    var value = loungeValue(npc.kind) * Math.max(1, npc.ordered) * loungePopMult();
+    var total = (value + value * loungeTipPct()) * (promoActive() ? PROMO_MULT : 1);
+    var till = loungeTills[seat.tableIdx];
+    if (till) till.payOut(total);
+  }
 
   function updateLoungeNpcs(now, dt) {
-    var startZ = LOUNGE_CZ + LOUNGE_HALF_Z - 6;   // the door
-    loungeNpcs.forEach(function (npc, idx) {
-      var seat = LOUNGE_SEATS[idx];
-      var walkTime = Math.abs(startZ - seat.z) / LOUNGE_SPEED;
-      var cycle = walkTime * 2 + LOUNGE_ORDER_TIME + LOUNGE_LINGER_TIME;
-      var t = ((now / 1000) + npc.phase) % cycle;
-      var z, phase, walking;
-      if (t < walkTime) {
-        z = startZ + (seat.z - startZ) * (t / walkTime);
-        walking = true; phase = "sit";
-      } else if (t < walkTime + LOUNGE_ORDER_TIME) {
-        z = seat.z; walking = false; phase = "order";
-      } else if (t < walkTime + LOUNGE_ORDER_TIME + LOUNGE_LINGER_TIME) {
-        z = seat.z; walking = false; phase = "linger";
-      } else {
-        var p2 = (t - walkTime - LOUNGE_ORDER_TIME - LOUNGE_LINGER_TIME) / walkTime;
-        z = seat.z + (startZ - seat.z) * p2;
-        walking = true; phase = "leave";
+    var live = activeLoungeSeats();
+    var doorZ = loungeDoorZ();
+    for (var idx = 0; idx < loungeNpcs.length; idx++) {
+      var npc = loungeNpcs[idx], seat = LOUNGE_SEATS[idx];
+      if (idx >= live) {
+        npc.obj.visible = false; npc.bubble.visible = false;
+        npc.phase = "gone"; npc.timer = 0.5; npc.want = 0;
+        continue;
+      }
+      var span = Math.max(0.001, Math.abs(doorZ - seat.z));
+      npc.timer -= dt;
+
+      if (npc.phase === "gone") {
+        npc.obj.visible = false; npc.bubble.visible = false;
+        if (npc.timer <= 0) {
+          npc.phase = "arriving"; npc.walk = 0;
+          var roll = Math.random();
+          npc.kind = (ediblesUnlocked() && roll < 0.2) ? "edible"
+                   : (dabsUnlocked() && roll < 0.5) ? "dab" : "bud";
+          npc.want = rollLoungeOrder();
+          npc.ordered = npc.want;
+          npc.shown = -1;
+        }
+        continue;
       }
 
-      if (phase === "sit" && npc.lastPhase !== "sit") {
-        var roll = Math.random();
-        npc.kind = (ediblesUnlocked() && roll < 0.2) ? "edible"
-                 : (dabsUnlocked() && roll < 0.5) ? "dab" : "bud";
-        npc.want = rollLoungeOrder();
-        npc.shown = -1; npc.buyAcc = 0;
-      }
-      if (phase === "order") {
-        npc.buyAcc += dt;
-        while (npc.want > 0 && npc.buyAcc >= LOUNGE_ORDER_EVERY) {
-          npc.buyAcc -= LOUNGE_ORDER_EVERY;
-          if (!customerBuyLounge(npc.kind)) break;
-          npc.want--;
+      npc.obj.visible = true;
+      var z = seat.z, walking = false;
+      if (npc.phase === "arriving") {
+        npc.walk = Math.min(1, npc.walk + (dt * LOUNGE_SPEED) / span);
+        z = doorZ + (seat.z - doorZ) * npc.walk;
+        walking = npc.walk < 1;
+        if (npc.walk >= 1) npc.phase = "seated";
+      } else if (npc.phase === "seated") {
+        // waits here indefinitely — handleLoungeServe() is the only way out
+      } else if (npc.phase === "served") {
+        if (npc.timer <= 0) {
+          payLoungeTip(npc, seat);
+          npc.phase = "leaving"; npc.walk = 0; npc.shown = -1;
+        }
+      } else if (npc.phase === "leaving") {
+        npc.walk = Math.min(1, npc.walk + (dt * LOUNGE_SPEED) / span);
+        z = seat.z + (doorZ - seat.z) * npc.walk;
+        walking = true;
+        if (npc.walk >= 1) {
+          npc.phase = "gone";
+          npc.timer = LOUNGE_RESPAWN_MIN + Math.random() * (LOUNGE_RESPAWN_MAX - LOUNGE_RESPAWN_MIN);
         }
       }
-      npc.lastPhase = phase;
 
-      var showBubble = phase === "sit" || (phase === "order" && npc.want > 0);
-      npc.bubble.visible = showBubble;
-      if (showBubble && npc.shown !== npc.want) {
-        updateBubbleSprite(npc.bubble,
-          (npc.kind === "edible" ? "🍪" : npc.kind === "dab" ? "🍯" : "🌿") + " x" + npc.want,
-          npc.kind === "edible" ? "#c9743a" : npc.kind === "dab" ? "#e09a2c" : "#4faa62");
-        npc.shown = npc.want;
+      var wantsShown = (npc.phase === "arriving" || npc.phase === "seated") && npc.want > 0;
+      var happy = npc.phase === "served";
+      npc.bubble.visible = wantsShown || happy;
+      var key = happy ? "ok" : npc.want;
+      if (npc.bubble.visible && npc.shown !== key) {
+        if (happy) updateBubbleSprite(npc.bubble, "✓", "#8ff5a8");
+        else updateBubbleSprite(npc.bubble,
+          loungeKindEmoji(npc.kind) + " x" + npc.want, loungeKindTint(npc.kind));
+        npc.shown = key;
       }
 
       npc.obj.position.set(seat.x, walking ? Math.abs(Math.sin(now * 0.014 + idx)) * 0.06 : 0, z);
-      npc.obj.rotation.y = (phase === "order" || phase === "linger")
-        ? Math.atan2(seat.tableX - seat.x, seat.tableZ - z)
-        : (walking && phase === "leave" ? Math.PI : 0);
+      npc.obj.rotation.y = walking
+        ? (npc.phase === "leaving" ? Math.PI : 0)
+        : Math.atan2(seat.tableX - seat.x, seat.tableZ - z);
       var swing = walking ? Math.sin(now * 0.014 + idx) * 0.5 : 0;
       npc.l1.rotation.x = swing; npc.l2.rotation.x = -swing;
-    });
+    }
+  }
+
+  // ---- take product off a shelf behind the bar ----
+  // Same withdraw idiom as handlePallets(): walk up empty-handed-ish and it
+  // loads you from that shelf's stock. Edge-triggered so standing there does
+  // not flicker.
+  var LOUNGE_SHELF_STAND_Z = LOUNGE_SHELF_Z + 1.6;
+  var loungeShelfVisited = LOUNGE_SHELF_DEFS.map(function () { return false; });
+  function handleLoungeShelves() {
+    if (state.site !== "lounge" || !loungeUnlocked()) {
+      for (var r = 0; r < loungeShelfVisited.length; r++) loungeShelfVisited[r] = false;
+      return;
+    }
+    for (var i = 0; i < LOUNGE_SHELF_DEFS.length; i++) {
+      var def = LOUNGE_SHELF_DEFS[i];
+      var inZone =
+        Math.abs(player.pos.x - def.x) <= LOUNGE_SHELF_HALF + PLAYER_RADIUS &&
+        Math.abs(player.pos.z - LOUNGE_SHELF_STAND_Z) <= LOUNGE_SHELF_HALF + PLAYER_RADIUS;
+      if (!inZone) { loungeShelfVisited[i] = false; continue; }
+      if (loungeShelfVisited[i]) continue;
+      loungeShelfVisited[i] = true;
+
+      var room = backpackCap() - player.backpack.length;
+      var take = Math.min(room, state.loungeIntake[def.kind] || 0);
+      if (take <= 0) continue;
+      for (var k = 0; k < take; k++) player.backpack.push({ type: def.kind });
+      state.loungeIntake[def.kind] -= take;
+      syncStack();
+      addFloater(def.x, 4.0, LOUNGE_SHELF_STAND_Z, "+" + take + " " + def.label, "#ffe066");
+      markTut("loungegrab");
+      updateLoungeStockVisuals();
+      renderUpgrades();
+      saveState();
+    }
+  }
+
+  // ---- hand it over at the table ----
+  // Instant on contact: a table is somewhere you deliberately walk to, not a
+  // corridor you cross, so no dwell is needed here.
+  function handleLoungeServe() {
+    if (state.site !== "lounge" || !loungeUnlocked()) return;
+    if (!player.backpack.length) return;
+    var tables = loungeTableCount();
+    for (var ti = 0; ti < tables; ti++) {
+      var slot = LOUNGE_TABLE_SLOTS[ti];
+      var reach = (slot.party ? 2.0 : 1.3) + 1.1 + PLAYER_RADIUS;
+      if (d2(player.pos.x, player.pos.z, slot.x, slot.z) > reach) continue;
+      for (var i = 0; i < loungeNpcs.length; i++) {
+        if (LOUNGE_SEATS[i].tableIdx !== ti) continue;
+        var npc = loungeNpcs[i], seat = LOUNGE_SEATS[i];
+        if (npc.phase !== "seated" || npc.want <= 0) continue;
+        var moved = 0;
+        for (var b = player.backpack.length - 1; b >= 0 && npc.want > 0; b--) {
+          if (player.backpack[b].type !== npc.kind) continue;
+          player.backpack.splice(b, 1);
+          npc.want--; moved++;
+        }
+        if (!moved) continue;
+        syncStack();
+        npc.shown = -1;
+        if (npc.want <= 0) {
+          npc.phase = "served";
+          npc.timer = LOUNGE_SERVED_TIME;
+          addFloater(seat.x, 3.4, seat.z, "SERVED", "#8ff5a8");
+          markTut("loungeserve");
+        }
+        renderUpgrades();
+      }
+    }
   }
 
   // ---- pickers: production floor to pallet ----
@@ -6627,12 +6933,17 @@
     loungeRunPad = g;
   })();
 
+  // Jars fill the shelf from the bottom board up as stock arrives, so a
+  // well-supplied bar visibly reads as stocked from across the room.
   function updateLoungeStockVisuals() {
-    LOUNGE_STOCK_DEFS.forEach(function (def, i) {
-      var n = state.loungeIntake[def.kind] || 0;
-      loungeStockPiles[i].crate.visible = n > 0;
-      setBar(loungeStockPiles[i].bar, n / LOUNGE_INTAKE_CAP);
-    });
+    for (var i = 0; i < loungeShelves.length; i++) {
+      var sh = loungeShelves[i];
+      var n = state.loungeIntake[sh.def.kind] || 0;
+      var frac = Math.min(1, n / LOUNGE_INTAKE_CAP);
+      var lit = n > 0 ? Math.max(1, Math.round(frac * sh.jars.length)) : 0;
+      for (var j = 0; j < sh.jars.length; j++) sh.jars[j].visible = j < lit;
+      setBar(sh.bar, frac);
+    }
   }
 
   // Walk onto a pallet with matching stock in your pack and it goes on. Walk
@@ -7250,7 +7561,7 @@
 
     // the payout spot itself: a marked floor square, same tinted/dashed
     // language as every other pay-here square in the game
-    (function buildTillPad() {
+    var padGroup = (function buildTillPad() {
       var g = new THREE.Group();
       var cpY = floorTopAt(pad.z);
       var halo = new THREE.Mesh(
@@ -7283,6 +7594,7 @@
       g.add(lbl);
       g.position.set(pad.x, 0, pad.z);
       scene.add(g);
+      return g;
     })();
 
     function payOut(amount) {
@@ -7322,30 +7634,29 @@
 
     function pending() { return pendingCash; }
 
-    return { payOut: payOut, update: update, pending: pending };
+    // padGroup is exposed so callers that build more tills than are currently
+    // in play (the lounge, one per table slot) can hide the unused ones
+    return { payOut: payOut, update: update, pending: pending, pad: padGroup };
   }
 
   var shopTill = makeTill(CASH_PAD, 0xffd75e, "$ COLLECT");
   var payOutCash = shopTill.payOut;   // every existing call site (customerBuyBud etc.) is untouched
 
-  var LOUNGE_CASH_PAD = { x: 0, z: LOUNGE_BAR_Z + 3.0, half: 1.45 };
-  var loungeTill = makeTill(LOUNGE_CASH_PAD, 0xc76ee0, "$ TIPS");
+  // One till per table slot rather than a single one at the bar: a served
+  // customer leaves their money on the table they were sitting at, so the
+  // pile shows up where you earned it. Built for all six slots up front and
+  // hidden for tables this tier has not opened yet.
+  var loungeTills = LOUNGE_TABLE_SLOTS.map(function (slot) {
+    return makeTill({ x: slot.x, z: slot.z + 3.0, half: 1.2 }, 0xc76ee0, "$ TIP");
+  });
 
-  function updateLoungeCashDrops(now) {
-    loungeTill.update(now);
-  }
-
-  // Pops one unit off state.loungeIntake[kind] — a plain counter, not a mesh
-  // pile, so there's no per-unit "locked-in value at drop-off" to read like
-  // the counter's pileMeshes; price is just computed at sale time.
-  function customerBuyLounge(kind) {
-    if ((state.loungeIntake[kind] || 0) <= 0) return false;
-    state.loungeIntake[kind]--;
-    var price = loungeValue(kind) * (promoActive() ? PROMO_MULT : 1);
-    var tip = price * loungeTipPct();
-    loungeTill.payOut(price + tip);
-    updateLoungeStockVisuals();
-    return true;
+  function updateLoungeTills(now) {
+    var tables = loungeTableCount();
+    for (var i = 0; i < loungeTills.length; i++) {
+      var live = loungeUnlocked() && i < tables;
+      if (loungeTills[i].pad) loungeTills[i].pad.visible = live;
+      if (live) loungeTills[i].update(now, function () { markTut("loungetip"); });
+    }
   }
 
   // ---- a bag of feed that turns up on the shop floor now and then ----
@@ -7780,6 +8091,9 @@
   // the first time the player actually does that thing, and once they've done
   // all of them the bar goes away for good.
   var TUT_STEPS = [
+    { key: "loungetip",   text: "💵 Collect the tip left on the table" },
+    { key: "loungeserve", text: "🍸 Someone's waiting — run their order over" },
+    { key: "loungegrab",  text: "🥃 Take product from the shelves behind the bar" },
     { key: "collect", text: "💵 Grab your cash by the till" },
     { key: "farmship", text: "🚚 Ship the silo down to the shop" },
     { key: "farmsilo", text: "🌾 Tip your harvest into the silo" },
@@ -7857,7 +8171,22 @@
         else if (fps === "empty") farmEmpty = true;
       }
     }
+    var atLounge = state.site === "lounge" && loungeUnlocked();
+    var loungeWaiting = false, loungeTipWaiting = false, loungeHasStock = false;
+    if (atLounge) {
+      for (var ln = 0; ln < loungeNpcs.length; ln++) {
+        if (loungeNpcs[ln].phase === "seated" && loungeNpcs[ln].want > 0) { loungeWaiting = true; break; }
+      }
+      for (var lt = 0; lt < loungeTills.length && lt < loungeTableCount(); lt++) {
+        if (loungeTills[lt].pending() > 0) { loungeTipWaiting = true; break; }
+      }
+      loungeHasStock = (state.loungeIntake.bud || 0) + (state.loungeIntake.dab || 0) +
+                       (state.loungeIntake.edible || 0) > 0;
+    }
     var applies = {
+      loungetip:   atLounge && loungeTipWaiting,
+      loungeserve: atLounge && loungeWaiting && player.backpack.length > 0,
+      loungegrab:  atLounge && loungeWaiting && !player.backpack.length && loungeHasStock,
       farmplant:   atFarm && farmEmpty,
       farmharvest: atFarm && farmReady,
       farmsilo:    atFarm && hasBud,
@@ -7877,11 +8206,15 @@
       seed:    anyEmpty,
     };
     // Hints are per-location: "grab seed packs from the back room" is
-    // useless advice when you are stood in a field 400 units away.
-    var FARM_HINTS = { farmplant: 1, farmharvest: 1, farmsilo: 1, farmship: 1 };
+    // useless advice when you are stood in a field 400 units away — or
+    // behind a bar 700 units the other way.
+    var HINT_SITE = {
+      farmplant: "farm", farmharvest: "farm", farmsilo: "farm", farmship: "farm",
+      loungetip: "lounge", loungeserve: "lounge", loungegrab: "lounge",
+    };
     for (var i = 0; i < TUT_STEPS.length; i++) {
       var s = TUT_STEPS[i];
-      if (!!FARM_HINTS[s.key] !== (state.site === "farm")) continue;
+      if ((HINT_SITE[s.key] || "shop") !== state.site) continue;
       if (applies[s.key] && !tutDone(s.key)) return s.text;
     }
     return "";
@@ -8294,6 +8627,37 @@
       buy: function () {
         state.farm.growLv = (state.farm.growLv || 0) + 1;
         toast("\ud83c\udf31 Faster growing \u2014 the field cycles quicker now!");
+      },
+    },
+    {
+      // The lounge's whole progression in one pad: each buy reskins the room
+      // top to bottom, adds tables and raises what every customer pays. Same
+      // shape as the shop's LEVEL UP square.
+      id: "loungetier", label: "CLASS UP", icon: "\ud83e\udd42",
+      x: LOUNGE_TIER_PAD.x, z: LOUNGE_TIER_PAD.z,
+      site: "lounge", color: 0xd6b06f, kiosk: true,
+      hidden: function () { return !loungeUnlocked(); },
+      name: function () {
+        return loungeTier() >= MAX_LOUNGE_TIER
+          ? "The Gold Room"
+          : "Open " + LOUNGE_TIERS[loungeTier() + 1].name;
+      },
+      desc: function () {
+        if (loungeTier() >= MAX_LOUNGE_TIER) return "Nothing left to prove \u2014 this place is as good as it gets";
+        var nxt = LOUNGE_TIERS[loungeTier() + 1];
+        return nxt.adds + " \u00b7 " + nxt.tables + " tables, " + nxt.pop + "\u00d7 a head";
+      },
+      cost: function () {
+        return loungeTier() >= MAX_LOUNGE_TIER ? 0 : LOUNGE_TIERS[loungeTier() + 1].cost;
+      },
+      maxed: function () { return loungeTier() >= MAX_LOUNGE_TIER; },
+      buy: function () {
+        state.lounge.tier++;
+        rebuildLounge();
+        refreshLoungeFit();
+        updateLoungeStockVisuals();
+        addFloater(LOUNGE_TIER_PAD.x, 3.2, LOUNGE_TIER_PAD.z, loungeTierDef().name + "!", "#ffd75e");
+        toast("\ud83e\udd42 " + loungeTierDef().name + " \u2014 " + loungeTierDef().adds + "!");
       },
     },
     {
@@ -8934,8 +9298,10 @@
     updateDrivers(now, dt);
     updateLoungeRun(dt);
     updateLoungeNpcs(now, dt);
+    handleLoungeShelves();
+    handleLoungeServe();
     updateLoungeStockVisuals();
-    updateLoungeCashDrops(now);
+    updateLoungeTills(now);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
@@ -9113,6 +9479,9 @@
     if (near && hrOverlay.classList.contains("show")) renderHrPanel();
   }
 
+  // a save restored at Upscale or above should already be in black tie
+  refreshLoungeFit();
+  updateLoungeStockVisuals();
   renderUpgrades();
   renderHud();
   syncStack();
