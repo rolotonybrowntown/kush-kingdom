@@ -682,19 +682,32 @@
   var RETAIL_MAX_Z = 13;           // storefront wall — never moves
   var GROW_ROOM_MIN_Z = -32;       // back wall of the grow room
   var BACK_ROOM_DEPTH = 18;        // each added back room is this deep
+  // ...except the dock, which is deeper. It has to fit three things that all
+  // need their own standing room: the pallet row, four bay-loading lanes and
+  // the Lounge Run pad. At the standard depth those zones physically overlap,
+  // so walking to one of them fires another. Only the last room grows; the
+  // pallets and upgrade pads sit at absolute coordinates, so the extra depth
+  // opens up empty floor *behind* them rather than shifting them.
+  var DOCK_EXTRA_DEPTH = 10;
   var ROOM_TIERS = [
     { camDist: 26 },               // level 1: grow room only
     { camDist: 32 },               // level 2: + extraction lab
     { camDist: 37 },               // level 3: + edibles kitchen
-    { camDist: 42 },               // level 4: + fourth room
+    { camDist: 46 },               // level 4: + deeper loading dock
   ];
-  // rear-most wall for a given tier: one more room every level
-  function backMinZForTier(t) { return GROW_ROOM_MIN_Z - t * BACK_ROOM_DEPTH; }
+  // rear-most wall for a given tier: one more room every level. The literal 3
+  // rather than DOCK_ROOM is deliberate — that constant is declared far below
+  // this point, so it would still be undefined if anything called this early.
+  function backMinZForTier(t) {
+    return GROW_ROOM_MIN_Z - t * BACK_ROOM_DEPTH - (t >= 3 ? DOCK_EXTRA_DEPTH : 0);
+  }
   function retailMaxZForTier() { return RETAIL_MAX_Z; }
   // Front wall of back room n, counting the grow room as room 0. Room 1's
   // front wall is the grow room's back wall, so this is offset by one:
   // n=1 -> -32, n=2 -> -50, ...
-  function backDividerZ(n) { return GROW_ROOM_MIN_Z - (n - 1) * BACK_ROOM_DEPTH; }
+  function backDividerZ(n) {
+    return GROW_ROOM_MIN_Z - (n - 1) * BACK_ROOM_DEPTH - (n >= 4 ? DOCK_EXTRA_DEPTH : 0);
+  }
   var BACK_DOOR_X = 0;             // doorways line up down the middle
   var BACK_DOOR_HALF = 3.0;
   var MAX_ROOM_TIER = ROOM_TIERS.length - 1;
@@ -716,10 +729,15 @@
   // you are not standing in comes for free.
   //
   // The gap between sites has to beat the fog, which is camera-relative:
-  // updateCamera rewrites fog.far = camDist * 4.2 every frame, so at the
-  // farm's camDist of 48 you can see about 202 units. Shop geometry ends at
-  // TRUCK_START_Z = -112 and the farm field starts near -355, leaving 243
-  // units of empty world. Keep that margin when adding location three.
+  // updateCamera rewrites fog.far = camDist * 4.2 every frame. Measure the
+  // margin from the CAMERA, not from the rearmost geometry — the camera
+  // trails the player by roughly half the camDist toward +z, so it never
+  // reaches the far end of a site. Worst case measured at the shop: player
+  // at its deepest reachable z (-94.6) puts the camera at -72.5 with
+  // fog.far 193, cutting off at -266; the farm's nearest geometry is -311,
+  // so ~45 units to spare. The farm's own far edge (-432.5, camDist 58,
+  // reach 244) cuts off at -676 against the lounge's -739.5. Re-measure
+  // both when changing any camDist or room depth, and keep a real margin.
   var FARM_CZ = -400;
   var FARM_HALF_X = 46, FARM_HALF_Z = 34;   // walkable area inside the fence
 
@@ -6533,12 +6551,25 @@
   // this trip is a unit that truck no longer has. The automatic supply run
   // (the last dock bay, once the Lounge is owned — see dispatchTruck()) is
   // the passive counterpart to this manual, active top-up.
-  var LOUNGE_RUN_ZONE = { x: 11.0, z: -79.0 };
+  // Sits in the empty band the dock's extra depth opens up, clear of both the
+  // pallet row (which ends at z -78.3) and the bay-loading lanes (which start
+  // at z -91.0). Overlapping either of those made walking to a truck fire this
+  // instead, or let a pallet load you up and this immediately ship it back out.
+  var LOUNGE_RUN_ZONE = { x: 0, z: -87.5 };
+  // It sits in the middle of the walk from the pallets to the bays, so require
+  // a moment stood still before it fires — same rule the upgrade pads use, so
+  // crossing it on the way to load a truck never diverts what you're carrying.
+  var LOUNGE_RUN_DWELL = 0.45;
+  var loungeRunDwell = 0;
+  var loungeRunPad = null;
   function updateLoungeRun(dt) {
-    if (!loungeUnlocked()) return;
+    if (loungeRunPad) loungeRunPad.visible = loungeUnlocked();
+    if (!loungeUnlocked()) { loungeRunDwell = 0; return; }
     var playerHere = state.site === "shop" &&
       d2(player.pos.x, player.pos.z, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z) <= 2.0 + PLAYER_RADIUS;
-    if (!playerHere) return;
+    if (!playerHere || player.moving) { loungeRunDwell = 0; return; }
+    loungeRunDwell += dt;
+    if (loungeRunDwell < LOUNGE_RUN_DWELL) return;
     var moved = 0;
     for (var i = player.backpack.length - 1; i >= 0; i--) {
       var kind = player.backpack[i].type;
@@ -6590,7 +6621,10 @@
     lbl.position.set(0, y0 + 1.6, 0);
     g.add(lbl);
     g.position.set(LOUNGE_RUN_ZONE.x, 0, LOUNGE_RUN_ZONE.z);
-    scene.add(g);
+    // lives in the dock fit-out so it disappears along with the room before
+    // the dock is built; updateLoungeRun hides it until the Lounge is owned
+    dockFit.add(g);
+    loungeRunPad = g;
   })();
 
   function updateLoungeStockVisuals() {
