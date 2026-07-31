@@ -760,7 +760,15 @@
   var LOUNGE_HALF_X = 18, LOUNGE_HALF_Z = 22;   // one interior room, far smaller than the farm's open field
   var LOUNGE_GROUND_TOP = FLOOR_TOP_BACK;       // floorTopAt(z) already returns this for any z this negative — free ride
   var LOUNGE_DEED_COST = 6000000;
-  var LOUNGE_INTAKE_CAP = 48;   // per kind, above PALLET_CAP (36) so a full pallet can drain in one go
+  // How much of each product the bar can hold. This has to climb with the
+  // class tiers, because those quadruple the seat count (4 -> 16) and so
+  // quadruple how fast the shelves drain; a flat cap meant every upgrade
+  // made the place starve harder. Indexed by tier.
+  var LOUNGE_INTAKE_CAPS = [48, 72, 108, 160];
+  function loungeIntakeCapFor(tier) {
+    return LOUNGE_INTAKE_CAPS[Math.max(0, Math.min(LOUNGE_INTAKE_CAPS.length - 1, tier || 0))];
+  }
+  function loungeIntakeCap() { return loungeIntakeCapFor(loungeTier()); }
   function loungeUnlocked() { return !!(state.lounge && state.lounge.unlocked); }
 
   // Each tier is a complete reskin of the room, climbing from a dive bar to
@@ -1060,6 +1068,11 @@
   // stack product without also being sat on a purchase square.
   var DRIVER_ZONE = { x: -11.5, z: -71.5 };        // dispatch office: hire drivers
   var PICKER_ZONE = { x:  -5.0, z: -71.5 };        // hire pickers to stock pallets
+  // Sits beside the LOUNGE RUN pad in the dock's deep end, because that is
+  // exactly the job it automates.
+  var BARBACK_ZONE = { x:  -8.0, z: -87.5 };
+  var MAX_BARBACKS = 3;
+  function costBarback() { return Math.round(8000000 * Math.pow(3.0, state.barbackLv || 0)); }
   var TRUCK_ZONE  = { x:   5.0, z: -71.5 };        // upgrade to bigger trucks
   var BAY_ZONE    = { x:  11.5, z: -71.5 };        // add another loading bay
   var MAX_DRIVERS = 3;
@@ -1279,6 +1292,7 @@
       truckLv: 0,             // how much a truck hauls in one run
       driverLv: 0,            // delivery drivers hired
       pickerLv: 0,            // pickers hired to stock the pallets
+      barbackLv: 0,           // barbacks hired to keep the Lounge stocked
       // sized up front — a fresh game skips the save migration that would
       // otherwise be the only thing filling this in
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
@@ -1367,7 +1381,10 @@
       if (!merged.loungeIntake || typeof merged.loungeIntake !== "object") merged.loungeIntake = { bud: 0, dab: 0, edible: 0 };
       ["bud", "dab", "edible"].forEach(function (k) {
         var v = merged.loungeIntake[k];
-        merged.loungeIntake[k] = (typeof v === "number" && isFinite(v)) ? Math.max(0, Math.min(LOUNGE_INTAKE_CAP, v)) : 0;
+        // clamp against THIS save's tier cap — loungeTier() reads the global
+        // `state`, which does not exist yet down here
+        var lcap = loungeIntakeCapFor(merged.lounge.tier);
+        merged.loungeIntake[k] = (typeof v === "number" && isFinite(v)) ? Math.max(0, Math.min(lcap, v)) : 0;
       });
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = { shop: null, farm: null, lounge: null };
       ["shop", "farm", "lounge"].forEach(function (k) {
@@ -1443,6 +1460,7 @@
       merged.truckLv = Math.max(0, Math.min(MAX_TRUCK_LV, merged.truckLv || 0));
       merged.driverLv = Math.max(0, Math.min(MAX_DRIVERS, merged.driverLv || 0));
       merged.pickerLv = Math.max(0, Math.min(MAX_PICKERS, merged.pickerLv || 0));
+      merged.barbackLv = Math.max(0, Math.min(MAX_BARBACKS, merged.barbackLv || 0));
       merged.bakerLv = Math.max(0, Math.min(MAX_BAKERS, merged.bakerLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
@@ -6880,7 +6898,7 @@
     for (var i = player.backpack.length - 1; i >= 0; i--) {
       var kind = player.backpack[i].type;
       if (kind !== "bud" && kind !== "dab" && kind !== "edible") continue;
-      if ((state.loungeIntake[kind] || 0) >= LOUNGE_INTAKE_CAP) continue;
+      if ((state.loungeIntake[kind] || 0) >= loungeIntakeCap()) continue;
       state.loungeIntake[kind] = (state.loungeIntake[kind] || 0) + 1;
       player.backpack.splice(i, 1);
       moved++;
@@ -6939,10 +6957,169 @@
     for (var i = 0; i < loungeShelves.length; i++) {
       var sh = loungeShelves[i];
       var n = state.loungeIntake[sh.def.kind] || 0;
-      var frac = Math.min(1, n / LOUNGE_INTAKE_CAP);
+      var frac = Math.min(1, n / loungeIntakeCap());
       var lit = n > 0 ? Math.max(1, Math.round(frac * sh.jars.length)) : 0;
       for (var j = 0; j < sh.jars.length; j++) sh.jars[j].visible = j < lit;
       setBar(sh.bar, frac);
+    }
+  }
+
+  // ---- barbacks: dock pallets to the Lounge ----
+  // The automation of the LOUNGE RUN pad, and the answer to the Lounge
+  // out-drinking its supply: the class tiers quadruple the seat count, so
+  // ferrying every crate by hand stopped being viable somewhere around the
+  // Upscale Bar. Shaped like the pickers — walk to a source, fill up, walk
+  // to a drop, repeat — except the source is a dock pallet and the drop is
+  // the Lounge. Deliberately NOT gated on where the player is standing, so
+  // the shelves keep filling while you are away at the Lounge serving.
+  var barbacks = [];
+  var BARBACK_SPEED = 6.2, BARBACK_ACT = 0.12, BARBACK_CARRY = 6;
+  (function buildBarbacks() {
+    for (var n = 0; n < MAX_BARBACKS; n++) {
+      var g = new THREE.Group();
+      // waistcoat over a white shirt — bar staff, not warehouse staff
+      var shirt = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), M.suitShirt);
+      shirt.position.y = 1.1; shirt.castShadow = true; g.add(shirt);
+      var vest = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.62, 0.62), M.suit);
+      vest.position.y = 1.2; vest.castShadow = true; g.add(vest);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var hair = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.18, 0.62), M.dark);
+      hair.position.y = 2.2; g.add(hair);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.suit); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.suit); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      var tote = new THREE.Group();
+      tote.position.set(0, 1.7, 0.5);
+      var totes = [];
+      for (var c = 0; c < BARBACK_CARRY + MAX_STAFF_LOAD_LV; c++) {
+        var it = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.32, 0.42), M.crateBud);
+        it.position.set(0, c * 0.34, 0);
+        it.visible = false;
+        tote.add(it);
+        totes.push(it);
+      }
+      g.add(tote);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      barbacks.push({
+        obj: g, l1: l1, l2: l2, tote: tote, totes: totes,
+        pos: { x: BARBACK_ZONE.x + 1.4 + n * 0.9, z: BARBACK_ZONE.z + 1.6 },
+        phase: "toPallet", timer: 0, palletIdx: -1,
+        carrying: 0, carryKind: "bud", walkPhase: n * 1.3,
+      });
+    }
+  })();
+
+  function barbackStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(BARBACK_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  // a pallet worth walking to: has stock, and the Lounge has room for it
+  function barbackFindPallet() {
+    for (var i = 0; i < PALLET_DEFS.length; i++) {
+      var k = PALLET_DEFS[i].kind;
+      if (palletCount(k) > 0 && (state.loungeIntake[k] || 0) < loungeIntakeCap()) return i;
+    }
+    return -1;
+  }
+
+  function updateBarbacks(now, dt) {
+    for (var i = 0; i < barbacks.length; i++) {
+      var b = barbacks[i];
+      var hired = dockUnlocked() && loungeUnlocked() && i < (state.barbackLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.carrying = 0; b.palletIdx = -1; b.phase = "toPallet"; continue; }
+
+      var walking = false;
+      var cap = BARBACK_CARRY + staffCarryBonus();
+
+      if (b.phase === "toPallet") {
+        if (b.carrying >= cap) { b.phase = "toBar"; b.palletIdx = -1; }
+        else {
+          // re-pick every frame: drivers and the player are pulling from the
+          // same pallets, so whatever we set off toward may already be gone
+          if (b.palletIdx < 0 || palletCount(PALLET_DEFS[b.palletIdx].kind) <= 0 ||
+              (b.carrying > 0 && PALLET_DEFS[b.palletIdx].kind !== b.carryKind)) {
+            var want = b.carrying > 0 ? -1 : barbackFindPallet();
+            if (b.carrying > 0) {
+              // already holding something: only top up from the same kind
+              for (var q = 0; q < PALLET_DEFS.length; q++) {
+                if (PALLET_DEFS[q].kind === b.carryKind && palletCount(b.carryKind) > 0) { want = q; break; }
+              }
+            }
+            if (want < 0) {
+              if (b.carrying > 0) { b.phase = "toBar"; b.palletIdx = -1; continue; }
+              b.palletIdx = -1; b.phase = "idle"; b.timer = 0.8; continue;
+            }
+            b.palletIdx = want;
+            if (b.carrying === 0) b.carryKind = PALLET_DEFS[want].kind;
+          }
+          var pd = PALLET_DEFS[b.palletIdx];
+          walking = !barbackStepTo(b, pd.x, pd.z + 2.4, dt);
+          if (!walking) { b.phase = "pick"; b.timer = BARBACK_ACT; }
+        }
+
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var pdf = PALLET_DEFS[b.palletIdx];
+          if (pdf && palletCount(pdf.kind) > 0 && b.carrying < cap) {
+            palletAdd(pdf.kind, -1);
+            b.carrying++;
+            b.carryKind = pdf.kind;
+            b.timer = BARBACK_ACT;
+          } else {
+            b.phase = b.carrying > 0 ? "toBar" : "toPallet";
+            b.palletIdx = -1;
+          }
+        }
+
+      } else if (b.phase === "toBar") {
+        walking = !barbackStepTo(b, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z, dt);
+        if (!walking) { b.phase = "drop"; b.timer = BARBACK_ACT; }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.carrying > 0 && (state.loungeIntake[b.carryKind] || 0) < loungeIntakeCap()) {
+            state.loungeIntake[b.carryKind] = (state.loungeIntake[b.carryKind] || 0) + 1;
+            b.carrying--;
+            b.timer = BARBACK_ACT;
+            if (b.carrying <= 0) {
+              addFloater(LOUNGE_RUN_ZONE.x, 3.4, LOUNGE_RUN_ZONE.z, "→ LOUNGE", "#c76ee0");
+              b.phase = "toPallet";
+            }
+          } else {
+            // lounge full, or nothing left to hand over — go round again
+            b.phase = "toPallet";
+            b.palletIdx = -1;
+          }
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) b.phase = "toPallet";
+      }
+
+      b.obj.position.set(b.pos.x, walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0, b.pos.z);
+      var swing = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = swing; b.l2.rotation.x = -swing;
+      var tint = b.carryKind === "dab" ? M.crateDab : b.carryKind === "edible" ? M.crateEdible : M.crateBud;
+      for (var t = 0; t < b.totes.length; t++) {
+        b.totes[t].visible = t < b.carrying;
+        if (b.totes[t].visible) b.totes[t].material = tint;
+      }
     }
   }
 
@@ -7039,7 +7216,7 @@
       var delivered = 0;
       for (var k2 in t.manifest) {
         if (!t.manifest[k2]) continue;
-        var room = LOUNGE_INTAKE_CAP - (state.loungeIntake[k2] || 0);
+        var room = loungeIntakeCap() - (state.loungeIntake[k2] || 0);
         var add = Math.min(t.manifest[k2], Math.max(0, room));
         state.loungeIntake[k2] = (state.loungeIntake[k2] || 0) + add;
         delivered += add;
@@ -8724,6 +8901,30 @@
       },
     },
     {
+      // Only worth anything once there is a Lounge to supply, so it stays
+      // hidden until the deed is bought.
+      id: "barback", label: "BARBACK", icon: "\ud83c\udf78", x: BARBACK_ZONE.x, z: BARBACK_ZONE.z,
+      color: 0xc76ee0, kiosk: false,
+      hidden: function () { return !dockUnlocked() || !loungeUnlocked(); },
+      name: function () {
+        return (state.barbackLv || 0) === 0 ? "Hire a Barback" : "Hire Another Barback";
+      },
+      desc: function () {
+        var n = state.barbackLv || 0;
+        return n >= MAX_BARBACKS
+          ? "The Lounge restocks itself now"
+          : (n === 0
+              ? "Runs product from the pallets to the Lounge so you can stay on the floor"
+              : n + " on shift \u00b7 hire one more to keep the shelves full");
+      },
+      cost: costBarback,
+      maxed: function () { return (state.barbackLv || 0) >= MAX_BARBACKS; },
+      buy: function () {
+        state.barbackLv = (state.barbackLv || 0) + 1;
+        toast("\ud83c\udf78 Barback hired \u2014 they'll keep the Lounge stocked!");
+      },
+    },
+    {
       id: "bay", label: "BAY DOOR", icon: "\ud83c\udfed", x: BAY_ZONE.x, z: BAY_ZONE.z,
       color: 0xb8c4d0, kiosk: false,
       hidden: function () { return !dockUnlocked(); },
@@ -9295,6 +9496,7 @@
     updateCourierTruck(dt);
     updateIntakeVisuals();
     updatePickers(now, dt);
+    updateBarbacks(now, dt);
     updateDrivers(now, dt);
     updateLoungeRun(dt);
     updateLoungeNpcs(now, dt);
