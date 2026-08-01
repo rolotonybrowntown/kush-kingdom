@@ -1948,6 +1948,10 @@
     truckTrim:   mat(0x39414a, { roughness: 0.6, metalness: 0.3 }),
     tyre:        mat(0x1d2126, { roughness: 0.9 }),
     hiVis:       mat(0xe8f24a, { map: fabricTex, roughness: 0.85 }),   // driver vest
+    // livery for the Lounge's own supply truck, so you can pick it out of
+    // the row of white wholesale trucks at a glance
+    truckYellow: mat(0xf0c22b, { roughness: 0.45, metalness: 0.2 }),
+    truckYellowDk: mat(0xc99c12, { roughness: 0.5, metalness: 0.25 }),
     asphalt:     mat(0x4a4f55, { map: plasterTex, roughness: 0.95 }),
     threshold:   mat(0xb99248, { roughness: 0.3, metalness: 0.7 }),
     // brighter and glossier than the brass threshold strip — this is the
@@ -2890,24 +2894,16 @@
       bar.position.set(0, 6.6, 0);
       g.add(bar);
 
-      // The physically last bay doubles as the Lounge's automatic supply
-      // run once the Lounge is owned — this label is the only thing that
-      // marks it as different; toggled each frame in updateTrucks() since
-      // "owned" can change mid-session.
-      var loungeTag = null;
-      if (t === MAX_BAYS - 1) {
-        loungeTag = textSprite("LOUNGE SUPPLY", "#e8c9ff");
-        loungeTag.scale.set(3.2, 0.8, 1);
-        loungeTag.position.set(0, 7.6, 0);
-        loungeTag.visible = false;
-        g.add(loungeTag);
-      }
+      // The physically last bay doubles as the Lounge's automatic supply run
+      // once the Lounge is owned. Keep hold of the panels so updateTrucks()
+      // can put it in Lounge livery — "owned" can change mid-session, and
+      // before that it is just another wholesale truck.
 
       g.position.set(BAY_X[t], 0, TRUCK_START_Z);
       g.visible = false;
       dockFit.add(g);
       trucks.push({
-        obj: g, bar: bar, bay: t, loungeTag: loungeTag,
+        obj: g, bar: bar, bay: t, box: box, cab: cab, boxTrim: boxTrim,
         phase: "gone", timer: TRUCK_GAP * (0.4 + t * 0.5),
         load: 0, manifest: { bud: 0, dab: 0, edible: 0 }, doorOpen: 0,
       });
@@ -6906,6 +6902,32 @@
     state.pallets[kind] = Math.max(0, Math.min(PALLET_CAP, palletCount(kind) + n));
   }
 
+  // A sign over the last bay door so the Lounge's own bay is obvious from
+  // inside the dock, not just from the yard side where the truck parks.
+  // Mounted on the wall above the door rather than on the truck itself, so
+  // it stays put while the truck comes and goes.
+  var loungeBaySign = null;
+  (function buildLoungeBaySign() {
+    var g = new THREE.Group();
+    var board = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.7, 0.28), M.truckYellow);
+    board.castShadow = true; board.receiveShadow = true;
+    g.add(board);
+    [-1, 1].forEach(function (s) {
+      var edge = new THREE.Mesh(new THREE.BoxGeometry(6.7, 0.2, 0.34), M.truckYellowDk);
+      edge.position.y = s * 0.92;
+      g.add(edge);
+    });
+    var lbl = textSprite("LOUNGE SUPPLY", "#3a2c05");
+    lbl.scale.set(5.0, 1.05, 1);
+    lbl.position.set(0, 0.02, 0.24);
+    g.add(lbl);
+    addGlow(g, 0, 0, 0.5, 7.4, 0xf0c22b, 0.4);
+    g.position.set(BAY_X[MAX_BAYS - 1], DOCK_LINTEL + 0.95, DOCK_WALL_Z + 0.55);
+    g.visible = false;
+    dockFit.add(g);
+    loungeBaySign = g;
+  })();
+
   // ---- Lounge Run: stand here carrying bud/dab/edible and it empties your
   // pack straight into the Lounge's stock — the same hand-carry idiom as
   // handleBayLoading() below, not a background drain. You still have to
@@ -6928,6 +6950,7 @@
   var loungeRunPad = null;
   function updateLoungeRun(dt) {
     if (loungeRunPad) loungeRunPad.visible = loungeUnlocked();
+    if (loungeBaySign) loungeBaySign.visible = loungeUnlocked();
     if (!loungeUnlocked()) { loungeRunDwell = 0; return; }
     var playerHere = state.site === "shop" &&
       d2(player.pos.x, player.pos.z, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z) <= 2.0 + PLAYER_RADIUS;
@@ -7568,7 +7591,14 @@
 
       setBar(t.bar, truckCap() ? t.load / truckCap() : 0);
       t.bar.visible = t.phase === "loading";
-      if (t.loungeTag) t.loungeTag.visible = t.obj.visible && isLoungeSupplyBay(t);
+      // Lounge livery on whichever truck is currently the supply run
+      var lounge = isLoungeSupplyBay(t);
+      var wantBox = lounge ? M.truckYellow : M.truckBox;
+      if (t.box.material !== wantBox) {
+        t.box.material = wantBox;
+        t.cab.material = lounge ? M.truckYellowDk : M.truckCab;
+        t.boxTrim.material = lounge ? M.truckYellowDk : M.truckTrim;
+      }
     }
     // doors on bays that have not been bought stay shut and dark
     for (var u = live; u < bayDoors.length; u++) {
