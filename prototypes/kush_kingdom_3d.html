@@ -3571,6 +3571,22 @@
   // loads you from that shelf's stock. Edge-triggered so standing there does
   // not flicker.
   var LOUNGE_SHELF_STAND_Z = LOUNGE_SHELF_Z + 1.6;
+  var LOUNGE_PRELOAD = 2;   // handed over when nothing is on order, so you can stock up early
+
+  // Units of this product the room is currently waiting on. Customers still
+  // walking in count — their bubble is already up, so it is fair to fetch
+  // ahead for them.
+  function loungeOutstanding(kind) {
+    var tables = loungeTableCount(), n = 0;
+    for (var i = 0; i < loungeNpcs.length; i++) {
+      if (LOUNGE_SEATS[i].tableIdx >= tables) continue;
+      var npc = loungeNpcs[i];
+      if (npc.phase !== "seated" && npc.phase !== "arriving") continue;
+      if (npc.kind !== kind) continue;
+      n += npc.want;
+    }
+    return n;
+  }
   var loungeShelfVisited = LOUNGE_SHELF_DEFS.map(function () { return false; });
   function handleLoungeShelves() {
     if (state.site !== "lounge" || !loungeUnlocked()) {
@@ -3586,8 +3602,20 @@
       if (loungeShelfVisited[i]) continue;
       loungeShelfVisited[i] = true;
 
+      // Take what the room has actually ordered, not a full pack of one
+      // thing. Filling up on bud used to leave no room for the dabs and
+      // edibles the next two tables wanted, which meant a wasted trip. This
+      // scales on its own: a busier room orders more, so you carry more.
+      var already = 0;
+      for (var h = 0; h < player.backpack.length; h++) {
+        if (player.backpack[h].type === def.kind) already++;
+      }
+      var need = loungeOutstanding(def.kind) - already;
+      // nothing on order: hand over a couple so you can stock up before a
+      // rush, but only if you aren't already holding some of it
+      if (need <= 0) need = already > 0 ? 0 : LOUNGE_PRELOAD;
       var room = backpackCap() - player.backpack.length;
-      var take = Math.min(room, state.loungeIntake[def.kind] || 0);
+      var take = Math.min(room, state.loungeIntake[def.kind] || 0, need);
       if (take <= 0) continue;
       for (var k = 0; k < take; k++) player.backpack.push({ type: def.kind });
       state.loungeIntake[def.kind] -= take;
