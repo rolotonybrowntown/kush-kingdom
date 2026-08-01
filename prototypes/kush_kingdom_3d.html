@@ -1073,6 +1073,13 @@
   var BARBACK_ZONE = { x:  -8.0, z: -87.5 };
   var MAX_BARBACKS = 3;
   function costBarback() { return Math.round(8000000 * Math.pow(3.0, state.barbackLv || 0)); }
+  // Servers work the Lounge floor. How many you may have on at once is
+  // capped by the class of the room — a dive bar does not carry four staff —
+  // so the headcount grows alongside the tables it has to cover.
+  var MAX_SERVERS = 4;
+  var LOUNGE_SERVER_CAPS = [1, 2, 3, 4];
+  function maxServersForTier() { return LOUNGE_SERVER_CAPS[loungeTier()]; }
+  function costServer() { return Math.round(12000000 * Math.pow(3.2, state.serverLv || 0)); }
   var TRUCK_ZONE  = { x:   5.0, z: -71.5 };        // upgrade to bigger trucks
   var BAY_ZONE    = { x:  11.5, z: -71.5 };        // add another loading bay
   var MAX_DRIVERS = 3;
@@ -1293,6 +1300,7 @@
       driverLv: 0,            // delivery drivers hired
       pickerLv: 0,            // pickers hired to stock the pallets
       barbackLv: 0,           // barbacks hired to keep the Lounge stocked
+      serverLv: 0,            // servers hired to work the Lounge floor
       // sized up front — a fresh game skips the save migration that would
       // otherwise be the only thing filling this in
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
@@ -1461,6 +1469,9 @@
       merged.driverLv = Math.max(0, Math.min(MAX_DRIVERS, merged.driverLv || 0));
       merged.pickerLv = Math.max(0, Math.min(MAX_PICKERS, merged.pickerLv || 0));
       merged.barbackLv = Math.max(0, Math.min(MAX_BARBACKS, merged.barbackLv || 0));
+      // clamped to the absolute pool size, not the tier cap — dropping a tier
+      // should park the extra staff, not permanently fire them
+      merged.serverLv = Math.max(0, Math.min(MAX_SERVERS, merged.serverLv || 0));
       merged.bakerLv = Math.max(0, Math.min(MAX_BAKERS, merged.bakerLv || 0));
       merged.botanistLv = Math.max(0, Math.min(MAX_BOTANISTS, merged.botanistLv || 0));
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
@@ -3146,6 +3157,7 @@
   var LOUNGE_BAR_Z    = LOUNGE_CZ - LOUNGE_HALF_Z + 9;   // bar sits forward...
   var LOUNGE_SHELF_Z  = LOUNGE_CZ - LOUNGE_HALF_Z + 3;   // ...leaving room to work behind it
   var LOUNGE_TIER_PAD = { x: 13, z: LOUNGE_CZ + 15 };    // by the door, clear of the tables
+  var LOUNGE_SERVER_ZONE = { x: -13, z: LOUNGE_CZ + 15 };  // mirrored on the other side of the door
 
   // Activation order. Slots 4 and 5 are the bigger party tables the top
   // tier brings in — four seats each instead of two.
@@ -7123,6 +7135,225 @@
     }
   }
 
+  // ---- servers: shelves to tables ----
+  // The Lounge's own staff, and the point at which one person stops being
+  // the ceiling on the room. They run exactly the loop the player does —
+  // find someone waiting, fetch their round off the shelf, carry it over —
+  // but deliberately do NOT touch the tips. Collecting those stays the
+  // player's job, so there is still a reason to walk the floor.
+  var servers = [];
+  var SERVER_SPEED = 6.0, SERVER_ACT = 0.11, SERVER_CARRY = 6;
+  (function buildServers() {
+    for (var n = 0; n < MAX_SERVERS; n++) {
+      var g = new THREE.Group();
+      var shirt = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.56), M.suitShirt);
+      shirt.position.y = 1.1; shirt.castShadow = true; g.add(shirt);
+      var apron = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.7, 0.1), M.suit);
+      apron.position.set(0, 0.95, 0.3); g.add(apron);
+      var tie = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.1), M.dark);
+      tie.position.set(0, 1.5, 0.3); g.add(tie);
+      var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), n % 2 ? M.skin2 : M.skin);
+      head.position.y = 1.88; head.castShadow = true; g.add(head);
+      var hair = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.2, 0.62), M.hair);
+      hair.position.y = 2.2; g.add(hair);
+      var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+      var l1 = new THREE.Mesh(lgeo, M.suit); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.suit); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      // a tray held out front, with whatever they're carrying on it
+      var tray = new THREE.Group();
+      tray.position.set(0, 1.35, 0.62);
+      var slab = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.7), M.metalRack);
+      tray.add(slab);
+      var items = [];
+      for (var c = 0; c < SERVER_CARRY + MAX_STAFF_LOAD_LV; c++) {
+        var it = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.3, 8), M.bud);
+        it.position.set(-0.3 + (c % 4) * 0.2, 0.18, Math.floor(c / 4) * 0.22 - 0.1);
+        it.visible = false;
+        tray.add(it);
+        items.push(it);
+      }
+      g.add(tray);
+      g.scale.setScalar(0.95);
+      g.visible = false;
+      scene.add(g);
+      servers.push({
+        obj: g, l1: l1, l2: l2, tray: tray, items: items,
+        pos: { x: LOUNGE_SERVER_ZONE.x + 1.4 + n * 0.9, z: LOUNGE_SERVER_ZONE.z - 1.6 },
+        phase: "toShelf", timer: 0, targetNpc: -1,
+        carrying: 0, carryKind: "bud", walkPhase: n * 1.2,
+      });
+    }
+  })();
+
+  function serverStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.35) return true;
+    var step = Math.min(SERVER_SPEED * staffSpeedMult() * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function serverShelfX(kind) {
+    for (var i = 0; i < LOUNGE_SHELF_DEFS.length; i++) {
+      if (LOUNGE_SHELF_DEFS[i].kind === kind) return LOUNGE_SHELF_DEFS[i].x;
+    }
+    return 0;
+  }
+
+  // someone sat waiting, whose order we can actually fill off the shelf and
+  // that no other server has already set off toward
+  function serverFindJob(self) {
+    var tables = loungeTableCount();
+    for (var i = 0; i < loungeNpcs.length; i++) {
+      var npc = loungeNpcs[i], seat = LOUNGE_SEATS[i];
+      if (seat.tableIdx >= tables) continue;
+      if (npc.phase !== "seated" || npc.want <= 0) continue;
+      if ((state.loungeIntake[npc.kind] || 0) <= 0) continue;
+      var taken = false;
+      for (var j = 0; j < servers.length; j++) {
+        var o = servers[j];
+        if (o !== self && o.obj.visible && o.targetNpc === i) { taken = true; break; }
+      }
+      if (taken) continue;
+      return i;
+    }
+    return -1;
+  }
+
+  // someone else waiting on the same thing we're already holding, so a
+  // part-full tray gets worked through instead of walked back to the shelf
+  function serverFindJobForKind(self, kind) {
+    var tables = loungeTableCount();
+    for (var i = 0; i < loungeNpcs.length; i++) {
+      var npc = loungeNpcs[i], seat = LOUNGE_SEATS[i];
+      if (seat.tableIdx >= tables) continue;
+      if (npc.phase !== "seated" || npc.want <= 0 || npc.kind !== kind) continue;
+      var taken = false;
+      for (var j = 0; j < servers.length; j++) {
+        var o = servers[j];
+        if (o !== self && o.obj.visible && o.targetNpc === i) { taken = true; break; }
+      }
+      if (taken) continue;
+      return i;
+    }
+    return -1;
+  }
+
+  function serverTargetValid(b) {
+    if (b.targetNpc < 0 || b.targetNpc >= loungeNpcs.length) return false;
+    var npc = loungeNpcs[b.targetNpc];
+    if (LOUNGE_SEATS[b.targetNpc].tableIdx >= loungeTableCount()) return false;
+    return npc.phase === "seated" && npc.want > 0;
+  }
+
+  function updateServers(now, dt) {
+    var allowed = Math.min(state.serverLv || 0, maxServersForTier());
+    for (var i = 0; i < servers.length; i++) {
+      var b = servers[i];
+      var hired = loungeUnlocked() && i < allowed;
+      b.obj.visible = hired;
+      if (!hired) { b.carrying = 0; b.targetNpc = -1; b.phase = "toShelf"; continue; }
+
+      var walking = false;
+      var cap = SERVER_CARRY + staffCarryBonus();
+
+      if (b.phase === "toShelf") {
+        if (!serverTargetValid(b)) {
+          // whoever we were fetching for has gone — if we're holding
+          // something, still try to place it; otherwise find new work
+          if (b.carrying > 0) { b.phase = "toTable"; }
+          else {
+            var job = serverFindJob(b);
+            if (job < 0) { b.targetNpc = -1; b.phase = "idle"; b.timer = 0.8; continue; }
+            b.targetNpc = job;
+            b.carryKind = loungeNpcs[job].kind;
+          }
+        }
+        if (b.phase === "toShelf") {
+          if (b.carrying >= cap) { b.phase = "toTable"; }
+          else {
+            walking = !serverStepTo(b, serverShelfX(b.carryKind), LOUNGE_SHELF_STAND_Z, dt);
+            if (!walking) { b.phase = "pick"; b.timer = SERVER_ACT; }
+          }
+        }
+
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          // fill the whole tray, not just this one customer's round — a trip
+          // per person was most of why the floor moved so slowly
+          if ((state.loungeIntake[b.carryKind] || 0) > 0 && b.carrying < cap) {
+            state.loungeIntake[b.carryKind]--;
+            b.carrying++;
+            b.timer = SERVER_ACT;
+            updateLoungeStockVisuals();
+          } else {
+            b.phase = b.carrying > 0 ? "toTable" : "toShelf";
+            if (b.carrying === 0) b.targetNpc = -1;
+          }
+        }
+
+      } else if (b.phase === "toTable") {
+        var ti = b.targetNpc >= 0 ? LOUNGE_SEATS[b.targetNpc].tableIdx : -1;
+        if (ti < 0 || ti >= loungeTableCount()) { b.phase = "toShelf"; b.targetNpc = -1; continue; }
+        var slot = LOUNGE_TABLE_SLOTS[ti];
+        walking = !serverStepTo(b, slot.x, slot.z + 2.0, dt);
+        if (!walking) { b.phase = "serve"; b.timer = SERVER_ACT; }
+
+      } else if (b.phase === "serve") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var handed = false;
+          var tix = b.targetNpc >= 0 ? LOUNGE_SEATS[b.targetNpc].tableIdx : -1;
+          for (var s = 0; s < loungeNpcs.length && b.carrying > 0; s++) {
+            if (LOUNGE_SEATS[s].tableIdx !== tix) continue;
+            var c = loungeNpcs[s];
+            if (c.phase !== "seated" || c.want <= 0 || c.kind !== b.carryKind) continue;
+            c.want--; b.carrying--; c.shown = -1; handed = true;
+            if (c.want <= 0) {
+              c.phase = "served";
+              c.timer = LOUNGE_SERVED_TIME;
+              addFloater(LOUNGE_SEATS[s].x, 3.4, LOUNGE_SEATS[s].z, "SERVED", "#8ff5a8");
+            }
+            break;
+          }
+          if (handed) {
+            b.timer = SERVER_ACT;
+          } else if (b.carrying > 0) {
+            // tray still has drinks on it: go find whoever else ordered this
+            var nxt = serverFindJobForKind(b, b.carryKind);
+            if (nxt >= 0) { b.targetNpc = nxt; b.phase = "toTable"; }
+            else {
+              // nobody wants it — put it back rather than carrying it forever
+              state.loungeIntake[b.carryKind] =
+                Math.min(loungeIntakeCap(), (state.loungeIntake[b.carryKind] || 0) + b.carrying);
+              b.carrying = 0; b.targetNpc = -1; b.phase = "toShelf";
+              updateLoungeStockVisuals();
+            }
+          } else { b.phase = "toShelf"; b.targetNpc = -1; }
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) b.phase = "toShelf";
+      }
+
+      b.obj.position.set(b.pos.x, walking ? Math.abs(Math.sin(b.walkPhase)) * 0.06 : 0, b.pos.z);
+      var swing = walking ? Math.sin(b.walkPhase) * 0.5 : 0;
+      b.l1.rotation.x = swing; b.l2.rotation.x = -swing;
+      var mat = b.carryKind === "dab" ? M.dab : b.carryKind === "edible" ? M.edible : M.bud;
+      for (var t = 0; t < b.items.length; t++) {
+        b.items[t].visible = t < b.carrying;
+        if (b.items[t].visible) b.items[t].material = mat;
+      }
+    }
+  }
+
   // Walk onto a pallet with matching stock in your pack and it goes on. Walk
   // onto one empty-handed instead and it loads YOU up — a manual relay to
   // the bays that works alongside drivers rather than replacing them, for
@@ -8810,6 +9041,35 @@
       // The lounge's whole progression in one pad: each buy reskins the room
       // top to bottom, adds tables and raises what every customer pays. Same
       // shape as the shop's LEVEL UP square.
+      // Floor staff. Capped by the class of the room, so this pad reads as
+      // "maxed" until the next CLASS UP raises the ceiling.
+      id: "server", label: "SERVERS", icon: "\ud83e\uddd1\u200d\ud83c\udf73",
+      x: LOUNGE_SERVER_ZONE.x, z: LOUNGE_SERVER_ZONE.z,
+      site: "lounge", color: 0x8fe0a0, kiosk: false,
+      hidden: function () { return !loungeUnlocked(); },
+      name: function () {
+        return (state.serverLv || 0) === 0 ? "Hire a Server" : "Hire Another Server";
+      },
+      desc: function () {
+        var n = state.serverLv || 0, cap = maxServersForTier();
+        if (n >= cap) {
+          return n >= MAX_SERVERS
+            ? "The floor is fully staffed"
+            : "A " + loungeTierDef().name + " only carries " + cap +
+              " \u2014 class the room up to take on more";
+        }
+        return n === 0
+          ? "They fetch rounds off the shelves and run them out \u2014 tips are still yours to collect"
+          : n + " on the floor \u00b7 hire one more to keep up with the tables";
+      },
+      cost: costServer,
+      maxed: function () { return (state.serverLv || 0) >= maxServersForTier(); },
+      buy: function () {
+        state.serverLv = (state.serverLv || 0) + 1;
+        toast("\ud83e\uddd1\u200d\ud83c\udf73 Server hired \u2014 they'll run the orders out for you!");
+      },
+    },
+    {
       id: "loungetier", label: "CLASS UP", icon: "\ud83e\udd42",
       x: LOUNGE_TIER_PAD.x, z: LOUNGE_TIER_PAD.z,
       site: "lounge", color: 0xd6b06f, kiosk: true,
@@ -9497,6 +9757,7 @@
     updateIntakeVisuals();
     updatePickers(now, dt);
     updateBarbacks(now, dt);
+    updateServers(now, dt);
     updateDrivers(now, dt);
     updateLoungeRun(dt);
     updateLoungeNpcs(now, dt);
