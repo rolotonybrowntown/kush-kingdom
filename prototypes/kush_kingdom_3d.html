@@ -984,13 +984,13 @@
   var FACTORY_STATIONS = [
     { id: "roller", kind: "preroll", name: "Pre-Roll Roller", icon: "🚬",
       color: 0xe8dcc0, blurb: "Rolls bud into pre-rolls",
-      floor: 1e12, step: 2.4, rate: 0.55, raw: 1.0 },
+      floor: 1e12, step: 2.4, rate: 2.2, raw: 1.0 },
     { id: "filler", kind: "vape", name: "Vape Filler", icon: "💨",
       color: 0x7fd6e8, blurb: "Fills cartridges with distillate",
-      floor: 3e12, step: 2.6, rate: 0.34, raw: 1.6 },
+      floor: 3e12, step: 2.6, rate: 1.4, raw: 1.6 },
     { id: "brewer", kind: "drink", name: "Drink Brewer", icon: "🥤",
       color: 0xff8fbf, blurb: "Brews infused drinks — the Lounge wants these",
-      floor: 8e12, step: 2.8, rate: 0.26, raw: 2.2 },
+      floor: 8e12, step: 2.8, rate: 1.05, raw: 2.2 },
   ];
   var MAX_STATION_LV = 5;
   var FACTORY_KINDS = FACTORY_STATIONS.map(function (s) { return s.kind; });
@@ -1062,10 +1062,15 @@
   // The silo already feeds the shop through the courier. A second draw on it
   // is a real cost, so it is an explicit upgrade with a rate you can read,
   // not a silent tap that quietly starves the dispensary.
-  var FACTORY_RAW_CAP = 240;
+  var FACTORY_RAW_CAP = 600;
   var MAX_PIPE_LV = 5;
   function pipeLv() { return (state.factory && state.factory.pipeLv) || 0; }
-  function pipeRate() { return pipeLv() * 1.6; }        // bud per second off the silo
+  function pipeRate() { return pipeLv() * 8.0; }        // bud per second into the hopper
+  // Bought-in bud costs more than the wholesale price the dock SELLS at
+  // (1.3x), so growing your own is always the better deal and the farm keeps
+  // its job. It is still a rounding error against what the line earns.
+  var CONTRACT_MULT = 1.6;
+  function contractPrice() { return sellValue() * CONTRACT_MULT; }
   // The pipeline gates everything, so it is quoted against the whole
   // reference line: with no bud in the hopper none of it earns anything.
   function costPipe() { return factoryPrice(2e12, refLineGrossPerSec(), 2.3, pipeLv()); }
@@ -4018,7 +4023,7 @@
   var BELT_X0 = -FACTORY_HALF_X + 6;     // head: raw bud lands here
   var BELT_X1 = FACTORY_HALF_X - 7;      // tail: finished goods drop off
   var BELT_Y = FACTORY_GROUND_TOP + 1.25;
-  var BELT_SPEED = 3.4;                  // world units/sec the items travel
+  var BELT_SPEED = 6.0;                  // world units/sec the items travel
   // Stations sit at even intervals along the belt. An item changes form the
   // moment it passes its station's x, which is what sells the line visually.
   var STATION_X = FACTORY_STATIONS.map(function (s, i) {
@@ -4222,7 +4227,7 @@
   var beltItems = [];
   var beltPool = [];
   var beltSpawnAcc = 0;
-  var MAX_BELT_ITEMS = 40;
+  var MAX_BELT_ITEMS = 110;
 
   function beltMesh() {
     if (beltPool.length) return beltPool.pop();
@@ -4246,13 +4251,38 @@
     if (!factoryUnlocked()) return;
     var f = state.factory;
 
-    // ---- 1. pipeline: pull bud off the farm's silo ----
-    // Capped by what the silo actually holds, so the factory competes with
-    // the shop's courier for the same harvest instead of conjuring stock.
-    if (pipeLv() > 0 && farmUnlocked()) {
+    // ---- 1. pipeline: farm crop first, then bought in ----
+    // The farm can never feed this place on its own and it was a mistake to
+    // build it as though it could. The arithmetic: 48 plots on a 25s cycle is
+    // 1.92 bud/sec, 5.19 even with grow speed maxed — while a Lv.1 line eats
+    // 6.75/sec and a maxed one 33.75. Gating purely on the silo meant a line
+    // you had paid trillions for sat idle waiting on a crop, which is why the
+    // belt looked empty however many machines were installed.
+    //
+    // So the silo is used FIRST because it is free, and anything it cannot
+    // cover is bought in on contract. That keeps the farm worth owning
+    // without letting it be a hard ceiling. The input is nearly free against
+    // the output anyway — bought bud runs well under 1% of what the line
+    // sells — so this is about keeping the belt moving, not about cost.
+    if (pipeLv() > 0) {
       var want = Math.min(pipeRate() * dt, FACTORY_RAW_CAP - f.raw);
-      var got = Math.min(want, state.farm.silo);
-      if (got > 0) { state.farm.silo -= got; f.raw += got; }
+      if (want > 0) {
+        var fromSilo = 0;
+        if (farmUnlocked()) {
+          fromSilo = Math.min(want, state.farm.silo);
+          state.farm.silo -= fromSilo;
+          f.raw += fromSilo;
+        }
+        var short = want - fromSilo;
+        if (short > 0) {
+          var price = contractPrice();
+          var afford = Math.min(short, state.cash / price);
+          if (afford > 0) {
+            state.cash -= afford * price;
+            f.raw += afford;
+          }
+        }
+      }
     }
 
     // ---- 2. production ----
@@ -10652,18 +10682,20 @@
       hidden: function () { return !factoryUnlocked(); },
       name: function () { return pipeLv() === 0 ? "Run the Pipeline" : "Widen the Pipeline"; },
       desc: function () {
-        if (pipeLv() >= MAX_PIPE_LV) return "The line drinks from the silo as fast as it can";
-        if (!farmUnlocked()) return "Buy the farm first \u2014 the pipeline feeds off its silo";
-        return pipeLv() === 0
-          ? "Pipes bud from the farm silo straight into the head hopper"
-          : "Lv." + pipeLv() + "/" + MAX_PIPE_LV + " \u00b7 " + pipeRate().toFixed(1) +
-            " \u2192 " + (pipeRate() + 1.6).toFixed(1) + " bud/sec off the silo";
+        var src = farmUnlocked()
+          ? "Farm silo first, rest bought in at $" + fmt(contractPrice()) + "/bud"
+          : "Bought in at $" + fmt(contractPrice()) + "/bud \u2014 buy the farm to grow it free";
+        if (pipeLv() >= MAX_PIPE_LV) return "Feeding at " + pipeRate().toFixed(0) + " bud/sec \u00b7 " + src;
+        return (pipeLv() === 0
+          ? "Feeds the head hopper \u2014 nothing runs without it \u00b7 "
+          : "Lv." + pipeLv() + "/" + MAX_PIPE_LV + " \u00b7 " + pipeRate().toFixed(0) +
+            " \u2192 " + (pipeRate() + 8).toFixed(0) + " bud/sec \u00b7 ") + src;
       },
       cost: costPipe,
       maxed: function () { return pipeLv() >= MAX_PIPE_LV; },
       buy: function () {
         state.factory.pipeLv = pipeLv() + 1;
-        toast("\ud83d\udee2\ufe0f Pipeline at Lv." + pipeLv() + " \u2014 " + pipeRate().toFixed(1) + " bud/sec from the farm!");
+        toast("\ud83d\udee2\ufe0f Pipeline at Lv." + pipeLv() + " \u2014 " + pipeRate().toFixed(0) + " bud/sec into the line!");
       },
     },
     {
