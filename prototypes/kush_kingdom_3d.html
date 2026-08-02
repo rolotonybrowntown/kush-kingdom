@@ -694,6 +694,14 @@
         </div>
         <button class="hr-buy" id="hr-load-buy">$0</button>
       </div>
+      <!-- hidden until renderHrPanel decides; the factory gates it -->
+      <div class="hr-row" id="hr-elite-row" style="display:none">
+        <div class="hr-info">
+          <b>⭐ Elite Crew</b>
+          <span id="hr-elite-desc">—</span>
+        </div>
+        <button class="hr-buy" id="hr-elite-buy">$0</button>
+      </div>
       <p class="hr-sub" id="hr-others">—</p>
       <button class="menu-action primary" id="hr-close">Done</button>
     </div>
@@ -1271,6 +1279,25 @@
   // Each location keeps its own books — see HR_DESKS below.
   var HR_ZONE = { x: 11.0, z: -28.5 };
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
+  // ---- Elite Crew: better staff, not more of them ----
+  // Boots and Crates cap out at four levels each, and by the time the factory
+  // is running that ceiling is the whole problem. Measured on a maxed farm:
+  // four field hands move 2.45 bud/sec into the silo, against 5.19 that the
+  // field actually grows and 6.75 that a Lv.1 production line wants. So the
+  // crop rots in the ground and the silo never fills however many people you
+  // hire — hiring more is not even available, the caps are already reached.
+  //
+  // This is the answer to that, and it deliberately raises all THREE things
+  // that set a worker's throughput rather than just walk speed:
+  //   speed  — how fast they cross the field
+  //   carry  — how much per trip, which is what kills the silo round trip
+  //   act    — the pause at each plant, which at carry 9 was 4.5s of a 14.7s
+  //            round trip and would only get worse as carry grows
+  // Speed alone would have moved the maxed farm to 4.11 bud/sec — still under
+  // what it grows. All three together take it past the growth ceiling, which
+  // is where the limit belongs.
+  var MAX_ELITE_LV = 5;
+  function eliteUnlocked() { return factoryUnlocked(); }
   // One desk per location. `base` scales the price to the era that site
   // belongs to — a shop desk opens at $4K, the farm's at $4M — so an HR level
   // stays a comparable share of income wherever you buy it. The zone lives in
@@ -1613,7 +1640,17 @@
   var FARM_SILO = { x: 15.0, z: FARM_CZ + 21.0 };
   var BASE_SILO_CAP = 120, MAX_SILO_LV = 4;
   function siloCapFor(lv) { return BASE_SILO_CAP + 90 * (lv || 0); }
-  function siloCap() { return siloCapFor(state.farm && state.farm.siloLv); }
+  // ---- extra silos ----
+  // Extending one silo tops out at 480 bud, which an elite crew fills in
+  // under a minute and a running factory line drains in seconds. So once the
+  // extension track is done you can put up whole new silos instead. They are
+  // deliberately steep — a second silo costs more than every extension put
+  // together — and each one adds a full extended silo's worth of capacity.
+  var MAX_SILOS = 3;
+  function siloCount() { return Math.max(1, (state.farm && state.farm.siloCount) || 1); }
+  function farmSiloCap() { return siloCapFor(state.farm && state.farm.siloLv) * siloCount(); }
+  function costNewSilo() { return scaled(120000000 * Math.pow(4.0, siloCount() - 1)); }
+  function siloCap() { return farmSiloCap(); }
   function siloCost(lv) { return scaled(5000000 * Math.pow(2.3, lv)); }
 
   // Courier: the placeholder freight run. Drains the silo into the shop's
@@ -1676,9 +1713,9 @@
       // HR is per location: each desk trains the crew that works there, so
       // a farm hand's boots are the farm's problem, not the shop's.
       staff: {
-        shop:   { speedLv: 0, loadLv: 0 },
-        farm:   { speedLv: 0, loadLv: 0 },
-        lounge: { speedLv: 0, loadLv: 0 },
+        shop:   { speedLv: 0, loadLv: 0, eliteLv: 0 },
+        farm:   { speedLv: 0, loadLv: 0, eliteLv: 0 },
+        lounge: { speedLv: 0, loadLv: 0, eliteLv: 0 },
       },
       tutSeen: {},            // one-shot "what to do next" prompts already shown
       deedSeen: {},           // sites we have already pointed at the map about
@@ -1742,6 +1779,7 @@
         plots: farmPlotDefs.map(function () { return { state: "locked", prog: 0 }; }),
         silo: 0,
         siloLv: 0,
+        siloCount: 1,                   // extra towers, bought after siloLv maxes
         courierLv: 0,
         handLv: 0,
         haulerLv: 0,
@@ -1796,12 +1834,14 @@
         }
       }
       merged.farm.siloLv = Math.max(0, Math.min(MAX_SILO_LV, merged.farm.siloLv || 0));
+      merged.farm.siloCount = Math.max(1, Math.min(MAX_SILOS, Math.floor(merged.farm.siloCount) || 1));
       merged.farm.courierLv = Math.max(0, Math.min(MAX_COURIER_LV, merged.farm.courierLv || 0));
       merged.farm.handLv = Math.max(0, Math.min(MAX_FIELD_HANDS, merged.farm.handLv || 0));
       merged.farm.haulerLv = Math.max(0, Math.min(MAX_HAULERS, merged.farm.haulerLv || 0));
       merged.farm.growLv = Math.max(0, Math.min(MAX_GROW_LV, merged.farm.growLv || 0));
       merged.farm.soilLv = Math.max(0, Math.min(MAX_SOIL_LV, merged.farm.soilLv || 0));
-      merged.farm.silo = Math.max(0, Math.min(siloCapFor(merged.farm.siloLv), merged.farm.silo || 0));
+      merged.farm.silo = Math.max(0, Math.min(
+        siloCapFor(merged.farm.siloLv) * merged.farm.siloCount, merged.farm.silo || 0));
       merged.farm.unlocked = !!merged.farm.unlocked;
       merged.intake = Math.max(0, Math.min(INTAKE_CAP, merged.intake || 0));
       if (!merged.managers || typeof merged.managers !== "object") merged.managers = {};
@@ -1950,6 +1990,7 @@
         if (legacyHr || typeof crew.loadLv !== "number") crew.loadLv = oldLd;
         crew.speedLv = Math.max(0, Math.min(MAX_STAFF_SPEED_LV, crew.speedLv));
         crew.loadLv = Math.max(0, Math.min(MAX_STAFF_LOAD_LV, crew.loadLv));
+        crew.eliteLv = Math.max(0, Math.min(MAX_ELITE_LV, Math.floor(crew.eliteLv) || 0));
       }
       delete merged.staffSpeedLv;
       delete merged.staffLoadLv;
@@ -2079,6 +2120,10 @@
   }
   function staffSpeedLv(site) { return staffOf(site).speedLv || 0; }
   function staffLoadLv(site) { return staffOf(site).loadLv || 0; }
+  function eliteLv(site) { return staffOf(site).eliteLv || 0; }
+  function costElite(site) {
+    return Math.round(HR_DESKS[site].base * 40000 * Math.pow(3.6, eliteLv(site)) * hrScale(site));
+  }
   // The shop's desk is pre-dock content and stays fixed; the farm's and the
   // lounge's ride the same late-game curve their crews' sites do.
   function hrScale(site) { return site === "shop" ? 1 : lateScale(); }
@@ -2091,9 +2136,25 @@
   // one multiplier and one carry bonus per crew. Four levels taking a site's
   // staff up to a bit over twice their starting pace.
   function staffSpeedMult(site) {
-    return (1 + 0.32 * staffSpeedLv(site)) * (perkActive("crew") ? 1.5 : 1);
+    return (1 + 0.32 * staffSpeedLv(site)) * (1 + 0.6 * eliteLv(site)) *
+           (perkActive("crew") ? 1.5 : 1);
   }
-  function staffCarryBonus(site) { return staffLoadLv(site); }
+  function staffCarryBonus(site) { return staffLoadLv(site) + 8 * eliteLv(site); }
+  // Cuts the pause at every pick-up and drop-off. Returned as a multiplier on
+  // the act TIME, so it divides rather than multiplies — an elite crew is not
+  // just quicker between plants, it is quicker at each one.
+  function staffActMult(site) { return 1 / (1 + 0.4 * eliteLv(site)); }
+  // One helper per crew so the site each worker belongs to is named once here
+  // rather than repeated at all twenty-odd places a timer gets set. These read
+  // the constants below at call time, which is always inside the frame loop.
+  function actPick()    { return PICK_ACT_TIME  * staffActMult("shop"); }
+  function actField()   { return FIELD_ACT_TIME * staffActMult("farm"); }
+  function actHaul()    { return HAUL_ACT_TIME  * staffActMult("farm"); }
+  function actExt()     { return EXT_ACT_TIME   * staffActMult("shop"); }
+  function actBake()    { return BAK_ACT_TIME   * staffActMult("shop"); }
+  function actDrv()     { return DRV_ACT_TIME   * staffActMult("shop"); }
+  function actBarback() { return BARBACK_ACT    * staffActMult("lounge"); }
+  function actServer()  { return SERVER_ACT     * staffActMult("lounge"); }
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
   function costPromo() { return Math.round(sellValue() * 150); }
@@ -3455,6 +3516,9 @@
   // systems and every inBox / d2 / staff-pathing call would have to know
   // which one it was in. farmGroup is organisational only — a way to grep
   // farm geometry and a single kill switch for profiling.
+  // Declared before buildFarm() rather than beside the other farm arrays,
+  // because buildFarm() runs immediately below and fills this one.
+  var farmExtraSilos = [];
   var farmGroup = new THREE.Group();
   scene.add(farmGroup);
   var farmGround;
@@ -3591,6 +3655,40 @@
     siloChute.position.set(FARM_SILO.x, FARM_GROUND_TOP + 1.1, FARM_SILO.z + 3.0);
     siloChute.castShadow = true;
     g.add(siloChute);
+
+    // ---- the extra silos you can put up once the first one is maxed ----
+    // Same tank, no readout of its own: the counter above silo one reports the
+    // whole farm's capacity, so a second and third tower are pure capacity and
+    // pure skyline rather than three separate numbers to read.
+    for (var xs = 1; xs < MAX_SILOS; xs++) {
+      var eg = new THREE.Group();
+      eg.position.set(FARM_SILO.x + xs * 8.0, 0, FARM_SILO.z);
+      var eYard = new THREE.Mesh(new THREE.BoxGeometry(8, 0.08, 9), M.dockFloor);
+      eYard.position.y = FARM_GROUND_TOP + 0.02;
+      eYard.receiveShadow = true;
+      eg.add(eYard);
+      var eBody = new THREE.Mesh(new THREE.CylinderGeometry(3.0, 3.0, 11, 16), M.siloBody);
+      eBody.position.y = FARM_GROUND_TOP + 5.5;
+      eBody.castShadow = true; eBody.receiveShadow = true;
+      eg.add(eBody);
+      for (var eh = 1; eh < 4; eh++) {
+        var eHoop = new THREE.Mesh(new THREE.TorusGeometry(3.02, 0.12, 6, 18), M.siloCap);
+        eHoop.rotation.x = Math.PI / 2;
+        eHoop.position.y = FARM_GROUND_TOP + eh * 2.7;
+        eg.add(eHoop);
+      }
+      var eRoof = new THREE.Mesh(new THREE.ConeGeometry(3.3, 2.4, 16), M.siloCap);
+      eRoof.position.y = FARM_GROUND_TOP + 12.2;
+      eRoof.castShadow = true;
+      eg.add(eRoof);
+      var eChute = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.2, 1.6), M.siloCap);
+      eChute.position.set(0, FARM_GROUND_TOP + 1.1, 3.0);
+      eChute.castShadow = true;
+      eg.add(eChute);
+      eg.visible = false;
+      g.add(eg);
+      farmExtraSilos.push(eg);
+    }
 
     var siloSign = textSprite("SILO", "#ffffff");
     siloSign.scale.set(2.6, 0.7, 1);
@@ -4859,7 +4957,7 @@
         }
         var sp = pickSourcePos(b.srcType, b.srcIdx);
         walking = !pickStepTo(b, sp.x, sp.z, dt);
-        if (!walking) { b.phase = "grab"; b.timer = PICK_ACT_TIME; }
+        if (!walking) { b.phase = "grab"; b.timer = actPick(); }
 
       } else if (b.phase === "grab") {
         b.timer -= dt;
@@ -4874,7 +4972,7 @@
         var pd = palletFor(b.carryKind);
         if (!pd || palletCount(b.carryKind) >= PALLET_CAP) { b.phase = "idle"; b.timer = 1.2; continue; }
         walking = !pickStepTo(b, pd.x, pd.z + 2.4, dt);
-        if (!walking) { b.phase = "stack"; b.timer = PICK_ACT_TIME; }
+        if (!walking) { b.phase = "stack"; b.timer = actPick(); }
 
       } else if (b.phase === "stack") {
         b.timer -= dt;
@@ -5031,7 +5129,7 @@
         }
         var pd = farmPlotDefs[b.plotIdx];
         walking = !fieldStepTo(b, pd.x, pd.z, dt);
-        if (!walking) { b.phase = "work"; b.timer = FIELD_ACT_TIME; }
+        if (!walking) { b.phase = "work"; b.timer = actField(); }
 
       } else if (b.phase === "work") {
         b.timer -= dt;
@@ -5051,7 +5149,7 @@
         if (b.carrying <= 0) { b.phase = "toPlot"; continue; }
         if ((state.farm.silo || 0) >= siloCap()) { b.phase = "idle"; b.timer = 1.2; continue; }
         walking = !fieldStepTo(b, FARM_SILO.x, FARM_SILO.z + 4.6, dt);
-        if (!walking) { b.phase = "dump"; b.timer = FIELD_ACT_TIME; }
+        if (!walking) { b.phase = "dump"; b.timer = actField(); }
 
       } else if (b.phase === "dump") {
         b.timer -= dt;
@@ -5146,7 +5244,7 @@
       if (b.phase === "toSilo") {
         if ((state.farm.silo || 0) <= 0) { b.phase = "wait"; b.timer = 1.0; continue; }
         walking = !haulStepTo(b, FARM_SILO.x, FARM_SILO.z + 4.6, dt);
-        if (!walking) { b.phase = "load"; b.timer = HAUL_ACT_TIME; }
+        if (!walking) { b.phase = "load"; b.timer = actHaul(); }
 
       } else if (b.phase === "load") {
         b.timer -= dt;
@@ -6260,6 +6358,9 @@
         fo.glow.material.opacity = 0.5 + Math.sin(now * 0.006 + i) * 0.25;
       }
     }
+    for (var xsv = 0; xsv < farmExtraSilos.length; xsv++) {
+      farmExtraSilos[xsv].visible = farmUnlocked() && siloCount() > xsv + 1;
+    }
     for (var hf = 0; hf < farmHoopFrames.length; hf++) {
       farmHoopFrames[hf].visible = lv >= MAX_SOIL_LV && farmUnlocked() && hf * FARM_COLS < farmRowsUnlocked();
     }
@@ -7353,7 +7454,7 @@
         var bd = b.bedTarget === INTAKE_TARGET ? INTAKE_SPOT : plotDefs[b.bedTarget];
         var t1 = viaDoor(b, bd.x, bd.z);
         walking = !extStepTo(b, t1.x, t1.z, dt);
-        if (!walking && t1.x === bd.x && t1.z === bd.z) { b.phase = "pick"; b.timer = EXT_ACT_TIME; }
+        if (!walking && t1.x === bd.x && t1.z === bd.z) { b.phase = "pick"; b.timer = actExt(); }
 
       } else if (b.phase === "pick") {
         b.timer -= dt;
@@ -7379,7 +7480,7 @@
         var pd = pressDefs[b.target];
         var t2 = viaDoor(b, pd.x, pd.z);
         walking = !extStepTo(b, t2.x, t2.z, dt);
-        if (!walking && t2.x === pd.x && t2.z === pd.z) { b.phase = "load"; b.timer = EXT_ACT_TIME; }
+        if (!walking && t2.x === pd.x && t2.z === pd.z) { b.phase = "load"; b.timer = actExt(); }
 
       } else if (b.phase === "load") {
         b.timer -= dt;
@@ -7407,7 +7508,7 @@
         var rd = pressDefs[b.target];
         var t3 = viaDoor(b, rd.x, rd.z);
         walking = !extStepTo(b, t3.x, t3.z, dt);
-        if (!walking && t3.x === rd.x && t3.z === rd.z) { b.phase = "grab"; b.timer = EXT_ACT_TIME; }
+        if (!walking && t3.x === rd.x && t3.z === rd.z) { b.phase = "grab"; b.timer = actExt(); }
 
       } else if (b.phase === "grab") {
         b.timer -= dt;
@@ -7425,7 +7526,7 @@
         var cx = SELL_ZONE.x - 1.0 + b.slot * 1.0, cz = SELL_ZONE.z + 2.2;
         var t4 = viaDoor(b, cx, cz);
         walking = !extStepTo(b, t4.x, t4.z, dt);
-        if (!walking && t4.x === cx && t4.z === cz) { b.phase = "drop"; b.timer = EXT_ACT_TIME; }
+        if (!walking && t4.x === cx && t4.z === cz) { b.phase = "drop"; b.timer = actExt(); }
 
       } else if (b.phase === "drop") {
         b.timer -= dt;
@@ -7573,7 +7674,7 @@
         }
         var pd = pressDefs[b.pressTarget];
         walking = !bakStepTo(b, pd.x, pd.z, dt);
-        if (!walking) { b.phase = "take"; b.timer = BAK_ACT_TIME; }
+        if (!walking) { b.phase = "take"; b.timer = actBake(); }
 
       } else if (b.phase === "take") {
         b.timer -= dt;
@@ -7595,7 +7696,7 @@
         if (b.target < 0) { b.phase = "toBaked"; continue; }
         var od = ovenDefs[b.target];
         walking = !bakStepTo(b, od.x, od.z, dt);
-        if (!walking) { b.phase = "load"; b.timer = BAK_ACT_TIME; }
+        if (!walking) { b.phase = "load"; b.timer = actBake(); }
 
       } else if (b.phase === "load") {
         b.timer -= dt;
@@ -7622,7 +7723,7 @@
         }
         var bd2 = ovenDefs[b.target];
         walking = !bakStepTo(b, bd2.x, bd2.z, dt);
-        if (!walking) { b.phase = "collect"; b.timer = BAK_ACT_TIME; }
+        if (!walking) { b.phase = "collect"; b.timer = actBake(); }
 
       } else if (b.phase === "collect") {
         b.timer -= dt;
@@ -7641,7 +7742,7 @@
         // extractors already dropping dabs there
         var cx = SELL_ZONE.x + 1.6 + b.slot * 1.0, cz = SELL_ZONE.z + 2.2;
         walking = !bakStepTo(b, cx, cz, dt);
-        if (!walking) { b.phase = "drop"; b.timer = BAK_ACT_TIME; }
+        if (!walking) { b.phase = "drop"; b.timer = actBake(); }
 
       } else if (b.phase === "drop") {
         b.timer -= dt;
@@ -8287,7 +8388,7 @@
           }
           var pd = PALLET_DEFS[b.palletIdx];
           walking = !barbackStepTo(b, pd.x, pd.z + 2.4, dt);
-          if (!walking) { b.phase = "pick"; b.timer = BARBACK_ACT; }
+          if (!walking) { b.phase = "pick"; b.timer = actBarback(); }
         }
 
       } else if (b.phase === "pick") {
@@ -8298,7 +8399,7 @@
             palletAdd(pdf.kind, -1);
             b.carrying++;
             b.carryKind = pdf.kind;
-            b.timer = BARBACK_ACT;
+            b.timer = actBarback();
           } else {
             b.phase = b.carrying > 0 ? "toBar" : "toPallet";
             b.palletIdx = -1;
@@ -8307,7 +8408,7 @@
 
       } else if (b.phase === "toBar") {
         walking = !barbackStepTo(b, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z, dt);
-        if (!walking) { b.phase = "drop"; b.timer = BARBACK_ACT; }
+        if (!walking) { b.phase = "drop"; b.timer = actBarback(); }
 
       } else if (b.phase === "drop") {
         b.timer -= dt;
@@ -8315,7 +8416,7 @@
           if (b.carrying > 0 && (state.loungeIntake[b.carryKind] || 0) < loungeIntakeCap()) {
             state.loungeIntake[b.carryKind] = (state.loungeIntake[b.carryKind] || 0) + 1;
             b.carrying--;
-            b.timer = BARBACK_ACT;
+            b.timer = actBarback();
             if (b.carrying <= 0) {
               addFloater(LOUNGE_RUN_ZONE.x, 3.4, LOUNGE_RUN_ZONE.z, "→ LOUNGE", "#c76ee0");
               b.phase = "toPallet";
@@ -8350,7 +8451,7 @@
         // no truck free either — wait a beat and re-check rather than pacing
         if (b.bayIdx < 0) { b.phase = "stuck"; b.timer = 1.2; continue; }
         walking = !barbackStepTo(b, BAY_X[b.bayIdx], DOCK_WALL_Z + 2.4, dt);
-        if (!walking) { b.phase = "loadTruck"; b.timer = BARBACK_ACT; }
+        if (!walking) { b.phase = "loadTruck"; b.timer = actBarback(); }
 
       } else if (b.phase === "loadTruck") {
         b.timer -= dt;
@@ -8358,7 +8459,7 @@
           var tk = trucks[b.bayIdx];
           if (tk && tk.phase === "loading" && b.carrying > 0 && truckLoadOne(tk, b.carryKind)) {
             b.carrying--;
-            b.timer = BARBACK_ACT;
+            b.timer = actBarback();
             if (b.carrying <= 0) {
               addFloater(BAY_X[b.bayIdx], 3.4, DOCK_WALL_Z + 2.5, "→ TRUCK", "#ffd75e");
               b.phase = "toPallet";
@@ -8533,7 +8634,7 @@
           if (b.carrying >= cap) { b.phase = "toTable"; }
           else {
             walking = !serverStepTo(b, serverShelfX(b.carryKind), LOUNGE_SHELF_STAND_Z, dt);
-            if (!walking) { b.phase = "pick"; b.timer = SERVER_ACT; }
+            if (!walking) { b.phase = "pick"; b.timer = actServer(); }
           }
         }
 
@@ -8545,7 +8646,7 @@
           if ((state.loungeIntake[b.carryKind] || 0) > 0 && b.carrying < cap) {
             state.loungeIntake[b.carryKind]--;
             b.carrying++;
-            b.timer = SERVER_ACT;
+            b.timer = actServer();
             updateLoungeStockVisuals();
           } else {
             b.phase = b.carrying > 0 ? "toTable" : "toShelf";
@@ -8558,7 +8659,7 @@
         if (ti < 0 || ti >= loungeTableCount()) { b.phase = "toShelf"; b.targetNpc = -1; continue; }
         var slot = LOUNGE_TABLE_SLOTS[ti];
         walking = !serverStepTo(b, slot.x, slot.z + 2.0, dt);
-        if (!walking) { b.phase = "serve"; b.timer = SERVER_ACT; }
+        if (!walking) { b.phase = "serve"; b.timer = actServer(); }
 
       } else if (b.phase === "serve") {
         b.timer -= dt;
@@ -8578,7 +8679,7 @@
             break;
           }
           if (handed) {
-            b.timer = SERVER_ACT;
+            b.timer = actServer();
           } else if (b.carrying > 0) {
             // tray still has drinks on it: go find whoever else ordered this
             var nxt = serverFindJobForKind(b, b.carryKind);
@@ -9083,7 +9184,7 @@
         }
         var pdf = PALLET_DEFS[b.palletIdx];
         walking = !drvStepTo(b, pdf.x, pdf.z + 2.4, dt);
-        if (!walking) { b.phase = "pick"; b.timer = DRV_ACT_TIME; }
+        if (!walking) { b.phase = "pick"; b.timer = actDrv(); }
 
       } else if (b.phase === "pick") {
         b.timer -= dt;
@@ -9112,7 +9213,7 @@
         }
         if (b.bayIdx < 0) { b.phase = "idle"; b.timer = 0.7; continue; }
         walking = !drvStepTo(b, BAY_X[b.bayIdx], DOCK_WALL_Z + 2.4, dt);
-        if (!walking) { b.phase = "unload"; b.timer = DRV_ACT_TIME; }
+        if (!walking) { b.phase = "unload"; b.timer = actDrv(); }
 
       } else if (b.phase === "unload") {
         b.timer -= dt;
@@ -10317,17 +10418,37 @@
       id: "silo", label: "SILO", icon: "\ud83c\udfd7\ufe0f", x: FARM_SILO.x - 7.5, z: FARM_SILO.z,
       site: "farm", color: 0x8ef0a4, kiosk: false,
       hidden: function () { return !farmUnlocked(); },
-      name: function () { return "Extend the Silo"; },
-      desc: function () {
-        return (state.farm.siloLv || 0) >= MAX_SILO_LV
-          ? "The silo is as tall as it gets"
-          : "Holds " + siloCap() + " \u2192 " + siloCapFor((state.farm.siloLv || 0) + 1) + " bud";
+      // Once the tower cannot go higher this same pad starts selling whole
+      // new towers, so there is always something here rather than a dead
+      // MAX square in the yard.
+      name: function () {
+        return (state.farm.siloLv || 0) >= MAX_SILO_LV ? "Put Up Another Silo" : "Extend the Silo";
       },
-      cost: function () { return siloCost(state.farm.siloLv || 0); },
-      maxed: function () { return (state.farm.siloLv || 0) >= MAX_SILO_LV; },
+      desc: function () {
+        if ((state.farm.siloLv || 0) < MAX_SILO_LV) {
+          return "Holds " + siloCap() + " \u2192 " +
+            (siloCapFor((state.farm.siloLv || 0) + 1) * siloCount()) + " bud";
+        }
+        if (siloCount() >= MAX_SILOS) return "Three full silos \u2014 the yard is out of room";
+        return "Silo " + (siloCount() + 1) + " of " + MAX_SILOS + " \u00b7 holds " +
+          siloCap() + " \u2192 " + (siloCapFor(state.farm.siloLv) * (siloCount() + 1)) + " bud";
+      },
+      cost: function () {
+        return (state.farm.siloLv || 0) >= MAX_SILO_LV
+          ? costNewSilo() : siloCost(state.farm.siloLv || 0);
+      },
+      maxed: function () {
+        return (state.farm.siloLv || 0) >= MAX_SILO_LV && siloCount() >= MAX_SILOS;
+      },
       buy: function () {
-        state.farm.siloLv = (state.farm.siloLv || 0) + 1;
-        toast("\ud83c\udfd7\ufe0f Silo extended \u2014 holds " + siloCap() + " bud now!");
+        if ((state.farm.siloLv || 0) < MAX_SILO_LV) {
+          state.farm.siloLv = (state.farm.siloLv || 0) + 1;
+          toast("\ud83c\udfd7\ufe0f Silo extended \u2014 holds " + siloCap() + " bud now!");
+        } else {
+          state.farm.siloCount = siloCount() + 1;
+          addFloater(FARM_SILO.x, FARM_GROUND_TOP + 16, FARM_SILO.z, "SILO " + siloCount() + "!", "#8ef0a4");
+          toast("\ud83c\udfd7\ufe0f Silo " + siloCount() + " up \u2014 the farm holds " + siloCap() + " bud!");
+        }
       },
     },
     {
@@ -11467,6 +11588,9 @@
   var hrTitle = document.getElementById("hr-title");
   var hrSub = document.getElementById("hr-sub");
   var hrOthers = document.getElementById("hr-others");
+  var hrEliteRow = document.getElementById("hr-elite-row");
+  var hrEliteDesc = document.getElementById("hr-elite-desc");
+  var hrEliteBuy = document.getElementById("hr-elite-buy");
   var hrSpeedDesc = document.getElementById("hr-speed-desc");
   var hrLoadDesc = document.getElementById("hr-load-desc");
   var hrSpeedBuy = document.getElementById("hr-speed-buy");
@@ -11502,6 +11626,25 @@
       hrLoadBuy.textContent = "$" + fmt(costStaffLoad(site));
       hrLoadBuy.disabled = state.cash < costStaffLoad(site);
     }
+    // ---- Elite Crew ----
+    // Hidden entirely until the factory is bought: it is the answer to a
+    // problem you do not have before then, and an always-visible row you
+    // cannot use just makes the panel look broken.
+    var elv = eliteLv(site);
+    hrEliteRow.style.display = eliteUnlocked() ? "" : "none";
+    if (eliteUnlocked()) {
+      if (elv >= MAX_ELITE_LV) {
+        hrEliteDesc.textContent = "Maxed — " + desk.crew + " cannot be trained any harder";
+        hrEliteBuy.textContent = "MAX";
+        hrEliteBuy.disabled = true;
+      } else {
+        hrEliteDesc.textContent = "Lv." + elv + "/" + MAX_ELITE_LV + " · " +
+          "+60% pace, +8 carry and 40% less time per plant, each level";
+        hrEliteBuy.textContent = "$" + fmt(costElite(site));
+        hrEliteBuy.disabled = state.cash < costElite(site);
+      }
+    }
+
     // Spell out every crew's levels, including the one you are standing in.
     // The books really are separate, but a save converted from the old single
     // global desk starts them all on the SAME level — so they look linked
@@ -11511,7 +11654,8 @@
     for (var h = 0; h < HR_SITES.length; h++) {
       var id = HR_SITES[h];
       var tag = HR_DESKS[id].title.replace(" HR", "");
-      var txt = tag + " " + staffSpeedLv(id) + "/" + staffLoadLv(id);
+      var txt = tag + " " + staffSpeedLv(id) + "/" + staffLoadLv(id) +
+                (eliteUnlocked() ? "/\u2b50" + eliteLv(id) : "");
       parts.push(id === site ? "\u2192 " + txt : txt);
     }
     hrOthers.textContent = "Boots/Crates by location — " + parts.join("  \u00b7  ");
@@ -11526,6 +11670,14 @@
     state.cash -= c;
     staffOf(site).speedLv = staffSpeedLv(site) + 1;
     toast("👟 " + HR_DESKS[site].crew + " kitted out — they move quicker!");
+    renderHud(); renderHrPanel(); saveState();
+  });
+  hrEliteBuy.addEventListener("click", function () {
+    var site = hrSite, c = costElite(site);
+    if (!eliteUnlocked() || state.cash < c || eliteLv(site) >= MAX_ELITE_LV) return;
+    state.cash -= c;
+    staffOf(site).eliteLv = eliteLv(site) + 1;
+    toast("\u2b50 " + HR_DESKS[site].crew + " promoted \u2014 faster, stronger, quicker on the job!");
     renderHud(); renderHrPanel(); saveState();
   });
   hrLoadBuy.addEventListener("click", function () {
