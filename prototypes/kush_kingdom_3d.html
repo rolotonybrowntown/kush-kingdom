@@ -694,6 +694,7 @@
         </div>
         <button class="hr-buy" id="hr-load-buy">$0</button>
       </div>
+      <p class="hr-sub" id="hr-others">—</p>
       <button class="menu-action primary" id="hr-close">Done</button>
     </div>
   </div>
@@ -1637,7 +1638,7 @@
   // pace a level. Stacks with weather and the free-feed boost rather than
   // replacing them.
   function farmGrowRateMult() { return Math.pow(1.22, (state.farm && state.farm.growLv) || 0); }
-  var SOIL_TIER_NAMES = ["Bare Furrows", "Raised Beds", "Staked & Trellised", "Hoop House Frames"];
+  var SOIL_TIER_NAMES = ["Bare Furrows", "Raised Beds", "Staked & Trellised", "Glasshouse"];
   function costSoilLv()  { return scaled(7000000 * Math.pow(2.6, state.farm && state.farm.soilLv || 0)); }
   function soilLv() { return (state.farm && state.farm.soilLv) || 0; }
 
@@ -2472,6 +2473,15 @@
     pavement:    mat(0x9a9a94, { map: plasterTex, roughness: 0.95 }),
     kerb:        mat(0x7d7d78, { map: plasterTex, roughness: 0.95 }),
     metalRack:   mat(0x7f8894, { roughness: 0.4, metalness: 0.7 }),
+    // ---- farm plot tiers ----
+    // Glazing is kept faint on purpose: a greenhouse has to read as glass
+    // from outside without hiding the crop you are here to look at.
+    glass:       mat(0xbfe8f5, { transparent: true, opacity: 0.22, roughness: 0.05,
+                                 metalness: 0.1, side: THREE.DoubleSide }),
+    glassFrame:  mat(0xdfe9ef, { roughness: 0.35, metalness: 0.5 }),
+    compost:     matFlat(0x3d2a19, { map: soilTex, roughness: 1 }),
+    bedPlank:    mat(0x9c6636, { map: woodTex, roughness: 0.85 }),
+    trellis:     mat(0xb9c4cc, { roughness: 0.5, metalness: 0.45 }),
     vending:     mat(0x2b4a6b, { roughness: 0.35, metalness: 0.35 }),
     locker:      mat(0x496b57, { roughness: 0.45, metalness: 0.4 }),
     water:       mat(0x63d8e8, { transparent: true, opacity: 0.65, roughness: 0.1 }),
@@ -3884,7 +3894,8 @@
         // three jars per board, revealed as stock climbs
         for (var j = 0; j < 3; j++) {
           var jar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.75, 10),
-            def.kind === "bud" ? M.bud : def.kind === "dab" ? M.dab : M.edible);
+            def.kind === "bud" ? M.bud : def.kind === "dab" ? M.dab
+            : def.kind === "drink" ? M.drink : M.edible);
           jar.position.set(-1.0 + j * 1.0, LOUNGE_GROUND_TOP + 1.35 + s * 1.35, 0);
           jar.castShadow = true;
           sg.add(jar);
@@ -3907,7 +3918,7 @@
       sg.add(mark);
       sg.position.set(def.x, 0, LOUNGE_SHELF_Z);
       g.add(sg);
-      loungeShelves.push({ group: sg, jars: jars, bar: bar, def: def });
+      loungeShelves.push({ group: sg, jars: jars, bar: bar, lbl: lbl, def: def });
     });
 
     // ---- tables: only the slots this tier has opened ----
@@ -5902,29 +5913,60 @@
     mound.receiveShadow = true;
     g.add(mound);
 
-    // Soil tier 1+: a low wooden border, distinct from the indoor beds'
-    // hanging grow lights — this is a ground-level upgrade, not a fixture.
+    // Soil tier 1+: a proper raised bed, not a trim line. The old version was
+    // a 0.34-high plank round the edge, which at this camera distance was
+    // almost invisible — the first upgrade has to be unmistakable, so the bed
+    // is built UP: tall sides, a corner post at each corner, and dark compost
+    // filling it in place of the bare dirt furrow underneath.
     var border = new THREE.Group();
     var half = FARM_PLOT_SIZE / 2;
+    var bedH = 0.85;
     [[0, -half, FARM_PLOT_SIZE, 0], [0, half, FARM_PLOT_SIZE, 0],
      [-half, 0, 0, FARM_PLOT_SIZE], [half, 0, 0, FARM_PLOT_SIZE]].forEach(function (r) {
-      var plank = new THREE.Mesh(new THREE.BoxGeometry(r[2] || 0.18, 0.34, r[3] || 0.18), M.fencePost);
-      plank.position.set(r[0], FARM_GROUND_TOP + 0.28, r[1]);
-      plank.castShadow = true;
+      var plank = new THREE.Mesh(
+        new THREE.BoxGeometry(r[2] || 0.26, bedH, r[3] || 0.26), M.bedPlank);
+      plank.position.set(r[0], FARM_GROUND_TOP + bedH / 2, r[1]);
+      plank.castShadow = true; plank.receiveShadow = true;
       border.add(plank);
     });
+    // corner posts standing slightly proud, the way a built bed actually looks
+    [[-half, -half], [half, -half], [-half, half], [half, half]].forEach(function (c) {
+      var post = new THREE.Mesh(new THREE.BoxGeometry(0.34, bedH + 0.3, 0.34), M.bedPlank);
+      post.position.set(c[0], FARM_GROUND_TOP + (bedH + 0.3) / 2, c[1]);
+      post.castShadow = true;
+      border.add(post);
+    });
+    // rich fill sitting proud of the ground, so the bed reads as filled
+    var fill = new THREE.Mesh(
+      new THREE.BoxGeometry(FARM_PLOT_SIZE - 0.3, 0.3, FARM_PLOT_SIZE - 0.3), M.compost);
+    fill.position.y = FARM_GROUND_TOP + bedH - 0.12;
+    fill.receiveShadow = true;
+    border.add(fill);
     border.visible = false;
     g.add(border);
 
-    // Soil tier 2+: corner stakes with a crossbar, like young plants get
-    // staked up in a real garden — the plant is meant to grow into these.
+    // Soil tier 2+: a real trellis cage rather than four bare posts — uprights
+    // tied together with horizontal runs at two heights, which is what makes
+    // it read as trained growing rather than as scaffolding left lying about.
     var stake = new THREE.Group();
-    [[-half + 0.3, -half + 0.3], [half - 0.3, -half + 0.3],
-     [-half + 0.3, half - 0.3], [half - 0.3, half - 0.3]].forEach(function (sp) {
-      var post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6), M.fencePost);
-      post.position.set(sp[0], FARM_GROUND_TOP + 0.8, sp[1]);
+    var postH = 2.4, inset = 0.3;
+    var sx = half - inset;
+    [[-sx, -sx], [sx, -sx], [-sx, sx], [sx, sx]].forEach(function (sp) {
+      var post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, postH, 6), M.trellis);
+      post.position.set(sp[0], FARM_GROUND_TOP + bedH + postH / 2, sp[1]);
       post.castShadow = true;
       stake.add(post);
+    });
+    [0.45, 0.85].forEach(function (frac) {
+      var y = FARM_GROUND_TOP + bedH + postH * frac;
+      [-1, 1].forEach(function (side) {
+        var runX = new THREE.Mesh(new THREE.BoxGeometry(sx * 2, 0.06, 0.06), M.trellis);
+        runX.position.set(0, y, side * sx);
+        stake.add(runX);
+        var runZ = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, sx * 2), M.trellis);
+        runZ.position.set(side * sx, y, 0);
+        stake.add(runZ);
+      });
     });
     stake.visible = false;
     g.add(stake);
@@ -5957,35 +5999,102 @@
   }
   for (var fpi = 0; fpi < farmPlotDefs.length; fpi++) farmPlotObjects.push(makeFarmPlot(fpi));
 
-  // Soil tier 3: one hoop-house frame per row, spanning its full width —
-  // ribs only, deliberately no glazing panels between them so the crop
-  // stays in view. Built once per row rather than per plot; a real hoop
-  // house is one structure over several plants, not one per plant.
+  // Soil tier 3: a glasshouse over each row. The earlier version was ribs
+  // only — no glazing — so it read as scaffolding rather than as a building,
+  // which is why the fully-upgraded field never looked finished. It is now
+  // properly glazed: pitched roof panels, side walls and gable ends. The
+  // glass is deliberately faint (opacity 0.22) so the crop stays visible
+  // through it; a greenhouse you cannot see the plants in is a shed.
+  //
+  // Still one structure per ROW rather than per plot — a real glasshouse
+  // covers a whole run of beds, not one plant each.
   var farmHoopFrames = [];
   function makeFarmHoopFrame(rowIdx) {
     var g = new THREE.Group();
-    var rowZ = farmPlotDefs[rowIdx * FARM_COLS].z;
+    // Everything below is built around z=0 and the whole group is then moved
+    // onto its row. This was missing entirely before: the group was never
+    // positioned, so all six structures were stacked on top of each other at
+    // world z=0 — over by the SHOP, four hundred units from the field they
+    // were supposed to be covering. That is why the top soil tier never
+    // appeared to do anything.
+    g.position.z = farmPlotDefs[rowIdx * FARM_COLS].z;
     var span = (FARM_COLS - 1) * FARM_SPACING_X + FARM_PLOT_SIZE;
-    var x0 = farmPlotDefs[rowIdx * FARM_COLS].x;
-    var apexY = FARM_GROUND_TOP + 3.6, footY = FARM_GROUND_TOP, halfW = FARM_PLOT_SIZE * 0.62;
+    var x0 = farmPlotDefs[rowIdx * FARM_COLS].x - FARM_PLOT_SIZE / 2;
+    var footY = FARM_GROUND_TOP;
+    // Sized against the tallest thing that can stand under it, measured in the
+    // browser rather than estimated: a maxed plant (scale 1.71) on an 0.85
+    // raised bed tops out at y 5.73. A 5.4 ridge put the crop THROUGH the
+    // roof, so the ridge is 7.0 — about 1.5 of clearance.
+    //
+    // Width is capped below the 5.6 row spacing too, so neighbouring rows end
+    // up as separate glasshouses with a path between rather than z-fighting
+    // along a shared wall.
+    var wallH = 3.0;                       // vertical glass up to the eaves
+    var apexY = footY + 7.0;               // ridge height
+    var halfW = FARM_PLOT_SIZE * 0.72;     // 5.18 wide against 5.6 row pitch
+    var cx = x0 + span / 2;
+
+    // ---- side glass, eaves down to the ground ----
+    [-1, 1].forEach(function (side) {
+      var wall = new THREE.Mesh(new THREE.PlaneGeometry(span, wallH), M.glass);
+      wall.position.set(cx, footY + wallH / 2, side * halfW);
+      g.add(wall);
+    });
+    // ---- pitched roof glass, eaves to ridge ----
+    var rise = apexY - (footY + wallH);
+    var slope = Math.sqrt(halfW * halfW + rise * rise);
+    // A plane's height runs along +y. The pitch has to carry it from the eave
+    // (y +wallH, z ±halfW) up to the ridge (y +apexY, z 0), so the tilt is the
+    // angle of that vector — one rotation, derived rather than eyeballed.
+    var pitch = function (side) { return Math.atan2(-side * halfW, rise); };
+    [-1, 1].forEach(function (side) {
+      var roof = new THREE.Mesh(new THREE.PlaneGeometry(span, slope), M.glass);
+      roof.position.set(cx, footY + wallH + rise / 2, side * halfW / 2);
+      roof.rotation.x = pitch(side);
+      g.add(roof);
+    });
+    // ---- gable ends, so it closes off rather than reading as a tunnel ----
+    // Built as a five-sided shape (walls plus the roof triangle) so it meets
+    // the pitch exactly instead of overlapping it and double-darkening.
+    var gableShape = new THREE.Shape();
+    gableShape.moveTo(-halfW, 0);
+    gableShape.lineTo(halfW, 0);
+    gableShape.lineTo(halfW, wallH);
+    gableShape.lineTo(0, wallH + rise);
+    gableShape.lineTo(-halfW, wallH);
+    gableShape.closePath();
+    var gableGeo = new THREE.ShapeGeometry(gableShape);
+    [0, 1].forEach(function (endIdx) {
+      var gable = new THREE.Mesh(gableGeo, M.glass);
+      gable.rotation.y = Math.PI / 2;
+      gable.position.set(x0 + endIdx * span, footY, 0);
+      g.add(gable);
+    });
+
+    // ---- frame: eave rails, ridge, and a rib every couple of plots ----
+    function bar(w, h, d, px, py, pz) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M.glassFrame);
+      m.position.set(px, py, pz);
+      m.castShadow = true;
+      g.add(m);
+    }
+    [-1, 1].forEach(function (side) {
+      bar(span, 0.13, 0.13, cx, footY + wallH, side * halfW);          // eave
+      bar(span, 0.13, 0.13, cx, footY + 0.07, side * halfW);           // sill
+    });
+    bar(span + 0.6, 0.16, 0.16, cx, apexY, 0);                          // ridge
     var ribCount = Math.ceil(FARM_COLS / 2) + 1;
     for (var r = 0; r < ribCount; r++) {
-      var rx = x0 + (span * (r / (ribCount - 1)));
-      // each rib is two angled beams meeting at a peak — a cheap arch that
-      // reads fine at this scale without needing curved geometry
+      var rx = x0 + span * (r / (ribCount - 1));
       [-1, 1].forEach(function (side) {
-        var beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.3, 0.12), M.metalRack);
-        beam.position.set(rx, (apexY + footY) / 2, side * halfW * 0.5);
-        beam.rotation.x = side * 0.62;
-        beam.castShadow = true;
-        g.add(beam);
+        bar(0.12, wallH, 0.12, rx, footY + wallH / 2, side * halfW);    // upright
+        var rafter = new THREE.Mesh(new THREE.BoxGeometry(0.12, slope, 0.12), M.glassFrame);
+        rafter.position.set(rx, footY + wallH + rise / 2, side * halfW / 2);
+        rafter.rotation.x = pitch(side);
+        rafter.castShadow = true;
+        g.add(rafter);
       });
     }
-    // ridge beam tying the rib peaks together along the row
-    var ridge = new THREE.Mesh(new THREE.BoxGeometry(span + 1.0, 0.12, 0.12), M.metalRack);
-    ridge.position.set(x0 + span / 2, apexY, 0);
-    ridge.castShadow = true;
-    g.add(ridge);
     g.visible = false;
     farmGroup.add(g);
     return g;
@@ -6094,6 +6203,9 @@
       if (!live) continue;
       fo.border.visible = lv >= 1;
       fo.stake.visible = lv >= 2;
+      // once the bed is built the crop grows out of IT, not out of the dirt
+      // beside it — without this the plants float in front of the bed wall
+      fo.plant.position.y = FARM_GROUND_TOP + (lv >= 1 ? 0.78 : 0.2);
       var p = state.farm.plots[i];
       if (p.state === "empty" || p.state === "locked") {
         fo.plant.visible = false; fo.glow.visible = false; fo.bar.visible = false;
@@ -8006,6 +8118,20 @@
       var lit = n > 0 ? Math.max(1, Math.round(frac * sh.jars.length)) : 0;
       for (var j = 0; j < sh.jars.length; j++) sh.jars[j].visible = j < lit;
       setBar(sh.bar, frac);
+      // Drinks are the one product the bar cannot get from the shop's dock —
+      // only the factory's brewer makes them. An empty shelf with no brewer
+      // running looks identical to an empty shelf that is merely behind on
+      // deliveries, so the label says which it is rather than leaving you to
+      // guess why the drinks never turn up.
+      if (sh.def.kind === "drink") {
+        var why = !factoryUnlocked() ? "DRINKS \u00b7 NEEDS FACTORY"
+                : stationLv("brewer") <= 0 ? "DRINKS \u00b7 BUILD A BREWER"
+                : (pipeLv() <= 0 ? "DRINKS \u00b7 RUN THE PIPELINE" : "DRINKS");
+        if (sh.lbl.userData.txt !== why) {
+          sh.lbl.userData.txt = why;
+          updateSpriteText(sh.lbl, why, why === "DRINKS" ? "#ffffff" : "#ffb3d1");
+        }
+      }
     }
   }
 
@@ -8052,7 +8178,7 @@
       barbacks.push({
         obj: g, l1: l1, l2: l2, tote: tote, totes: totes,
         pos: { x: BARBACK_ZONE.x + 1.4 + n * 0.9, z: BARBACK_ZONE.z + 1.6 },
-        phase: "toPallet", timer: 0, palletIdx: -1,
+        phase: "toPallet", timer: 0, palletIdx: -1, bayIdx: -1,
         carrying: 0, carryKind: "bud", walkPhase: n * 1.3,
       });
     }
@@ -8071,6 +8197,25 @@
   }
 
   // a pallet worth walking to: has stock, and the Lounge has room for it
+  // One worker per bay so a diverted load does not stack them all on the same
+  // door. Drivers get first claim — loading trucks is their actual job; the
+  // barback is only here because the bar could not take what it was holding.
+  function barbackFreeBay() {
+    for (var i = 0; i < bayCount(); i++) {
+      var t = trucks[i];
+      if (t.phase !== "loading" || truckSpace(t) <= 0) continue;
+      var taken = false;
+      for (var j = 0; j < drivers.length; j++) {
+        if (drivers[j].obj.visible && drivers[j].bayIdx === i) { taken = true; break; }
+      }
+      for (var k = 0; k < barbacks.length && !taken; k++) {
+        if (barbacks[k].obj.visible && barbacks[k].bayIdx === i) taken = true;
+      }
+      if (!taken) return i;
+    }
+    return -1;
+  }
+
   function barbackFindPallet() {
     for (var i = 0; i < PALLET_DEFS.length; i++) {
       var k = PALLET_DEFS[i].kind;
@@ -8145,12 +8290,59 @@
               addFloater(LOUNGE_RUN_ZONE.x, 3.4, LOUNGE_RUN_ZONE.z, "→ LOUNGE", "#c76ee0");
               b.phase = "toPallet";
             }
+          } else if (b.carrying > 0) {
+            // The bar cannot take this. barbackFindPallet() already refuses to
+            // pick up a kind whose shelf is full, but a shelf can fill while
+            // you are carrying it over — and sending them back to "toPallet"
+            // still holding a full load bounced them straight back here on the
+            // next tick, which is why a barback would stand on the run pad
+            // doing nothing. Put it on a truck instead: it is a wholesale good
+            // either way and the bays are a few steps away.
+            b.phase = "divert";
+            b.bayIdx = -1;
           } else {
-            // lounge full, or nothing left to hand over — go round again
             b.phase = "toPallet";
             b.palletIdx = -1;
           }
         }
+
+      // ---- holding something the bar is full of: take it to the trucks ----
+      } else if (b.phase === "divert") {
+        if (b.carrying <= 0) { b.phase = "toPallet"; b.bayIdx = -1; continue; }
+        // if the shelf drained while we walked, the bar still wants it first
+        if ((state.loungeIntake[b.carryKind] || 0) < loungeIntakeCap()) {
+          b.phase = "toBar"; b.bayIdx = -1; continue;
+        }
+        if (b.bayIdx < 0 || b.bayIdx >= bayCount() ||
+            trucks[b.bayIdx].phase !== "loading" || truckSpace(trucks[b.bayIdx]) <= 0) {
+          b.bayIdx = barbackFreeBay();
+        }
+        // no truck free either — wait a beat and re-check rather than pacing
+        if (b.bayIdx < 0) { b.phase = "stuck"; b.timer = 1.2; continue; }
+        walking = !barbackStepTo(b, BAY_X[b.bayIdx], DOCK_WALL_Z + 2.4, dt);
+        if (!walking) { b.phase = "loadTruck"; b.timer = BARBACK_ACT; }
+
+      } else if (b.phase === "loadTruck") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var tk = trucks[b.bayIdx];
+          if (tk && tk.phase === "loading" && b.carrying > 0 && truckLoadOne(tk, b.carryKind)) {
+            b.carrying--;
+            b.timer = BARBACK_ACT;
+            if (b.carrying <= 0) {
+              addFloater(BAY_X[b.bayIdx], 3.4, DOCK_WALL_Z + 2.5, "→ TRUCK", "#ffd75e");
+              b.phase = "toPallet";
+              b.bayIdx = -1;
+            }
+          } else {
+            b.phase = b.carrying > 0 ? "divert" : "toPallet";
+            b.bayIdx = -1;
+          }
+        }
+
+      } else if (b.phase === "stuck") {
+        b.timer -= dt;
+        if (b.timer <= 0) b.phase = "divert";
 
       } else if (b.phase === "idle") {
         b.timer -= dt;
@@ -9536,9 +9728,42 @@
   // A jump, not a journey: everything is one scene, so this is just a
   // teleport with the camera snapped rather than eased. Letting updateCamera
   // lerp across 400 units would fly you through several seconds of void.
+  // Travelling empties your hands. Carrying a backpack of bud across three
+  // locations was never the intent — stock belongs to the site it came from.
+  //
+  // Nothing is destroyed: shop goods go on the dock pallets, drinks go back on
+  // the bar shelf they were taken from, and only what genuinely will not fit
+  // is sold at wholesale so that leaving a site can never cost you product.
+  // Seed packs are the one exception and are simply dropped — they are free
+  // from the back room and putting them on a pallet would be strange.
+  function stowBackpack() {
+    var stowed = 0, sold = 0, cash = 0;
+    for (var i = 0; i < player.backpack.length; i++) {
+      var k = player.backpack[i].type;
+      if (k === "seed") continue;
+      if (isShopKind(k) && dockUnlocked() && palletCount(k) < PALLET_CAP) {
+        palletAdd(k, 1);
+        stowed++;
+      } else if (k === "drink" && (state.loungeIntake.drink || 0) < loungeIntakeCap()) {
+        state.loungeIntake.drink = (state.loungeIntake.drink || 0) + 1;
+        stowed++;
+      } else {
+        cash += (k === "drink" || k === "vape" || k === "preroll")
+          ? infusedValue(k) : wholesaleValue(k);
+        sold++;
+      }
+    }
+    player.backpack.length = 0;
+    if (cash > 0) state.cash += Math.round(cash);
+    syncStack();
+    return { stowed: stowed, sold: sold, cash: Math.round(cash) };
+  }
+
   function travelTo(id) {
     var s = SITES[id];
     if (!s || id === state.site || !s.unlocked()) return;
+
+    var drop = stowBackpack();
 
     state.sitePos[state.site] = { x: player.pos.x, z: player.pos.z };
     state.site = id;
@@ -9564,6 +9789,12 @@
     renderUpgrades();
     saveState();
     toast(s.icon + " " + s.name);
+    if (drop.stowed || drop.sold) {
+      var bits = [];
+      if (drop.stowed) bits.push(drop.stowed + " stowed");
+      if (drop.sold) bits.push(drop.sold + " sold for $" + fmt(drop.cash));
+      toast("🎒 Hands free — " + bits.join(", "));
+    }
   }
 
   function fitCamera() {
@@ -10241,7 +10472,7 @@
       hidden: function () { return !farmUnlocked(); },
       name: function () { return "Upgrade the Plots"; },
       desc: function () {
-        if (soilLv() >= MAX_SOIL_LV) return "The field is fully built out \u2014 a proper hoop house";
+        if (soilLv() >= MAX_SOIL_LV) return "The field is fully built out \u2014 glass over every row";
         return SOIL_TIER_NAMES[soilLv()] + " \u2192 " + SOIL_TIER_NAMES[soilLv() + 1] + ", every unlocked row";
       },
       cost: costSoilLv,
@@ -11203,6 +11434,7 @@
   var hrOverlay = document.getElementById("hr-overlay");
   var hrTitle = document.getElementById("hr-title");
   var hrSub = document.getElementById("hr-sub");
+  var hrOthers = document.getElementById("hr-others");
   var hrSpeedDesc = document.getElementById("hr-speed-desc");
   var hrLoadDesc = document.getElementById("hr-load-desc");
   var hrSpeedBuy = document.getElementById("hr-speed-buy");
@@ -11238,6 +11470,19 @@
       hrLoadBuy.textContent = "$" + fmt(costStaffLoad(site));
       hrLoadBuy.disabled = state.cash < costStaffLoad(site);
     }
+    // Spell out every crew's levels, including the one you are standing in.
+    // The books really are separate, but a save converted from the old single
+    // global desk starts them all on the SAME level — so they look linked
+    // until you buy something, and there was nothing on screen to say
+    // otherwise. This is that "otherwise".
+    var parts = [];
+    for (var h = 0; h < HR_SITES.length; h++) {
+      var id = HR_SITES[h];
+      var tag = HR_DESKS[id].title.replace(" HR", "");
+      var txt = tag + " " + staffSpeedLv(id) + "/" + staffLoadLv(id);
+      parts.push(id === site ? "\u2192 " + txt : txt);
+    }
+    hrOthers.textContent = "Boots/Crates by location — " + parts.join("  \u00b7  ");
   }
   function openHr(site) { hrSite = site; renderHrPanel(); hrOverlay.classList.add("show"); }
   function closeHr() { hrOverlay.classList.remove("show"); }
