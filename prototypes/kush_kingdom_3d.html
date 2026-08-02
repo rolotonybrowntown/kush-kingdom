@@ -934,7 +934,7 @@
   var FACTORY_CZ = -1040;
   var FACTORY_HALF_X = 30, FACTORY_HALF_Z = 26;   // a wide shed; the line runs across it
   var FACTORY_GROUND_TOP = FLOOR_TOP_BACK;
-  var FACTORY_DEED_COST = 40000000;
+  var FACTORY_DEED_COST = 5e12;   // the last location, and priced like it
   function factoryUnlocked() { return !!(state.factory && state.factory.unlocked); }
 
   // ---- what the line makes ----
@@ -946,13 +946,13 @@
   var FACTORY_STATIONS = [
     { id: "roller", kind: "preroll", name: "Pre-Roll Roller", icon: "🚬",
       color: 0xe8dcc0, blurb: "Rolls bud into pre-rolls",
-      base: 4000000, step: 2.4, rate: 0.55, raw: 1.0 },
+      floor: 1e12, step: 2.4, rate: 0.55, raw: 1.0 },
     { id: "filler", kind: "vape", name: "Vape Filler", icon: "💨",
       color: 0x7fd6e8, blurb: "Fills cartridges with distillate",
-      base: 12000000, step: 2.6, rate: 0.34, raw: 1.6 },
+      floor: 3e12, step: 2.6, rate: 0.34, raw: 1.6 },
     { id: "brewer", kind: "drink", name: "Drink Brewer", icon: "🥤",
       color: 0xff8fbf, blurb: "Brews infused drinks — the Lounge wants these",
-      base: 30000000, step: 2.8, rate: 0.26, raw: 2.2 },
+      floor: 8e12, step: 2.8, rate: 0.26, raw: 2.2 },
   ];
   var MAX_STATION_LV = 5;
   var FACTORY_KINDS = FACTORY_STATIONS.map(function (s) { return s.kind; });
@@ -963,9 +963,34 @@
     return null;
   }
   function stationLv(id) { return (state.factory && state.factory.stations[id]) || 0; }
+  // Every factory price is quoted as ten minutes of the output it buys, then
+  // floored so the opening numbers land in the trillions from the first visit.
+  //
+  // Flat constants were the wrong shape here. Infused prices ride sellValue()
+  // like dabs and edibles do, so revenue climbs with your strain level while a
+  // hard-coded price does not — which is exactly how a $40M line ends up free
+  // to someone sitting on quadrillions. Pricing against output keeps the deal
+  // the same shape at every stage, and the floor keeps it expensive on arrival.
+  var FACTORY_PAYBACK_SECS = 600;
+  function factoryPrice(floor, grossPerSec, step, lv) {
+    var earned = FACTORY_PAYBACK_SECS * grossPerSec;
+    return Math.round(Math.max(floor, earned) * Math.pow(step, lv));
+  }
   function stationCost(id) {
     var d = stationDefById(id);
-    return Math.round(d.base * Math.pow(d.step, stationLv(id)));
+    // what THIS level adds, not what the station already makes
+    return factoryPrice(d.floor, d.rate * infusedValue(d.kind), d.step, stationLv(id));
+  }
+  // A notional line with all three stations at Lv.1. Prices for the pipeline,
+  // potency and shipping are quoted against this FIXED yardstick rather than
+  // your actual line, so installing a station can never make the other
+  // upgrades more expensive.
+  function refLineGrossPerSec() {
+    var g = 0;
+    for (var i = 0; i < FACTORY_STATIONS.length; i++) {
+      g += FACTORY_STATIONS[i].rate * infusedValue(FACTORY_STATIONS[i].kind);
+    }
+    return g;
   }
   // Level 0 is "not built yet" and produces nothing; every level after that
   // is a straight multiple of the station's base rate.
@@ -973,9 +998,13 @@
 
   // Infused goods are worth more than what goes into them, and they track the
   // strain curve the same way dabs and edibles do so they never fall behind.
-  var BASE_PREROLL_VALUE = 90;
-  var BASE_VAPE_VALUE = 420;
-  var BASE_DRINK_VALUE = 260;
+  // Ten times what the first pass set. The factory is the last thing you
+  // build, and at that point the shop and the bar are already turning over
+  // fortunes — a cart worth three edibles made the whole place a rounding
+  // error. These are the top of the product ladder and are priced like it.
+  var BASE_PREROLL_VALUE = 900;
+  var BASE_VAPE_VALUE = 4200;
+  var BASE_DRINK_VALUE = 2600;
   function infusedBase(kind) {
     return kind === "vape" ? BASE_VAPE_VALUE
          : kind === "drink" ? BASE_DRINK_VALUE : BASE_PREROLL_VALUE;
@@ -984,8 +1013,11 @@
     return infusedBase(kind) * (sellValue() / BASE_SELL_VALUE) *
            (1 + 0.3 * ((state.factory && state.factory.qualityLv) || 0));
   }
+  // Potency lifts every unit by 30%, so it is quoted against 30% of the
+  // reference line rather than against any one station.
   function costFactoryQuality() {
-    return Math.round(20000000 * Math.pow(2.2, (state.factory && state.factory.qualityLv) || 0));
+    return factoryPrice(4e12, 0.3 * refLineGrossPerSec(), 2.2,
+      (state.factory && state.factory.qualityLv) || 0);
   }
 
   // ---- the pipeline in from the farm ----
@@ -996,7 +1028,9 @@
   var MAX_PIPE_LV = 5;
   function pipeLv() { return (state.factory && state.factory.pipeLv) || 0; }
   function pipeRate() { return pipeLv() * 1.6; }        // bud per second off the silo
-  function costPipe() { return Math.round(6000000 * Math.pow(2.3, pipeLv())); }
+  // The pipeline gates everything, so it is quoted against the whole
+  // reference line: with no bud in the hopper none of it earns anything.
+  function costPipe() { return factoryPrice(2e12, refLineGrossPerSec(), 2.3, pipeLv()); }
 
   // ---- shipping ----
   // Wholesale only, and at a volume the dock cannot touch: the dock moves 36
@@ -1006,7 +1040,9 @@
   function shipLv() { return (state.factory && state.factory.shipLv) || 1; }
   function shipLoad() { return 120 + 90 * (shipLv() - 1); }   // units a container takes
   function shipSecs() { return Math.max(6, 22 - 2.6 * (shipLv() - 1)); }
-  function costShip() { return Math.round(10000000 * Math.pow(2.4, shipLv() - 1)); }
+  // Shipping only matters once the bins are filling faster than containers
+  // leave, so it is quoted against half the reference line.
+  function costShip() { return factoryPrice(2.5e12, 0.5 * refLineGrossPerSec(), 2.4, shipLv() - 1); }
 
   var SITES = {
     shop: {
@@ -3927,10 +3963,13 @@
   var FACTORY_CASH_PAD = { x: BELT_X1 + 3.2, z: BELT_Z + 7.0, half: 1.7 };
   // Upgrade pads live on the front apron, clear of the belt and the bins.
   var FACTORY_PAD_Z = FACTORY_CZ + 14;
-  var FACTORY_PIPE_PAD = { x: -20, z: FACTORY_PAD_Z };
-  var FACTORY_QUALITY_PAD = { x: 14, z: FACTORY_PAD_Z };
-  var FACTORY_SHIP_PAD = { x: 20, z: FACTORY_PAD_Z };
-  var FACTORY_HR_ZONE = { x: -26, z: FACTORY_PAD_Z };
+  // Pay squares are STATION_R * 1.4 across (~3.6 units), so anything closer
+  // than that centre-to-centre overlaps and one standing spot quietly pays
+  // into two upgrades at once. The stations sit at -12.25 / -0.5 / 11.25, so
+  // these three keep well clear of them and of each other.
+  var FACTORY_PIPE_PAD = { x: -24, z: FACTORY_PAD_Z };
+  var FACTORY_QUALITY_PAD = { x: 18, z: FACTORY_PAD_Z };
+  var FACTORY_SHIP_PAD = { x: 25, z: FACTORY_PAD_Z };
 
   var factoryStationMeshes = [];   // one entry per FACTORY_STATIONS, built once
   var factoryBinMeshes = [];
