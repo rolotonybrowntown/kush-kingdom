@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0b1a13">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
   :root {
     --green-dark: #14452a;
@@ -121,6 +122,12 @@
   .chip.weather.on { display: flex; }
   .chip.weather .icon { background: linear-gradient(180deg, #bfe4f5, #5b8fa8); }
   .chip.weather span { color: #d8f0ff; font-size: 13px; }
+
+  /* whatever the last mystery box turned out to be, and how long it has left */
+  .chip.perk { display: none; }
+  .chip.perk.on { display: flex; }
+  .chip.perk .icon { background: linear-gradient(180deg, #ffe066, #b8860b); }
+  .chip.perk span { color: #ffe9a8; }
 
   /* shop level, riding on the corner of the cash chip */
   .chip.cash { position: relative; overflow: visible; }
@@ -376,6 +383,84 @@
     cursor: default;
   }
 
+  /* ---------------- "a new build is waiting" bar ---------------- */
+  /* The offline cache must never be able to hide a deploy. When a newer build
+     has been fetched and parked, this says so and hands over the reload —
+     it is not dismissed on a timer like a toast, because missing it means
+     playing an old version without knowing. */
+  #update-bar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(var(--safe-b) + 14px);
+    display: none; align-items: center; gap: 10px;
+    padding: 9px 10px 9px 15px;
+    border-radius: 14px;
+    border: 1.5px solid var(--panel-line);
+    background: rgba(12, 34, 22, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    color: #eafff2; font-size: 13px;
+    z-index: 40;
+  }
+  #update-bar.show { display: flex; }
+  #update-reload {
+    border: 1.5px solid #6fd68a;
+    background: linear-gradient(180deg, #48b465, #2b7a44);
+    color: #fff; font-weight: 800; font-size: 12.5px;
+    font-family: inherit; cursor: pointer;
+    padding: 7px 14px; border-radius: 10px;
+  }
+
+  /* ---------------- mystery box ---------------- */
+  /* Same shell as the HR panel, warmer palette — this one is a gift, not an
+     office. Two explicit buttons, because the whole point is that spending
+     here is a decision rather than a consequence of where you stood. */
+  #mystery-overlay {
+    position: fixed; inset: 0;
+    background: rgba(16, 8, 2, 0.66);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 22; padding: 24px;
+  }
+  #mystery-overlay.show { display: flex; }
+  #mystery-card {
+    width: 100%; max-width: 340px;
+    background: linear-gradient(180deg, #3a2a12, #241806);
+    border: 2px solid #c79a37;
+    border-radius: 22px;
+    padding: 16px 18px 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+    text-align: center;
+  }
+  #mystery-lid { font-size: 40px; line-height: 1; margin-bottom: 2px; }
+  #mystery-card h2 {
+    margin: 0 0 2px; font-size: 21px; color: #ffdf8a;
+    letter-spacing: 0.3px;
+  }
+  #mystery-list {
+    list-style: none; margin: 12px 0 10px; padding: 0;
+    text-align: left;
+  }
+  #mystery-list li {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid rgba(255, 223, 138, 0.16);
+    font-size: 12px; line-height: 1.4;
+    color: rgba(255, 245, 224, 0.86);
+  }
+  /* the name must not be squeezed into two lines by the blurb beside it */
+  #mystery-list li b {
+    color: #ffdf8a; font-size: 12.5px;
+    flex: 0 0 auto; white-space: nowrap;
+  }
+  #mystery-note {
+    margin: 0 0 12px; font-size: 11px; opacity: 0.62; line-height: 1.45;
+  }
+  .mystery-actions { display: flex; gap: 8px; }
+  .mystery-actions .menu-action { flex: 1; margin: 0; }
+  .mystery-actions .menu-action:disabled { opacity: 0.45; cursor: default; }
+
   /* ---------------- empire map ---------------- */
   /* Same shell as the HR panel; the rows reuse .hr-row/.hr-info/.hr-buy. */
   #map-overlay {
@@ -421,6 +506,30 @@
     z-index: 8;
     cursor: pointer;
   }
+  /* The map is the only way to discover a new location, and it is a small
+     glyph in a corner — easy to play past for hours. When somewhere new comes
+     within reach it pulses and wears a dot until the player actually opens it. */
+  #map-btn.nudge {
+    border-color: #ffe066;
+    color: #fff6c9;
+    animation: map-nudge 1.5s ease-in-out infinite;
+  }
+  #map-btn.nudge::after {
+    content: "";
+    position: absolute; top: -3px; right: -3px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #ffcb2e;
+    border: 2px solid #12301f;
+  }
+  @keyframes map-nudge {
+    0%, 100% { box-shadow: 0 5px 16px rgba(0,0,0,0.4), 0 0 0 0 rgba(255,203,46,0.55); }
+    50%      { box-shadow: 0 5px 16px rgba(0,0,0,0.4), 0 0 0 11px rgba(255,203,46,0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #map-btn.nudge { animation: none; box-shadow: 0 5px 16px rgba(0,0,0,0.4), 0 0 0 4px rgba(255,203,46,0.5); }
+  }
+
   #menu-btn {
     position: absolute;
     top: calc(var(--safe-t) + 18px);
@@ -537,6 +646,7 @@
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
       <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
       <div class="chip weather" id="weather-chip"><div class="icon" id="weather-icon">☀️</div><span id="weather-val">Clear</span></div>
+      <div class="chip perk" id="perk-chip"><div class="icon" id="perk-icon">⚙️</div><span id="perk-val">0s</span></div>
     </div>
   </div>
 
@@ -552,10 +662,24 @@
     </div>
   </div>
 
+  <div id="mystery-overlay">
+    <div id="mystery-card">
+      <div id="mystery-lid">🎁</div>
+      <h2>Mystery Box</h2>
+      <p class="hr-sub">A courier left it by the door. Nobody says what's inside.</p>
+      <ul id="mystery-list"></ul>
+      <p id="mystery-note">One perk, chosen at random, for 10 minutes.</p>
+      <div class="mystery-actions">
+        <button class="menu-action" id="mystery-pass">Leave it</button>
+        <button class="menu-action primary" id="mystery-buy">$0</button>
+      </div>
+    </div>
+  </div>
+
   <div id="hr-overlay">
     <div id="hr-card">
-      <h2>HR Office</h2>
-      <p class="hr-sub">Applies to every hired hand, front of house and back.</p>
+      <h2 id="hr-title">HR Office</h2>
+      <p class="hr-sub" id="hr-sub">—</p>
       <div class="hr-row">
         <div class="hr-info">
           <b>Better Boots</b>
@@ -602,6 +726,11 @@
 
   <div id="objective">Grab seeds from the shed</div>
   <div id="toasts"></div>
+
+  <div id="update-bar">
+    <span>A new version is ready.</span>
+    <button id="update-reload">Reload</button>
+  </div>
 
   <div id="joy-base"><div id="joy-knob"></div></div>
 
@@ -893,13 +1022,63 @@
   var RUNNER_ZONE = { x: -5.0, z: -9.0 };          // dispatch point: hire runners
   var MAX_RUNNERS = 3;
   var PROMO_ZONE = { x: -9.0, z: 0.0 };            // sign board: run a promotion
+
+  // ---- the mystery box ----
+  // A crate a courier drops off at most once an hour. It is the one purchase
+  // in the game that is not a pay square: walking up opens a yes/no card,
+  // because dumping cash into something whose contents you cannot see should
+  // be a decision, not something you do by standing still in the wrong place.
+  // What is inside stays unknown until you pay — rolling at purchase rather
+  // than at spawn is what makes it a mystery box rather than a shop.
+  var MYSTERY_COOLDOWN_MS = 3600 * 1000;           // "once an hour", literally
+  var MYSTERY_PERK_MS = 600 * 1000;                // every perk runs 10 minutes
+  var MYSTERY_PERKS = [
+    { kind: "prod", icon: "⚙️", name: "Overtime",
+      blurb: "+25% production — beds, presses, ovens and the field all run faster" },
+    { kind: "legs", icon: "👟", name: "Fresh Legs",
+      blurb: "+50% to your own move speed" },
+    { kind: "crew", icon: "🏃", name: "Rally the Crew",
+      blurb: "+50% walking speed for every hired hand, at every location" },
+  ];
+  // It follows you: the crate is drawn at whichever site you are standing in,
+  // so an offer is never stranded three locations away.
+  var MYSTERY_SPOTS = {
+    shop:   { x: 8.0,  z: 6.0 },
+    farm:   { x: 8.0,  z: FARM_CZ + 20.0 },
+    lounge: { x: -5.0, z: LOUNGE_CZ + 17.0 },
+  };
+  function mysterySpot() { return MYSTERY_SPOTS[state.site] || MYSTERY_SPOTS.shop; }
+  // Priced off what a bud fetches, the same trick costPromo() uses, so the
+  // crate stays a real decision at every stage instead of going trivial once
+  // strain levels scale up.
+  function mysteryPrice() { return Math.round(sellValue() * 500); }
   var EXTRACT_ZONE = { x: 10.0, z: -35.0 };        // lab desk: hire extractors
   var HOPPER_ZONE  = { x: -10.0, z: -35.0 };       // bigger press hoppers
   var PURITY_ZONE  = { x: -10.0, z: -41.0 };       // what a dab is worth
   var RAM_ZONE     = { x:  10.0, z: -41.0 };       // how fast a press squeezes
-  // HR corner of the break room: upgrades that apply to every hired hand
+  // HR corner of the break room: upgrades for the crew that works THIS site.
+  // Each location keeps its own books — see HR_DESKS below.
   var HR_ZONE = { x: 11.0, z: -28.5 };
   var MAX_STAFF_SPEED_LV = 4, MAX_STAFF_LOAD_LV = 4;
+  // One desk per location. `base` scales the price to the era that site
+  // belongs to — a shop desk opens at $4K, the farm's at $4M — so an HR level
+  // stays a comparable share of income wherever you buy it. The zone lives in
+  // hrZoneFor() rather than here because those coordinates are declared
+  // further down, alongside the rest of each site's layout.
+  var HR_DESKS = {
+    shop:   { base: 1,    title: "Shop HR",   crew: "the shop crew",
+              who: "Trains botanists, runners, extractors, bakers, pickers and drivers" },
+    farm:   { base: 1000, title: "Farm HR",   crew: "the farm crew",
+              who: "Trains field hands and haulers" },
+    lounge: { base: 2000, title: "Lounge HR", crew: "the lounge crew",
+              who: "Trains barbacks and servers" },
+  };
+  var HR_SITES = ["shop", "farm", "lounge"];
+  function hrZoneFor(site) {
+    if (site === "farm") return FARM_HR_ZONE;
+    if (site === "lounge") return LOUNGE_HR_ZONE;
+    return HR_ZONE;
+  }
   var MAX_EXTRACTORS = 3;
   // kitchen pass: hire bakers to run the oven line
   var BAKER_ZONE  = { x: -10.0, z: -52.0 };        // hire bakers
@@ -951,6 +1130,7 @@
   function pressTimeFor() {
     var t = BASE_PRESS_TIME * Math.pow(0.78, state.ramLv || 0);
     if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
     return Math.max(t, 0.8);
   }
   function ramCost(lv) { return Math.round(12000 * Math.pow(2.6, lv)); }
@@ -995,6 +1175,7 @@
   function bakeTimeFor() {
     var t = BASE_BAKE_TIME * Math.pow(0.78, state.fanLv || 0);
     if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
     return Math.max(1, t);
   }
   function fanCost(lv) { return Math.round(80000 * Math.pow(2.6, lv)); }
@@ -1226,7 +1407,7 @@
   var HAULER_ZONE  = { x: -28.0, z: FARM_CZ + 26.0 };
   var MANAGER_ZONE = { x: -22.0, z: FARM_CZ + 26.0 };
   var GROW_ZONE    = { x: -16.0, z: FARM_CZ + 26.0 };   // faster crop cycle
-  var FARM_HR_ZONE = { x: -10.0, z: FARM_CZ + 26.0 };   // the shop's HR panel, reachable here too
+  var FARM_HR_ZONE = { x: -10.0, z: FARM_CZ + 26.0 };   // trains field hands and haulers only
   var SOIL_ZONE    = { x: -4.0, z: FARM_CZ + 26.0 };    // plot look, not pace
   var MAX_FIELD_HANDS = 4;   // the field is 3x the indoor grid — it earns the crew
   var MAX_HAULERS = 2;
@@ -1269,9 +1450,19 @@
       botanistLv: 0,          // hired botanists who plant seeds for you
       runnerLv: 0,            // hired runners who haul buds to the counter
       extractorLv: 0,         // hired extractors who work the press line
-      staffSpeedLv: 0,        // HR: how fast every hired hand walks
-      staffLoadLv: 0,         // HR: how much every hired hand carries
+      // HR is per location: each desk trains the crew that works there, so
+      // a farm hand's boots are the farm's problem, not the shop's.
+      staff: {
+        shop:   { speedLv: 0, loadLv: 0 },
+        farm:   { speedLv: 0, loadLv: 0 },
+        lounge: { speedLv: 0, loadLv: 0 },
+      },
       tutSeen: {},            // one-shot "what to do next" prompts already shown
+      deedSeen: {},           // sites we have already pointed at the map about
+      mapNudge: false,        // map button is pulsing; cleared by opening it
+      // nextAt 0 means "one is waiting right now" — the very first crate is
+      // free to find, so the mechanic gets discovered instead of missed
+      mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
       // grow-light level per row (every bed in a row lights up together)
@@ -1477,9 +1668,43 @@
       merged.runnerLv = Math.max(0, Math.min(MAX_RUNNERS, merged.runnerLv || 0));
       merged.extractorLv = Math.max(0, Math.min(MAX_EXTRACTORS, merged.extractorLv || 0));
       merged.speedLv = Math.max(0, Math.min(MAX_SPEED_LV, merged.speedLv || 0));
-      merged.staffSpeedLv = Math.max(0, Math.min(MAX_STAFF_SPEED_LV, merged.staffSpeedLv || 0));
-      merged.staffLoadLv = Math.max(0, Math.min(MAX_STAFF_LOAD_LV, merged.staffLoadLv || 0));
+      // HR used to be one global pair of levels. The presence of those old
+      // fields is what marks a save as pre-split — `merged.staff` is no help,
+      // since Object.assign has already filled in defaultState's zeroed crews
+      // for a save that never had the key. The player paid for those levels
+      // once, so every desk starts where the old global one left off; the
+      // legacy fields are then dropped, making this a one-time conversion.
+      var legacyHr = typeof merged.staffSpeedLv === "number" ||
+                     typeof merged.staffLoadLv === "number";
+      var oldSp = Math.max(0, Math.min(MAX_STAFF_SPEED_LV, merged.staffSpeedLv || 0));
+      var oldLd = Math.max(0, Math.min(MAX_STAFF_LOAD_LV, merged.staffLoadLv || 0));
+      if (!merged.staff || typeof merged.staff !== "object") merged.staff = {};
+      for (var hs = 0; hs < HR_SITES.length; hs++) {
+        var hsId = HR_SITES[hs];
+        var crew = merged.staff[hsId];
+        if (!crew || typeof crew !== "object") crew = merged.staff[hsId] = {};
+        if (legacyHr || typeof crew.speedLv !== "number") crew.speedLv = oldSp;
+        if (legacyHr || typeof crew.loadLv !== "number") crew.loadLv = oldLd;
+        crew.speedLv = Math.max(0, Math.min(MAX_STAFF_SPEED_LV, crew.speedLv));
+        crew.loadLv = Math.max(0, Math.min(MAX_STAFF_LOAD_LV, crew.loadLv));
+      }
+      delete merged.staffSpeedLv;
+      delete merged.staffLoadLv;
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
+      if (!merged.deedSeen || typeof merged.deedSeen !== "object") merged.deedSeen = {};
+      merged.mapNudge = !!merged.mapNudge;
+      if (!merged.mystery || typeof merged.mystery !== "object") {
+        merged.mystery = { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 };
+      }
+      var my = merged.mystery;
+      if (typeof my.nextAt !== "number" || !isFinite(my.nextAt)) my.nextAt = 0;
+      if (typeof my.cost !== "number" || !isFinite(my.cost) || my.cost < 0) my.cost = 0;
+      if (typeof my.perkUntil !== "number" || !isFinite(my.perkUntil)) my.perkUntil = 0;
+      // an unknown perk kind would silently apply nothing; drop it instead
+      if (!MYSTERY_PERKS.some(function (p) { return p.kind === my.perkKind; })) my.perkKind = null;
+      // A clock that jumped forward (timezone change, a save edited by hand)
+      // must not push the next crate hours out — cap the wait at one cooldown.
+      my.nextAt = Math.min(my.nextAt, Date.now() + MYSTERY_COOLDOWN_MS);
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
         merged.roomTier = 0;
@@ -1501,7 +1726,7 @@
   // Five levels instead of ten, but each one is worth double what it used to
   // be, so Lv.5 lands exactly where the old Lv.10 did (3x base). The prices
   // climb steeply to match — maxing out should be a late-game milestone.
-  function moveSpeed()   { return BASE_SPEED * (1 + 0.4 * state.speedLv); }
+  function moveSpeed()   { return BASE_SPEED * (1 + 0.4 * state.speedLv) * (perkActive("legs") ? 1.5 : 1); }
   function backpackCap() { return BASE_CAP + state.capLv; }
 
   // A strain adds $4 a bud within its decade, and every tenth one moves the
@@ -1533,6 +1758,31 @@
   function boostActive()  { return Date.now() < (state.boostUntil || 0); }
   function boostSecsLeft() { return Math.max(0, Math.ceil(((state.boostUntil || 0) - Date.now()) / 1000)); }
 
+  // ---- mystery box perks ----
+  // Only one perk runs at a time: opening a second crate replaces whatever was
+  // still ticking rather than stacking, which keeps the multipliers below to a
+  // single known factor no matter how many crates a session gets through.
+  function perkKind() {
+    var m = state.mystery;
+    if (!m || !m.perkKind || Date.now() >= (m.perkUntil || 0)) return null;
+    return m.perkKind;
+  }
+  function perkActive(kind) { return perkKind() === kind; }
+  function perkSecsLeft() {
+    var m = state.mystery;
+    return Math.max(0, Math.ceil((((m && m.perkUntil) || 0) - Date.now()) / 1000));
+  }
+  function perkDef() {
+    var k = perkKind();
+    for (var i = 0; i < MYSTERY_PERKS.length; i++) if (MYSTERY_PERKS[i].kind === k) return MYSTERY_PERKS[i];
+    return null;
+  }
+  // Every production line divides its cycle time by this, so one number is all
+  // that has to change if the perk is ever retuned.
+  function perkProdMult() { return perkActive("prod") ? 1.25 : 1; }
+  // A crate is on the ground when the cooldown is up and nobody has opened it.
+  function mysteryReady() { return Date.now() >= ((state.mystery && state.mystery.nextAt) || 0); }
+
   function rowOf(idx) { return Math.floor(idx / PLOT_COLS); }
   function lightLvOf(idx) { return (state.rowLight && state.rowLight[rowOf(idx)]) || 0; }
 
@@ -1541,6 +1791,7 @@
   function growTimeFor(idx) {
     var t = BASE_GROW_TIME * Math.pow(0.72, lightLvOf(idx));
     if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
     return Math.max(t, 0.8);
   }
 
@@ -1556,30 +1807,27 @@
   function costRunner() { return Math.round(500 * Math.pow(2.6, state.runnerLv || 0)); }
   function costExtractor() { return Math.round(8000 * Math.pow(2.8, state.extractorLv || 0)); }
   function costBaker() { return Math.round(100000 * Math.pow(2.8, state.bakerLv || 0)); }
-  function costStaffSpeed() { return Math.round(4000 * Math.pow(3.4, state.staffSpeedLv || 0)); }
-  function costStaffLoad() { return Math.round(6000 * Math.pow(3.5, state.staffLoadLv || 0)); }
-  // one multiplier and one carry bonus, shared by every hired hand. Four
-  // levels taking staff up to a bit over twice their starting pace.
-  function staffSpeedMult() { return 1 + 0.32 * (state.staffSpeedLv || 0); }
-  function staffCarryBonus() { return state.staffLoadLv || 0; }
-  function hrOffer() {
-    var sp = state.staffSpeedLv || 0, ld = state.staffLoadLv || 0;
-    var canSp = sp < MAX_STAFF_SPEED_LV, canLd = ld < MAX_STAFF_LOAD_LV;
-    var pickSpeed = canSp && (!canLd || sp <= ld);
-    if (pickSpeed) {
-      return { which: "speed", cost: costStaffSpeed(),
-        name: "Better Boots",
-        desc: "Every hired hand walks " + Math.round((staffSpeedMult() - 1) * 100) +
-              "% \u2192 " + Math.round((staffSpeedMult() + 0.32 - 1) * 100) + "% faster" };
-    }
-    if (canLd) {
-      return { which: "load", cost: costStaffLoad(),
-        name: "Bigger Crates",
-        desc: "Every hauler carries " + (3 + staffCarryBonus()) + " \u2192 " +
-              (4 + staffCarryBonus()) + " at a time" };
-    }
-    return null;
+  // A crew is trained at the desk in the building it works in. Every staff
+  // update passes its own site, so nothing reads "whichever site the player
+  // happens to be standing on" \u2014 workers keep their training while you travel.
+  function staffOf(site) {
+    var all = state.staff || (state.staff = {});
+    return all[site] || (all[site] = { speedLv: 0, loadLv: 0 });
   }
+  function staffSpeedLv(site) { return staffOf(site).speedLv || 0; }
+  function staffLoadLv(site) { return staffOf(site).loadLv || 0; }
+  function costStaffSpeed(site) {
+    return Math.round(HR_DESKS[site].base * 4000 * Math.pow(3.4, staffSpeedLv(site)));
+  }
+  function costStaffLoad(site) {
+    return Math.round(HR_DESKS[site].base * 6000 * Math.pow(3.5, staffLoadLv(site)));
+  }
+  // one multiplier and one carry bonus per crew. Four levels taking a site's
+  // staff up to a bit over twice their starting pace.
+  function staffSpeedMult(site) {
+    return (1 + 0.32 * staffSpeedLv(site)) * (perkActive("crew") ? 1.5 : 1);
+  }
+  function staffCarryBonus(site) { return staffLoadLv(site); }
   // priced off what a bud currently fetches, so a promotion stays worth
   // running at every stage rather than going trivial once strains scale up
   function costPromo() { return Math.round(sellValue() * 150); }
@@ -3154,6 +3402,7 @@
   var LOUNGE_SHELF_Z  = LOUNGE_CZ - LOUNGE_HALF_Z + 3;   // ...leaving room to work behind it
   var LOUNGE_TIER_PAD = { x: 13, z: LOUNGE_CZ + 15 };    // by the door, clear of the tables
   var LOUNGE_SERVER_ZONE = { x: -13, z: LOUNGE_CZ + 15 };  // mirrored on the other side of the door
+  var LOUNGE_HR_ZONE = { x: 13, z: LOUNGE_CZ + 8 };        // back office: trains barbacks and servers
 
   // Activation order. Slots 4 and 5 are the bigger party tables the top
   // tier brings in — four seats each instead of two.
@@ -3418,6 +3667,49 @@
         g.add(stoolLeg);
       });
     });
+
+    // ---- back-office desk: the lounge's own HR ----
+    // Built in here rather than once up front so it reskins with the room —
+    // a scuffed dive-bar desk becomes a gold-trimmed one at the top tier.
+    // Barbacks and servers read staffSpeedMult("lounge"), which only this
+    // desk moves; the shop and farm keep their own books.
+    (function loungeHrDesk() {
+      var hy = LOUNGE_GROUND_TOP;
+      var deskTop = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.14, 1.5), topMat);
+      deskTop.position.set(LOUNGE_HR_ZONE.x, hy + 1.5, LOUNGE_HR_ZONE.z);
+      deskTop.castShadow = true; deskTop.receiveShadow = true;
+      g.add(deskTop);
+      var body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.44, 1.3), barMat);
+      body.position.set(LOUNGE_HR_ZONE.x, hy + 0.72, LOUNGE_HR_ZONE.z);
+      body.castShadow = true;
+      g.add(body);
+      if (trimMat) {
+        var band = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.1, 1.36), trimMat);
+        band.position.set(LOUNGE_HR_ZONE.x, hy + 1.3, LOUNGE_HR_ZONE.z);
+        g.add(band);
+      }
+      var ledger = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.07, 0.82), M.packB);
+      ledger.position.set(LOUNGE_HR_ZONE.x - 0.5, hy + 1.61, LOUNGE_HR_ZONE.z + 0.1);
+      ledger.rotation.y = 0.26;
+      g.add(ledger);
+      var lampPost = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.6, 8),
+        trimMat || M.metalRack);
+      lampPost.position.set(LOUNGE_HR_ZONE.x + 0.85, hy + 1.87, LOUNGE_HR_ZONE.z - 0.2);
+      g.add(lampPost);
+      var shade = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.3, 12), M.lightPanel);
+      shade.position.set(LOUNGE_HR_ZONE.x + 0.85, hy + 2.2, LOUNGE_HR_ZONE.z - 0.2);
+      shade.rotation.x = Math.PI;
+      g.add(shade);
+      var chair = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.14, 12), M.couch);
+      chair.position.set(LOUNGE_HR_ZONE.x, hy + 0.9, LOUNGE_HR_ZONE.z + 1.5);
+      chair.castShadow = true;
+      g.add(chair);
+      addGlow(g, LOUNGE_HR_ZONE.x, hy + 1.6, LOUNGE_HR_ZONE.z, 3.2, 0xffd98a, 0.26);
+      var hrLbl = textSprite("HR OFFICE", "#ffe9b0");
+      hrLbl.scale.set(2.6, 0.58, 1);
+      hrLbl.position.set(LOUNGE_HR_ZONE.x, hy + 3.0, LOUNGE_HR_ZONE.z);
+      g.add(hrLbl);
+    })();
   }
   rebuildLounge();
 
@@ -3714,7 +4006,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(PICK_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(PICK_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -3824,7 +4116,7 @@
       if (!hired) { b.srcIdx = -1; b.srcType = ""; b.carrying = 0; continue; }
 
       var walking = false;
-      var cap = PICK_CARRY + staffCarryBonus();
+      var cap = PICK_CARRY + staffCarryBonus("shop");
 
       if (b.phase === "toSource") {
         if (b.carrying >= cap) { b.phase = "toPallet"; b.srcIdx = -1; b.srcType = ""; continue; }
@@ -3956,7 +4248,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(FIELD_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(FIELD_SPEED * staffSpeedMult("farm") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -3998,7 +4290,7 @@
       if (!hired) { b.plotIdx = -1; b.mode = ""; b.carrying = 0; continue; }
 
       var walking = false;
-      var cap = FIELD_CARRY + staffCarryBonus();
+      var cap = FIELD_CARRY + staffCarryBonus("farm");
 
       if (b.phase === "toPlot") {
         if (b.carrying >= cap) { b.phase = "toSilo"; b.plotIdx = -1; continue; }
@@ -4111,7 +4403,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(HAUL_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(HAUL_SPEED * staffSpeedMult("farm") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -4244,10 +4536,10 @@
     scene.add(g);
   })();
 
-  // ---- a second HR desk out at the farm, same panel as the shop's ----
-  // Field hands and the hauler already read staffSpeedMult()/staffCarryBonus(),
-  // the same globals the shop's desk sets — this is a folding-table version
-  // of the same office so a farm-only session never has to travel for it.
+  // ---- the farm's own HR desk ----
+  // Same panel shell as the shop's, but its own set of books: field hands and
+  // the hauler read staffSpeedMult("farm"), which only this folding table
+  // moves. A farm-only session never has to travel to train its crew.
   (function farmHrDesk() {
     var g = new THREE.Group();
     var y = FARM_GROUND_TOP;
@@ -5072,7 +5364,7 @@
   // like the indoor beds. That is what will let weather change the rate
   // partway through a grow without rewriting every plot's timer.
   function farmGrowMult() {
-    return weatherNow().grow * (boostActive() ? 2 : 1) * farmGrowRateMult();
+    return weatherNow().grow * (boostActive() ? 2 : 1) * farmGrowRateMult() * perkProdMult();
   }
   // Growth across a stretch that may span several weather slots. The offline
   // catch-up needs this: it cannot just multiply elapsed time by the sky it
@@ -5880,7 +6172,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(BOT_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(BOT_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -6028,7 +6320,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(RUN_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(RUN_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -6046,7 +6338,7 @@
       var walking = false;
       if (b.phase === "toBed") {
         // full load, or nothing left to pick — take what we have out front
-        if (b.carrying >= RUN_CARRY + staffCarryBonus()) { b.phase = "toCounter"; b.bedIdx = -1; continue; }
+        if (b.carrying >= RUN_CARRY + staffCarryBonus("shop")) { b.phase = "toCounter"; b.bedIdx = -1; continue; }
         if (b.bedIdx < 0 || b.bedIdx >= state.plotsUnlocked ||
             state.plots[b.bedIdx].state !== "ready") {
           b.bedIdx = runFreeBed(b);
@@ -6176,7 +6468,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(EXT_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(EXT_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -6213,7 +6505,7 @@
         // harvest a ready bed to feed the presses, or draw on the farm
         // intake pile when the beds are bare. bedTarget === INTAKE_TARGET
         // is the sentinel for "go to the intake pallet instead".
-        if (b.holdingBud >= EXT_CARRY + staffCarryBonus()) { b.phase = "toPress"; b.target = -1; continue; }
+        if (b.holdingBud >= EXT_CARRY + staffCarryBonus("shop")) { b.phase = "toPress"; b.target = -1; continue; }
         var intakeOk = (state.intake || 0) > 0;
         var claimOk = b.bedTarget === INTAKE_TARGET ? intakeOk
           : (b.bedTarget >= 0 && b.bedTarget < state.plotsUnlocked &&
@@ -6272,7 +6564,7 @@
 
       } else if (b.phase === "toReady") {
         // collect finished dabs, then run them out front
-        if (b.carrying >= EXT_CARRY + staffCarryBonus()) { b.phase = "toCase"; b.target = -1; continue; }
+        if (b.carrying >= EXT_CARRY + staffCarryBonus("shop")) { b.phase = "toCase"; b.target = -1; continue; }
         if (b.target < 0 || b.target >= builtPresses || state.presses[b.target].dabs <= 0) {
           b.target = extFreePress(b, function (pp) { return pp.dabs > 0; });
         }
@@ -6388,7 +6680,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(BAK_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(BAK_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -6438,7 +6730,7 @@
 
       if (b.phase === "toDab") {
         // collect dabs off the press line to feed the ovens
-        if (b.holdingDab >= BAK_CARRY + staffCarryBonus()) { b.phase = "toOven"; b.pressTarget = -1; continue; }
+        if (b.holdingDab >= BAK_CARRY + staffCarryBonus("shop")) { b.phase = "toOven"; b.pressTarget = -1; continue; }
         if (b.pressTarget < 0 || b.pressTarget >= pressOwned() ||
             state.presses[b.pressTarget].dabs <= 0) {
           b.pressTarget = bakFreePress(b);
@@ -6488,7 +6780,7 @@
 
       } else if (b.phase === "toBaked") {
         // gather what's finished baking, then run it out to the counter
-        if (b.carrying >= BAK_CARRY + staffCarryBonus()) { b.phase = "toCounter"; b.target = -1; continue; }
+        if (b.carrying >= BAK_CARRY + staffCarryBonus("shop")) { b.phase = "toCounter"; b.target = -1; continue; }
         if (b.target < 0 || b.target >= builtOvens || state.ovens[b.target].cooked <= 0) {
           b.target = bakFreeOven(b, function (oo) { return oo.cooked > 0; });
         }
@@ -7080,7 +7372,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(BARBACK_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(BARBACK_SPEED * staffSpeedMult("lounge") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -7105,7 +7397,7 @@
       if (!hired) { b.carrying = 0; b.palletIdx = -1; b.phase = "toPallet"; continue; }
 
       var walking = false;
-      var cap = BARBACK_CARRY + staffCarryBonus();
+      var cap = BARBACK_CARRY + staffCarryBonus("lounge");
 
       if (b.phase === "toPallet") {
         if (b.carrying >= cap) { b.phase = "toBar"; b.palletIdx = -1; }
@@ -7241,7 +7533,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.35) return true;
-    var step = Math.min(SERVER_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(SERVER_SPEED * staffSpeedMult("lounge") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -7311,7 +7603,7 @@
       if (!hired) { b.carrying = 0; b.targetNpc = -1; b.phase = "toShelf"; continue; }
 
       var walking = false;
-      var cap = SERVER_CARRY + staffCarryBonus();
+      var cap = SERVER_CARRY + staffCarryBonus("lounge");
 
       if (b.phase === "toShelf") {
         if (!serverTargetValid(b)) {
@@ -7819,7 +8111,7 @@
     var dx = tx - b.pos.x, dz = tz - b.pos.z;
     var d = Math.hypot(dx, dz);
     if (d < 0.3) return true;
-    var step = Math.min(DRV_SPEED * staffSpeedMult() * dt, d);
+    var step = Math.min(DRV_SPEED * staffSpeedMult("shop") * dt, d);
     b.pos.x += (dx / d) * step;
     b.pos.z += (dz / d) * step;
     b.obj.rotation.y = Math.atan2(dx, dz);
@@ -7869,7 +8161,7 @@
       var walking = false;
 
       if (b.phase === "toPallet") {
-        if (b.carrying >= DRV_CARRY + staffCarryBonus()) { b.phase = "toTruck"; b.palletIdx = -1; continue; }
+        if (b.carrying >= DRV_CARRY + staffCarryBonus("shop")) { b.phase = "toTruck"; b.palletIdx = -1; continue; }
         if (b.palletIdx < 0 || palletCount(PALLET_DEFS[b.palletIdx].kind) <= 0) {
           b.palletIdx = drvFreePallet(b);
         }
@@ -8178,6 +8470,60 @@
       renderHud();
       saveState();
     }
+  }
+
+  // ---- the mystery box ----
+  var mysteryBox = new THREE.Group();
+  (function buildMysteryBox() {
+    var crate = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 1.7), M.pallet);
+    crate.castShadow = true;
+    mysteryBox.add(crate);
+    // ribbon: two thin bands crossing the crate, so it reads as a gift and
+    // not as one more supply pallet
+    [0, Math.PI / 2].forEach(function (rot) {
+      var band = new THREE.Mesh(new THREE.BoxGeometry(1.76, 1.76, 0.26), M.neonPink);
+      band.rotation.y = rot;
+      mysteryBox.add(band);
+    });
+    var lid = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.22, 1.86), M.woodDark);
+    lid.position.y = 0.9;
+    lid.castShadow = true;
+    mysteryBox.add(lid);
+    var mark = textSprite("?", "#ffe066");
+    mark.scale.set(1.1, 1.1, 1);
+    mark.position.set(0, 0.05, 0.95);
+    mysteryBox.add(mark);
+    addGlow(mysteryBox, 0, 0.3, 0, 4.0, 0xffcb2e, 0.5);
+    var tag = textSprite("MYSTERY BOX", "#ffe9a8");
+    tag.scale.set(3.0, 0.66, 1);
+    tag.position.y = 2.0;
+    mysteryBox.add(tag);
+    mysteryBox.visible = false;
+    scene.add(mysteryBox);
+  })();
+
+  // The crate is a walk-up, not a pay square: standing near it opens a card
+  // and nothing is spent until a button is pressed. `mysteryNear` is the edge
+  // latch — without it the card would re-open the instant you dismissed it
+  // while still standing there.
+  var mysteryNear = false;
+  function updateMysteryBox(now) {
+    var live = mysteryReady();
+    mysteryBox.visible = live;
+    if (!live) {
+      if (mysteryNear) { closeMystery(); mysteryNear = false; }
+      return;
+    }
+    var spot = mysterySpot();
+    var baseY = (state.site === "farm" ? FARM_GROUND_TOP : state.site === "lounge" ? LOUNGE_GROUND_TOP : 0) + 1.15;
+    mysteryBox.position.set(spot.x, baseY + Math.sin(now * 0.0026) * 0.16, spot.z);
+    mysteryBox.rotation.y = now * 0.0007;
+
+    var near = d2(player.pos.x, player.pos.z, spot.x, spot.z) <= 2.2 + PLAYER_RADIUS;
+    if (near && !mysteryNear) openMystery();
+    if (!near && mysteryNear) closeMystery();
+    mysteryNear = near;
+    if (near && mysteryOverlay.classList.contains("show")) renderMysteryCard();
   }
 
   function updateCashDrops(now, dt) {
@@ -8690,6 +9036,9 @@
   var boostVal = document.getElementById("boost-val");
   var promoChip = document.getElementById("promo-chip");
   var weatherChip = document.getElementById("weather-chip");
+  var perkChip = document.getElementById("perk-chip");
+  var perkIcon = document.getElementById("perk-icon");
+  var perkVal = document.getElementById("perk-val");
   var weatherIcon = document.getElementById("weather-icon");
   var weatherVal = document.getElementById("weather-val");
   var promoVal = document.getElementById("promo-val");
@@ -8738,6 +9087,14 @@
       weatherVal.textContent = sn.name + " · " + wx.label + " " + weatherSecsLeft() + "s";
     } else {
       weatherChip.classList.remove("on");
+    }
+    var pk = perkDef();
+    if (pk) {
+      perkChip.classList.add("on");
+      perkIcon.textContent = pk.icon;
+      perkVal.textContent = pk.name + " " + perkSecsLeft() + "s";
+    } else {
+      perkChip.classList.remove("on");
     }
     levelVal.textContent = storeLevel();
   }
@@ -9786,7 +10143,9 @@
     updatePressPads(now);
     updateOvenPads(now);
     updateSoilBag(now, dt);
+    updateMysteryBox(now);
     updateHrProximity();
+    checkDeedAffordable();
     updateStack(now);
     updateCounterPile(now, dt);
     updateDabPile(now);
@@ -9925,81 +10284,180 @@
     if (!s || s.unlocked() || state.cash < s.deedCost) return;
     state.cash -= s.deedCost;
     s.onUnlock();
+    // owning it and knowing how to reach it are two different lessons
+    nudgeMap(true);
+    toast("🗺 Travel between your locations from the map, any time.");
     renderHud(); renderMap(); renderUpgrades(); saveState();
   }
 
-  function openMap() { renderMap(); mapOverlay.classList.add("show"); }
+  // ---- pointing the player at the map ----
+  // Nothing in the world hints that a second location exists; the only door to
+  // it is a 46px glyph in the corner. So the first time the bankroll covers a
+  // deed we say so out loud and light the button up, and again right after a
+  // deed is signed, when "how do I actually get there?" is the next question.
+  var mapBtn = document.getElementById("map-btn");
+  function nudgeMap(on) {
+    state.mapNudge = !!on;
+    mapBtn.classList.toggle("nudge", !!on);
+  }
+  function checkDeedAffordable() {
+    for (var i = 0; i < SITE_LIST.length; i++) {
+      var s = SITE_LIST[i];
+      if (!s.deedCost || s.unlocked() || state.deedSeen[s.id]) continue;
+      if (state.cash < s.deedCost) continue;
+      state.deedSeen[s.id] = true;
+      nudgeMap(true);
+      toast("🗺 " + s.icon + " " + s.name + " is up for sale — check the map!");
+      saveState();
+      return;   // one headline at a time, even if two come into reach together
+    }
+  }
+
+  function openMap() { renderMap(); mapOverlay.classList.add("show"); nudgeMap(false); }
   function closeMap() { mapOverlay.classList.remove("show"); }
-  document.getElementById("map-btn").addEventListener("click", openMap);
+  mapBtn.addEventListener("click", openMap);
   document.getElementById("map-close").addEventListener("click", closeMap);
   mapOverlay.addEventListener("click", function (e) { if (e.target === mapOverlay) closeMap(); });
 
+  // ---- mystery box card ----
+  var mysteryOverlay = document.getElementById("mystery-overlay");
+  var mysteryList = document.getElementById("mystery-list");
+  var mysteryBuy = document.getElementById("mystery-buy");
+  var mysteryNote = document.getElementById("mystery-note");
+  (function () {
+    // the possible perks are listed so the price can be judged; which one you
+    // get is still a coin toss, which is the whole appeal
+    for (var i = 0; i < MYSTERY_PERKS.length; i++) {
+      var p = MYSTERY_PERKS[i];
+      var li = document.createElement("li");
+      var b = document.createElement("b");
+      b.textContent = p.icon + " " + p.name;
+      var sp = document.createElement("span");
+      sp.textContent = p.blurb;
+      li.appendChild(b); li.appendChild(sp);
+      mysteryList.appendChild(li);
+    }
+  })();
+
+  function renderMysteryCard() {
+    // The price is locked in when the crate lands, not recomputed each frame:
+    // selling a few buds while the card is open must not move the number
+    // under the player's thumb.
+    var cost = state.mystery.cost || 0;
+    mysteryBuy.textContent = "$" + fmt(cost);
+    mysteryBuy.disabled = state.cash < cost;
+    mysteryNote.textContent = state.cash < cost
+      ? "One perk at random, 10 minutes. You're $" + fmt(cost - state.cash) + " short."
+      : "One perk, chosen at random, for 10 minutes.";
+  }
+  function openMystery() {
+    if (!state.mystery.cost) { state.mystery.cost = mysteryPrice(); saveState(); }
+    renderMysteryCard();
+    mysteryOverlay.classList.add("show");
+  }
+  function closeMystery() { mysteryOverlay.classList.remove("show"); }
+  document.getElementById("mystery-pass").addEventListener("click", closeMystery);
+  mysteryOverlay.addEventListener("click", function (e) {
+    if (e.target === mysteryOverlay) closeMystery();
+  });
+  mysteryBuy.addEventListener("click", function () {
+    var cost = state.mystery.cost || 0;
+    if (!mysteryReady() || state.cash < cost) return;
+    state.cash -= cost;
+    var perk = MYSTERY_PERKS[Math.floor(Math.random() * MYSTERY_PERKS.length)];
+    state.mystery.perkKind = perk.kind;
+    state.mystery.perkUntil = Date.now() + MYSTERY_PERK_MS;
+    // cost clears with the crate so the next one is priced at that day's rates
+    state.mystery.cost = 0;
+    state.mystery.nextAt = Date.now() + MYSTERY_COOLDOWN_MS;
+    var spot = mysterySpot();
+    addFloater(spot.x, 2.8, spot.z, perk.icon + " " + perk.name.toUpperCase(), "#ffe066");
+    toast(perk.icon + " " + perk.name + " — " + perk.blurb.toLowerCase() + ", 10 min!");
+    closeMystery();
+    mysteryNear = false;
+    renderHud(); saveState();
+  });
+
   // ---- HR panel ----
   var hrOverlay = document.getElementById("hr-overlay");
+  var hrTitle = document.getElementById("hr-title");
+  var hrSub = document.getElementById("hr-sub");
   var hrSpeedDesc = document.getElementById("hr-speed-desc");
   var hrLoadDesc = document.getElementById("hr-load-desc");
   var hrSpeedBuy = document.getElementById("hr-speed-buy");
   var hrLoadBuy = document.getElementById("hr-load-buy");
 
+  // Whichever desk you walked up to is the crew you are training. It is
+  // latched at open() rather than read live so that nothing can change under
+  // the panel mid-purchase.
+  var hrSite = "shop";
   function renderHrPanel() {
-    var sp = state.staffSpeedLv || 0, ld = state.staffLoadLv || 0;
+    var site = hrSite, desk = HR_DESKS[site];
+    var sp = staffSpeedLv(site), ld = staffLoadLv(site);
+    hrTitle.textContent = desk.title;
+    hrSub.textContent = desk.who + ". Other locations keep their own books.";
     if (sp >= MAX_STAFF_SPEED_LV) {
-      hrSpeedDesc.textContent = "Maxed — your crew is as quick as it gets";
+      hrSpeedDesc.textContent = "Maxed — " + desk.crew + " is as quick as it gets";
       hrSpeedBuy.textContent = "MAX";
       hrSpeedBuy.disabled = true;
     } else {
       hrSpeedDesc.textContent = "Lv." + sp + "/" + MAX_STAFF_SPEED_LV + " · walk " +
-        Math.round((staffSpeedMult() - 1) * 100) + "% → " +
-        Math.round((staffSpeedMult() + 0.18 - 1) * 100) + "% faster";
-      hrSpeedBuy.textContent = "$" + fmt(costStaffSpeed());
-      hrSpeedBuy.disabled = state.cash < costStaffSpeed();
+        Math.round((staffSpeedMult(site) - 1) * 100) + "% → " +
+        Math.round((staffSpeedMult(site) + 0.32 - 1) * 100) + "% faster";
+      hrSpeedBuy.textContent = "$" + fmt(costStaffSpeed(site));
+      hrSpeedBuy.disabled = state.cash < costStaffSpeed(site);
     }
     if (ld >= MAX_STAFF_LOAD_LV) {
-      hrLoadDesc.textContent = "Maxed — your crew carries all it can";
+      hrLoadDesc.textContent = "Maxed — " + desk.crew + " carries all it can";
       hrLoadBuy.textContent = "MAX";
       hrLoadBuy.disabled = true;
     } else {
       hrLoadDesc.textContent = "Lv." + ld + "/" + MAX_STAFF_LOAD_LV + " · haul " +
-        (3 + staffCarryBonus()) + " → " + (4 + staffCarryBonus()) + " per trip";
-      hrLoadBuy.textContent = "$" + fmt(costStaffLoad());
-      hrLoadBuy.disabled = state.cash < costStaffLoad();
+        (3 + staffCarryBonus(site)) + " → " + (4 + staffCarryBonus(site)) + " per trip";
+      hrLoadBuy.textContent = "$" + fmt(costStaffLoad(site));
+      hrLoadBuy.disabled = state.cash < costStaffLoad(site);
     }
   }
-  function openHr() { renderHrPanel(); hrOverlay.classList.add("show"); }
+  function openHr(site) { hrSite = site; renderHrPanel(); hrOverlay.classList.add("show"); }
   function closeHr() { hrOverlay.classList.remove("show"); }
   document.getElementById("hr-close").addEventListener("click", closeHr);
   hrOverlay.addEventListener("click", function (e) { if (e.target === hrOverlay) closeHr(); });
   hrSpeedBuy.addEventListener("click", function () {
-    var c = costStaffSpeed();
-    if (state.cash < c || (state.staffSpeedLv || 0) >= MAX_STAFF_SPEED_LV) return;
+    var site = hrSite, c = costStaffSpeed(site);
+    if (state.cash < c || staffSpeedLv(site) >= MAX_STAFF_SPEED_LV) return;
     state.cash -= c;
-    state.staffSpeedLv = (state.staffSpeedLv || 0) + 1;
-    toast("👟 Crew kitted out — everyone moves quicker!");
+    staffOf(site).speedLv = staffSpeedLv(site) + 1;
+    toast("👟 " + HR_DESKS[site].crew + " kitted out — they move quicker!");
     renderHud(); renderHrPanel(); saveState();
   });
   hrLoadBuy.addEventListener("click", function () {
-    var c = costStaffLoad();
-    if (state.cash < c || (state.staffLoadLv || 0) >= MAX_STAFF_LOAD_LV) return;
+    var site = hrSite, c = costStaffLoad(site);
+    if (state.cash < c || staffLoadLv(site) >= MAX_STAFF_LOAD_LV) return;
     state.cash -= c;
-    state.staffLoadLv = (state.staffLoadLv || 0) + 1;
-    toast("🧳 Bigger crates — the crew hauls more per trip!");
+    staffOf(site).loadLv = staffLoadLv(site) + 1;
+    toast("🧳 Bigger crates — " + HR_DESKS[site].crew + " hauls more per trip!");
     renderHud(); renderHrPanel(); saveState();
   });
 
-  // walking onto the desk opens it; walking away closes it again. The farm
-  // gets a second desk into the SAME panel — staffSpeedMult()/staffCarryBonus()
-  // already apply to field hands and the hauler, so "make my workers
-  // faster" only needed a way to reach the office without a trip to the shop.
+  // Walking onto a desk opens it; walking away closes it again. Every site has
+  // its own desk and its own books — training the farm's hands no longer
+  // quietly kits out the shop floor and the lounge as well.
   var hrWasNear = false;
   function updateHrProximity() {
-    var zone = state.site === "farm" ? FARM_HR_ZONE : HR_ZONE;
+    var zone = hrZoneFor(state.site);
     var near = d2(player.pos.x, player.pos.z, zone.x, zone.z) <= 3.0 + PLAYER_RADIUS;
-    if (near && !hrWasNear) openHr();
+    // Re-open on a site change as well as on arrival: travelling from one
+    // desk straight onto another leaves `near` true the whole way across, so
+    // an arrival-only trigger would keep showing — and spending on — the
+    // crew you just left behind.
+    if (near && (!hrWasNear || hrSite !== state.site)) openHr(state.site);
     if (!near && hrWasNear) closeHr();
     hrWasNear = near;
     if (near && hrOverlay.classList.contains("show")) renderHrPanel();
   }
 
+  // the nudge survives a reload — closing the tab is not "I saw the map"
+  nudgeMap(state.mapNudge);
   // a save restored at Upscale or above should already be in black tie
   refreshLoungeFit();
   updateLoungeStockVisuals();
@@ -10013,6 +10471,54 @@
   setInterval(saveState, 4000);
   window.addEventListener("beforeunload", saveState);
   setTimeout(function () { toast("Joystick or tap the ground to move"); }, 400);
+
+  // ---- offline shell ----
+  // The whole game is this one file, so caching it is the entire job: after a
+  // first visit it opens with no connection at all, and on a phone it can be
+  // added to the home screen and played like an installed app.
+  //
+  // Saves need no syncing — they are localStorage, which is local by nature
+  // and unaffected by being offline. There is no account and no server to
+  // reconcile against; a save never leaves the device it was made on.
+  //
+  // The update path is explicit on purpose. sw.js serves the page
+  // network-first, so an online reload always shows what is deployed, and a
+  // newer worker waits rather than seizing a running tab.
+  (function registerOfflineShell() {
+    if (!("serviceWorker" in navigator)) return;
+    if (location.protocol !== "http:" && location.protocol !== "https:") return;
+    var bar = document.getElementById("update-bar");
+    var reloading = false;
+
+    function offerUpdate(worker) {
+      bar.classList.add("show");
+      document.getElementById("update-reload").onclick = function () {
+        worker.postMessage({ type: "skipWaiting" });
+      };
+    }
+
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (reloading) return;      // Chrome can fire this more than once
+      reloading = true;
+      location.reload();
+    });
+
+    navigator.serviceWorker.register("sw.js").then(function (reg) {
+      // already parked and waiting from a previous visit
+      if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
+      reg.addEventListener("updatefound", function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", function () {
+          // no existing controller means this is the very first install —
+          // there is nothing to update from, so stay quiet
+          if (sw.state === "installed" && navigator.serviceWorker.controller) offerUpdate(sw);
+        });
+      });
+    }).catch(function () {
+      // offline play is a bonus; failing to register must never break the game
+    });
+  })();
 })();
 </script>
 </body>
