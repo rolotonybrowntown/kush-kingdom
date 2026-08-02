@@ -921,6 +921,93 @@
   function loungeTierDef() { return LOUNGE_TIERS[loungeTier()]; }
   function loungePopMult() { return loungeTierDef().pop; }
 
+  // ===================================================================
+  //  INFUSED PRODUCTS FACTORY
+  // ===================================================================
+  // Placed far enough past the Lounge to stay outside its fog. Measured, not
+  // estimated: standing at the Lounge's deepest reachable z (-780.5) puts the
+  // camera at -761.3 with fog.far 168, so the sky closes in at -929.3. The
+  // factory's nearest geometry — the front edge of the apron — is -1008,
+  // leaving 78.7 units of slack. Looking the other way the Lounge sits BEHIND
+  // the factory camera and is frustum-culled, so it needs no margin of its own.
+  // Re-measure this if either room's camDist or footprint changes.
+  var FACTORY_CZ = -1040;
+  var FACTORY_HALF_X = 30, FACTORY_HALF_Z = 26;   // a wide shed; the line runs across it
+  var FACTORY_GROUND_TOP = FLOOR_TOP_BACK;
+  var FACTORY_DEED_COST = 40000000;
+  function factoryUnlocked() { return !!(state.factory && state.factory.unlocked); }
+
+  // ---- what the line makes ----
+  // Three stations sit along ONE conveyor. Unlike the shop's presses and
+  // ovens — which each hold their own hopper and run their own queue — these
+  // share a single belt: raw bud enters at the head, each station pulls from
+  // the belt as it passes and puts a finished product back down, and whatever
+  // reaches the end is what ships. That is the whole point of the place.
+  var FACTORY_STATIONS = [
+    { id: "roller", kind: "preroll", name: "Pre-Roll Roller", icon: "🚬",
+      color: 0xe8dcc0, blurb: "Rolls bud into pre-rolls",
+      base: 4000000, step: 2.4, rate: 0.55, raw: 1.0 },
+    { id: "filler", kind: "vape", name: "Vape Filler", icon: "💨",
+      color: 0x7fd6e8, blurb: "Fills cartridges with distillate",
+      base: 12000000, step: 2.6, rate: 0.34, raw: 1.6 },
+    { id: "brewer", kind: "drink", name: "Drink Brewer", icon: "🥤",
+      color: 0xff8fbf, blurb: "Brews infused drinks — the Lounge wants these",
+      base: 30000000, step: 2.8, rate: 0.26, raw: 2.2 },
+  ];
+  var MAX_STATION_LV = 5;
+  var FACTORY_KINDS = FACTORY_STATIONS.map(function (s) { return s.kind; });
+  function stationDefById(id) {
+    for (var i = 0; i < FACTORY_STATIONS.length; i++) {
+      if (FACTORY_STATIONS[i].id === id) return FACTORY_STATIONS[i];
+    }
+    return null;
+  }
+  function stationLv(id) { return (state.factory && state.factory.stations[id]) || 0; }
+  function stationCost(id) {
+    var d = stationDefById(id);
+    return Math.round(d.base * Math.pow(d.step, stationLv(id)));
+  }
+  // Level 0 is "not built yet" and produces nothing; every level after that
+  // is a straight multiple of the station's base rate.
+  function stationRate(id) { return stationLv(id) * stationDefById(id).rate; }
+
+  // Infused goods are worth more than what goes into them, and they track the
+  // strain curve the same way dabs and edibles do so they never fall behind.
+  var BASE_PREROLL_VALUE = 90;
+  var BASE_VAPE_VALUE = 420;
+  var BASE_DRINK_VALUE = 260;
+  function infusedBase(kind) {
+    return kind === "vape" ? BASE_VAPE_VALUE
+         : kind === "drink" ? BASE_DRINK_VALUE : BASE_PREROLL_VALUE;
+  }
+  function infusedValue(kind) {
+    return infusedBase(kind) * (sellValue() / BASE_SELL_VALUE) *
+           (1 + 0.3 * ((state.factory && state.factory.qualityLv) || 0));
+  }
+  function costFactoryQuality() {
+    return Math.round(20000000 * Math.pow(2.2, (state.factory && state.factory.qualityLv) || 0));
+  }
+
+  // ---- the pipeline in from the farm ----
+  // The silo already feeds the shop through the courier. A second draw on it
+  // is a real cost, so it is an explicit upgrade with a rate you can read,
+  // not a silent tap that quietly starves the dispensary.
+  var FACTORY_RAW_CAP = 240;
+  var MAX_PIPE_LV = 5;
+  function pipeLv() { return (state.factory && state.factory.pipeLv) || 0; }
+  function pipeRate() { return pipeLv() * 1.6; }        // bud per second off the silo
+  function costPipe() { return Math.round(6000000 * Math.pow(2.3, pipeLv())); }
+
+  // ---- shipping ----
+  // Wholesale only, and at a volume the dock cannot touch: the dock moves 36
+  // to a pallet by hand, this clears a whole container at a time.
+  var FACTORY_BIN_CAP = 400;
+  var MAX_SHIP_LV = 5;
+  function shipLv() { return (state.factory && state.factory.shipLv) || 1; }
+  function shipLoad() { return 120 + 90 * (shipLv() - 1); }   // units a container takes
+  function shipSecs() { return Math.max(6, 22 - 2.6 * (shipLv() - 1)); }
+  function costShip() { return Math.round(10000000 * Math.pow(2.4, shipLv() - 1)); }
+
   var SITES = {
     shop: {
       id: "shop", name: "Kush Kingdom", icon: "🏪",
@@ -985,8 +1072,38 @@
         toast("🍸 Deed signed — the Downtown Lounge is yours!");
       },
     },
+    factory: {
+      id: "factory", name: "Infused Products", icon: "🏭",
+      skyColor: new THREE.Color(0x6b7686),   // overcast industrial estate
+      sub: function () {
+        if (!factoryUnlocked()) return "Buy the deed to build the production line";
+        var built = 0;
+        for (var i = 0; i < FACTORY_STATIONS.length; i++) {
+          if (stationLv(FACTORY_STATIONS[i].id) > 0) built++;
+        }
+        return built === 0 ? "Line is bare — build a station"
+             : built + "/" + FACTORY_STATIONS.length + " stations · " +
+               lineRate().toFixed(1) + " units/sec";
+      },
+      spawn: { x: 0, z: FACTORY_CZ + FACTORY_HALF_Z - 7 },
+      camDist: function () { return 54; },   // wide shed, the whole line on screen
+      groundOf: function () { return factoryGround; },
+      unlocked: factoryUnlocked,
+      bounds: function () {
+        return {
+          minX: -FACTORY_HALF_X + 1.5, maxX: FACTORY_HALF_X - 1.5,
+          minZ: FACTORY_CZ - FACTORY_HALF_Z + 1.5, maxZ: FACTORY_CZ + FACTORY_HALF_Z - 1.5,
+        };
+      },
+      deedCost: FACTORY_DEED_COST,
+      onUnlock: function () {
+        state.factory.unlocked = true;
+        // the deed buys the shed and the belt; the stations are yours to build
+        toast("🏭 Deed signed — the Infused Products Factory is yours!");
+      },
+    },
   };
-  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge];
+  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory];
   function curSite() { return SITES[state.site] || SITES.shop; }
 
   // what each level physically adds, so the upgrade card promises something
@@ -1074,9 +1191,13 @@
               who: "Trains barbacks and servers" },
   };
   var HR_SITES = ["shop", "farm", "lounge"];
+  // The factory has no hired hands — the line IS the labour — so it gets no
+  // desk of its own and hrZoneFor parks its zone somewhere unreachable rather
+  // than silently handing the player the shop's books at another site.
   function hrZoneFor(site) {
     if (site === "farm") return FARM_HR_ZONE;
     if (site === "lounge") return LOUNGE_HR_ZONE;
+    if (site === "factory") return { x: 1e6, z: 1e6 };
     return HR_ZONE;
   }
   var MAX_EXTRACTORS = 3;
@@ -1186,8 +1307,16 @@
   // too, automatically, with no separate lounge value-upgrade track needed.
   var LOUNGE_MARKUP = 2.5;
   var LOUNGE_TIP_MIN = 0.10, LOUNGE_TIP_MAX = 0.30;
+  // The three kinds the shop makes and the dock ships. Drinks are NOT here:
+  // they come off the factory line and only ever reach the bar.
+  var SHOP_KINDS = ["bud", "dab", "edible"];
+  function isShopKind(k) { return SHOP_KINDS.indexOf(k) >= 0; }
+  // What the bar can stock. Drinks join the menu once the factory brews them.
+  var LOUNGE_KINDS = ["bud", "dab", "edible", "drink"];
   function loungeValue(kind) {
-    var base = kind === "edible" ? edibleValue() : kind === "dab" ? dabValue() : sellValue();
+    var base = kind === "drink" ? infusedValue("drink")
+             : kind === "edible" ? edibleValue()
+             : kind === "dab" ? dabValue() : sellValue();
     return base * LOUNGE_MARKUP;
   }
   function loungeTipPct() { return LOUNGE_TIP_MIN + Math.random() * (LOUNGE_TIP_MAX - LOUNGE_TIP_MIN); }
@@ -1497,11 +1626,22 @@
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       // ---- empire ----
       site: "shop",                     // which location you are standing in
-      sitePos: { shop: null, farm: null, lounge: null },  // where you left off at each one
+      sitePos: { shop: null, farm: null, lounge: null, factory: null },  // where you left off at each one
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
-      loungeIntake: { bud: 0, dab: 0, edible: 0 },   // stock delivered to the lounge, also its sellable stock
+      loungeIntake: { bud: 0, dab: 0, edible: 0, drink: 0 },   // stock delivered to the lounge, also its sellable stock
       lounge: { unlocked: false, tier: 0 },
+      factory: {
+        unlocked: false,
+        raw: 0,                         // bud in the head hopper, piped from the silo
+        pipeLv: 0,                      // how fast the silo feeds the line
+        stations: { roller: 0, filler: 0, brewer: 0 },   // 0 = not built
+        bins: { preroll: 0, vape: 0, drink: 0 },         // finished goods off the end of the belt
+        qualityLv: 0,                   // what an infused unit is worth
+        shipLv: 1,                      // container size and turnaround
+        shipAcc: 0,                     // seconds into the current container
+        pending: 0,                     // wholesale cash waiting to be collected
+      },
       farm: {
         unlocked: false,
         rowsUnlocked: FARM_COLS,        // one row free with the deed
@@ -1577,16 +1717,44 @@
       // rebuildLounge() indexes LOUNGE_TIERS with this, so a rolled-back or
       // corrupt save must never leave it outside the table
       merged.lounge.tier = Math.max(0, Math.min(MAX_LOUNGE_TIER, Math.floor(merged.lounge.tier) || 0));
-      if (!merged.loungeIntake || typeof merged.loungeIntake !== "object") merged.loungeIntake = { bud: 0, dab: 0, edible: 0 };
-      ["bud", "dab", "edible"].forEach(function (k) {
+      if (!merged.loungeIntake || typeof merged.loungeIntake !== "object") merged.loungeIntake = {};
+      LOUNGE_KINDS.forEach(function (k) {
         var v = merged.loungeIntake[k];
         // clamp against THIS save's tier cap — loungeTier() reads the global
         // `state`, which does not exist yet down here
         var lcap = loungeIntakeCapFor(merged.lounge.tier);
         merged.loungeIntake[k] = (typeof v === "number" && isFinite(v)) ? Math.max(0, Math.min(lcap, v)) : 0;
       });
-      if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = { shop: null, farm: null, lounge: null };
-      ["shop", "farm", "lounge"].forEach(function (k) {
+      // ---- factory ----
+      if (!merged.factory || typeof merged.factory !== "object") merged.factory = {};
+      var fac = merged.factory;
+      fac.unlocked = !!fac.unlocked;
+      if (!fac.stations || typeof fac.stations !== "object") fac.stations = {};
+      FACTORY_STATIONS.forEach(function (sd) {
+        var lv = fac.stations[sd.id];
+        fac.stations[sd.id] = (typeof lv === "number" && isFinite(lv))
+          ? Math.max(0, Math.min(MAX_STATION_LV, Math.floor(lv))) : 0;
+      });
+      if (!fac.bins || typeof fac.bins !== "object") fac.bins = {};
+      FACTORY_KINDS.forEach(function (k) {
+        var v = fac.bins[k];
+        fac.bins[k] = (typeof v === "number" && isFinite(v))
+          ? Math.max(0, Math.min(FACTORY_BIN_CAP, v)) : 0;
+      });
+      fac.raw = (typeof fac.raw === "number" && isFinite(fac.raw))
+        ? Math.max(0, Math.min(FACTORY_RAW_CAP, fac.raw)) : 0;
+      fac.pipeLv = Math.max(0, Math.min(MAX_PIPE_LV, Math.floor(fac.pipeLv) || 0));
+      fac.qualityLv = Math.max(0, Math.floor(fac.qualityLv) || 0);
+      // shipping starts at level 1 — there is always a container, even before
+      // you have paid to make it bigger, so 0 would stall the line forever
+      fac.shipLv = Math.max(1, Math.min(MAX_SHIP_LV, Math.floor(fac.shipLv) || 1));
+      fac.shipAcc = (typeof fac.shipAcc === "number" && isFinite(fac.shipAcc))
+        ? Math.max(0, fac.shipAcc) : 0;
+      fac.pending = (typeof fac.pending === "number" && isFinite(fac.pending))
+        ? Math.max(0, fac.pending) : 0;
+
+      if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
+      ["shop", "farm", "lounge", "factory"].forEach(function (k) {
         var p = merged.sitePos[k];
         if (!p || typeof p.x !== "number" || typeof p.z !== "number") merged.sitePos[k] = null;
       });
@@ -1596,7 +1764,8 @@
       // hooks read the global `state`, which does not exist yet down here.
       if (merged.site !== "shop" &&
           !(merged.site === "farm" && merged.farm.unlocked) &&
-          !(merged.site === "lounge" && merged.lounge.unlocked)) {
+          !(merged.site === "lounge" && merged.lounge.unlocked) &&
+          !(merged.site === "factory" && fac.unlocked)) {
         merged.site = "shop";
       }
       // Beds unlock a whole row at a time now — round an older save's count up
@@ -1650,7 +1819,7 @@
       }
       // ---- loading dock ----
       if (!merged.pallets || typeof merged.pallets !== "object") merged.pallets = {};
-      ["bud", "dab", "edible"].forEach(function (k) {
+      SHOP_KINDS.forEach(function (k) {
         var v = merged.pallets[k];
         merged.pallets[k] = (typeof v === "number" && isFinite(v))
           ? Math.max(0, Math.min(PALLET_CAP, v)) : 0;
@@ -2264,6 +2433,20 @@
     ovenGlow:  mat(0xff7a2f, { emissive: 0xff5a10, emissiveIntensity: 1.4, roughness: 0.4 }),
     dab:       mat(0xf0a12c, { roughness: 0.15, metalness: 0.1,
                                emissive: 0x8a4f00, emissiveIntensity: 0.5 }),
+    // ---- infused products off the factory line ----
+    preroll:   mat(0xe8dcc0, { roughness: 0.8 }),
+    prerollTip:mat(0xc07a3a, { roughness: 0.85 }),
+    vape:      mat(0x7fd6e8, { roughness: 0.25, metalness: 0.55,
+                               emissive: 0x1d6f85, emissiveIntensity: 0.4 }),
+    drink:     mat(0xff8fbf, { roughness: 0.2, metalness: 0.15,
+                               emissive: 0x9c2f63, emissiveIntensity: 0.45 }),
+    drinkCap:  mat(0xf5f0e6, { roughness: 0.6 }),
+    belt:      mat(0x2e343b, { roughness: 0.85 }),
+    concrete:  mat(0x9aa0a6, { roughness: 0.95 }),
+    hazard:    mat(0xf2c53d, { roughness: 0.7 }),
+    beltFrame: mat(0x6d7883, { roughness: 0.4, metalness: 0.6 }),
+    machine:   mat(0x8a95a1, { roughness: 0.35, metalness: 0.65 }),
+    machineHot:mat(0x5fe0a8, { emissive: 0x27a97a, emissiveIntensity: 1.2, roughness: 0.4 }),
     pressBody: mat(0x4a5560, { roughness: 0.35, metalness: 0.7 }),
     pressPlate:mat(0xd9552f, { roughness: 0.4, metalness: 0.5 }),
     labCoat:   mat(0xe8f1f8, { map: fabricTex, roughness: 0.85 }),
@@ -3437,10 +3620,13 @@
 
   // The three shelves behind the bar. These ARE state.loungeIntake made
   // visible — the supply chain into them is unchanged.
+  // Four shelves now that the factory brews drinks, so they spread wider than
+  // the original three did to keep a body's width between them.
   var LOUNGE_SHELF_DEFS = [
-    { kind: "bud",    label: "BUD",     color: 0x6fd68a, x: -7 },
-    { kind: "dab",    label: "DABS",    color: 0xffc36a, x:  0 },
-    { kind: "edible", label: "EDIBLES", color: 0xd7996a, x:  7 },
+    { kind: "bud",    label: "BUD",     color: 0x6fd68a, x: -10.5 },
+    { kind: "dab",    label: "DABS",    color: 0xffc36a, x:  -3.5 },
+    { kind: "edible", label: "EDIBLES", color: 0xd7996a, x:   3.5 },
+    { kind: "drink",  label: "DRINKS",  color: 0xff8fbf, x:  10.5 },
   ];
   var LOUNGE_SHELF_HALF = 2.0;
   var loungeShelves = [];
@@ -3713,6 +3899,400 @@
   }
   rebuildLounge();
 
+  // ===================================================================
+  //  THE FACTORY: one belt, three stations, everything automatic
+  // ===================================================================
+  // The shop's presses and ovens are independent machines, each with its own
+  // hopper and its own queue. This is the opposite: a single conveyor runs the
+  // length of the shed, raw bud goes on at the near end, three stations reach
+  // over the belt and work on whatever passes them, and finished goods drop
+  // into bins at the far end. Nothing here has a queue of its own.
+  var factoryGroup = new THREE.Group();
+  scene.add(factoryGroup);
+  var factoryGround;
+
+  // The belt runs along X so the whole line reads left-to-right on screen.
+  var BELT_Z = FACTORY_CZ - 3;
+  var BELT_X0 = -FACTORY_HALF_X + 6;     // head: raw bud lands here
+  var BELT_X1 = FACTORY_HALF_X - 7;      // tail: finished goods drop off
+  var BELT_Y = FACTORY_GROUND_TOP + 1.25;
+  var BELT_SPEED = 3.4;                  // world units/sec the items travel
+  // Stations sit at even intervals along the belt. An item changes form the
+  // moment it passes its station's x, which is what sells the line visually.
+  var STATION_X = FACTORY_STATIONS.map(function (s, i) {
+    return BELT_X0 + (BELT_X1 - BELT_X0) * (i + 1) / (FACTORY_STATIONS.length + 1);
+  });
+  var FACTORY_HOPPER = { x: BELT_X0 - 3.0, z: BELT_Z };
+  var FACTORY_BINS_AT = { x: BELT_X1 + 3.2, z: BELT_Z };
+  var FACTORY_CASH_PAD = { x: BELT_X1 + 3.2, z: BELT_Z + 7.0, half: 1.7 };
+  // Upgrade pads live on the front apron, clear of the belt and the bins.
+  var FACTORY_PAD_Z = FACTORY_CZ + 14;
+  var FACTORY_PIPE_PAD = { x: -20, z: FACTORY_PAD_Z };
+  var FACTORY_QUALITY_PAD = { x: 14, z: FACTORY_PAD_Z };
+  var FACTORY_SHIP_PAD = { x: 20, z: FACTORY_PAD_Z };
+  var FACTORY_HR_ZONE = { x: -26, z: FACTORY_PAD_Z };
+
+  var factoryStationMeshes = [];   // one entry per FACTORY_STATIONS, built once
+  var factoryBinMeshes = [];
+  var factoryPipeGlow = null;
+
+  (function buildFactory() {
+    var g = factoryGroup;
+    var y = FACTORY_GROUND_TOP;
+
+    // ---- apron and shed floor ----
+    // poured concrete, not the shop's clean tile — this is a working floor
+    factoryGround = new THREE.Mesh(
+      new THREE.BoxGeometry(FACTORY_HALF_X * 2 + 14, 0.3, FACTORY_HALF_Z * 2 + 12), M.concrete);
+    factoryGround.position.set(0, y - 0.15, FACTORY_CZ);
+    factoryGround.receiveShadow = true;
+    g.add(factoryGround);
+
+    // painted safety lane down the middle of the walkway
+    // two painted lines rather than one solid stripe, so it reads as a
+    // marked walkway instead of a carpet
+    [-0.9, 0.9].forEach(function (off) {
+      var lane = new THREE.Mesh(
+        new THREE.PlaneGeometry(FACTORY_HALF_X * 2 - 4, 0.3), M.hazard);
+      lane.rotation.x = -Math.PI / 2;
+      lane.position.set(0, y + 0.012, FACTORY_CZ + 8 + off);
+      g.add(lane);
+    });
+
+    // ---- shed shell: three walls and a saw-tooth roofline ----
+    var wallH = 12, wallT = 0.5;
+    var minX = -FACTORY_HALF_X, maxX = FACTORY_HALF_X;
+    var minZ = FACTORY_CZ - FACTORY_HALF_Z, maxZ = FACTORY_CZ + FACTORY_HALF_Z;
+    function wall(w, h, d, px, py, pz) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M.wallBack);
+      m.position.set(px, py, pz);
+      m.castShadow = true; m.receiveShadow = true;
+      g.add(m);
+      return m;
+    }
+    wall(FACTORY_HALF_X * 2 + wallT, wallH, wallT, 0, y + wallH / 2, minZ);   // back
+    wall(wallT, wallH, FACTORY_HALF_Z * 2, minX, y + wallH / 2, FACTORY_CZ);  // left
+    wall(wallT, wallH, FACTORY_HALF_Z * 2, maxX, y + wallH / 2, FACTORY_CZ);  // right
+    // front wall in two pieces, leaving the entrance open in the middle
+    var doorHalf = 5;
+    [-1, 1].forEach(function (sx) {
+      wall(FACTORY_HALF_X - doorHalf, wallH, wallT,
+        sx * (doorHalf + (FACTORY_HALF_X - doorHalf) / 2), y + wallH / 2, maxZ);
+    });
+    // saw-tooth roof ribs: the industrial read, cheap to draw
+    for (var r = 0; r < 7; r++) {
+      var rz = minZ + (FACTORY_HALF_Z * 2) * (r + 0.5) / 7;
+      var rib = new THREE.Mesh(
+        new THREE.BoxGeometry(FACTORY_HALF_X * 2, 0.5, 0.5), M.beltFrame);
+      rib.position.set(0, y + wallH + 0.2, rz);
+      g.add(rib);
+    }
+
+    // ---- the conveyor ----
+    var beltLen = BELT_X1 - BELT_X0;
+    var beltMid = (BELT_X0 + BELT_X1) / 2;
+    var deck = new THREE.Mesh(new THREE.BoxGeometry(beltLen, 0.18, 2.2), M.belt);
+    deck.position.set(beltMid, BELT_Y, BELT_Z);
+    deck.receiveShadow = true;
+    g.add(deck);
+    // side rails
+    [-1, 1].forEach(function (sz) {
+      var rail = new THREE.Mesh(new THREE.BoxGeometry(beltLen, 0.3, 0.16), M.beltFrame);
+      rail.position.set(beltMid, BELT_Y + 0.2, BELT_Z + sz * 1.18);
+      g.add(rail);
+    });
+    // legs every few units
+    var legs = Math.max(2, Math.round(beltLen / 5));
+    for (var l = 0; l <= legs; l++) {
+      var lx = BELT_X0 + beltLen * (l / legs);
+      [-1, 1].forEach(function (sz) {
+        var leg = new THREE.Mesh(
+          new THREE.BoxGeometry(0.22, BELT_Y - y, 0.22), M.beltFrame);
+        leg.position.set(lx, y + (BELT_Y - y) / 2, BELT_Z + sz * 0.85);
+        leg.castShadow = true;
+        g.add(leg);
+      });
+    }
+
+    // ---- head hopper: where the pipeline drops raw bud onto the belt ----
+    var hop = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 0.7, 2.4, 12), M.machine);
+    hop.position.set(FACTORY_HOPPER.x, BELT_Y + 1.9, BELT_Z);
+    hop.castShadow = true;
+    g.add(hop);
+    var spout = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1.2, 8), M.beltFrame);
+    spout.position.set(FACTORY_HOPPER.x + 1.2, BELT_Y + 1.1, BELT_Z);
+    spout.rotation.z = -0.7;
+    g.add(spout);
+    // the pipe run back toward the farm, disappearing through the rear wall
+    var pipe = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.42, 0.42, FACTORY_HALF_Z + BELT_Z - minZ + 6, 10), M.beltFrame);
+    pipe.rotation.x = Math.PI / 2;
+    pipe.position.set(FACTORY_HOPPER.x, BELT_Y + 3.4, (minZ + BELT_Z) / 2 - 1);
+    g.add(pipe);
+    factoryPipeGlow = addGlow(g, FACTORY_HOPPER.x, BELT_Y + 3.0, BELT_Z, 5.0, 0x8ef0a4, 0.0);
+    var pipeLbl = textSprite("FROM THE FARM", "#b6f5b0");
+    pipeLbl.scale.set(3.6, 0.8, 1);
+    pipeLbl.position.set(FACTORY_HOPPER.x, BELT_Y + 5.0, BELT_Z);
+    g.add(pipeLbl);
+
+    // ---- the three stations, straddling the belt ----
+    FACTORY_STATIONS.forEach(function (sd, i) {
+      var sx = STATION_X[i];
+      var sg = new THREE.Group();
+      // gantry legs either side of the belt, with the machine head over it
+      [-1, 1].forEach(function (sz) {
+        var post = new THREE.Mesh(new THREE.BoxGeometry(0.35, 3.6, 0.35), M.beltFrame);
+        post.position.set(sx, BELT_Y + 1.8, BELT_Z + sz * 1.6);
+        post.castShadow = true;
+        sg.add(post);
+      });
+      var head = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.7, 4.0), M.machine);
+      head.position.set(sx, BELT_Y + 3.3, BELT_Z);
+      head.castShadow = true;
+      sg.add(head);
+      var badge = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 0.16),
+        mat(sd.color, { roughness: 0.5 }));
+      badge.position.set(sx, BELT_Y + 3.3, BELT_Z + 2.05);
+      sg.add(badge);
+      // the working light: pulses while the station is actually producing
+      var lamp = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), M.machineHot);
+      lamp.position.set(sx, BELT_Y + 4.35, BELT_Z);
+      sg.add(lamp);
+      var glow = addGlow(sg, sx, BELT_Y + 4.35, BELT_Z, 3.4, 0x5fe0a8, 0.0);
+      var lbl = textSprite(sd.name.toUpperCase(), "#e8f4ff");
+      lbl.scale.set(4.2, 0.9, 1);
+      lbl.position.set(sx, BELT_Y + 5.6, BELT_Z);
+      sg.add(lbl);
+      var lvl = textSprite("—", "#ffe066");
+      lvl.scale.set(2.4, 0.68, 1);
+      lvl.position.set(sx, BELT_Y + 4.9, BELT_Z);
+      sg.add(lvl);
+      g.add(sg);
+      factoryStationMeshes.push({ group: sg, lamp: lamp, glow: glow, level: lvl, x: sx });
+    });
+
+    // ---- output bins at the tail ----
+    FACTORY_KINDS.forEach(function (kind, i) {
+      var bx = FACTORY_BINS_AT.x, bz = BELT_Z + (i - 1) * 3.0;
+      var crate = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.6, 2.4), M.pallet);
+      crate.position.set(bx, y + 0.8, bz);
+      crate.castShadow = true; crate.receiveShadow = true;
+      g.add(crate);
+      var band = new THREE.Mesh(new THREE.BoxGeometry(2.68, 0.26, 2.48),
+        mat(FACTORY_STATIONS[i].color, { roughness: 0.55 }));
+      band.position.set(bx, y + 1.35, bz);
+      g.add(band);
+      var tag = textSprite(kind.toUpperCase(), "#f2f7ff");
+      tag.scale.set(2.6, 0.6, 1);
+      tag.position.set(bx, y + 2.5, bz);
+      g.add(tag);
+      var count = textSprite("0", "#ffe066");
+      count.scale.set(2.0, 0.56, 1);
+      count.position.set(bx, y + 2.0, bz);
+      g.add(count);
+      factoryBinMeshes.push({ kind: kind, count: count });
+    });
+
+    g.position.set(0, 0, 0);
+  })();
+
+  // ---- the line itself ----
+  // Every station's throughput added together. The Empire map quotes this, so
+  // it lives next to the sim rather than inside it.
+  function lineRate() {
+    var r = 0;
+    for (var i = 0; i < FACTORY_STATIONS.length; i++) r += stationRate(FACTORY_STATIONS[i].id);
+    return r * perkProdMult();
+  }
+  function binTotal() {
+    var n = 0;
+    for (var i = 0; i < FACTORY_KINDS.length; i++) n += state.factory.bins[FACTORY_KINDS[i]] || 0;
+    return n;
+  }
+
+  // Items riding the belt. These are pure decoration — the sim above moves
+  // whole units into the bins on its own clock — but they are spawned in
+  // proportion to what each station is actually making, so what you see
+  // travelling really is what the line is producing.
+  var beltItems = [];
+  var beltPool = [];
+  var beltSpawnAcc = 0;
+  var MAX_BELT_ITEMS = 40;
+
+  function beltMesh() {
+    if (beltPool.length) return beltPool.pop();
+    var m = new THREE.Mesh(budGeo, M.bud);
+    m.castShadow = true;
+    factoryGroup.add(m);
+    return m;
+  }
+  function releaseBeltMesh(m) {
+    m.visible = false;
+    beltPool.push(m);
+  }
+  function dressBeltItem(m, kind) {
+    m.geometry = kind === "preroll" ? prerollGeo : kind === "vape" ? vapeGeo
+               : kind === "drink" ? drinkGeo : budGeo;
+    m.material = kind === "preroll" ? M.preroll : kind === "vape" ? M.vape
+               : kind === "drink" ? M.drink : M.bud;
+  }
+
+  function updateFactory(dt, now) {
+    if (!factoryUnlocked()) return;
+    var f = state.factory;
+
+    // ---- 1. pipeline: pull bud off the farm's silo ----
+    // Capped by what the silo actually holds, so the factory competes with
+    // the shop's courier for the same harvest instead of conjuring stock.
+    if (pipeLv() > 0 && farmUnlocked()) {
+      var want = Math.min(pipeRate() * dt, FACTORY_RAW_CAP - f.raw);
+      var got = Math.min(want, state.farm.silo);
+      if (got > 0) { state.farm.silo -= got; f.raw += got; }
+    }
+
+    // ---- 2. production ----
+    // Each station converts raw into its own product. They draw from the same
+    // hopper, so a starved line slows every station at once rather than
+    // letting the first one in the list eat everything.
+    var mult = perkProdMult();
+    var made = 0;
+    for (var i = 0; i < FACTORY_STATIONS.length; i++) {
+      var sd = FACTORY_STATIONS[i];
+      var rate = stationRate(sd.id) * mult;
+      if (rate <= 0) continue;
+      var bin = f.bins[sd.kind] || 0;
+      if (bin >= FACTORY_BIN_CAP) continue;
+      var canMake = rate * dt;
+      canMake = Math.min(canMake, FACTORY_BIN_CAP - bin);
+      canMake = Math.min(canMake, f.raw / sd.raw);
+      if (canMake <= 0) continue;
+      f.raw -= canMake * sd.raw;
+      f.bins[sd.kind] = bin + canMake;
+      made += canMake;
+    }
+
+    // ---- 3. belt decoration ----
+    var total = lineRate();
+    if (made > 0 && total > 0) {
+      beltSpawnAcc += made;
+      while (beltSpawnAcc >= 1 && beltItems.length < MAX_BELT_ITEMS) {
+        beltSpawnAcc -= 1;
+        // weight the item's destiny by which station is doing the most work
+        var pick = Math.random() * total, run = 0, kindIdx = 0;
+        for (var p = 0; p < FACTORY_STATIONS.length; p++) {
+          run += stationRate(FACTORY_STATIONS[p].id) * mult;
+          if (pick <= run) { kindIdx = p; break; }
+        }
+        var m = beltMesh();
+        m.visible = true;
+        var item = { m: m, x: BELT_X0, idx: kindIdx, done: false };
+        dressBeltItem(m, "bud");
+        beltItems.push(item);
+      }
+      if (beltSpawnAcc > 4) beltSpawnAcc = 4;   // never bank a backlog of spawns
+    }
+    for (var b = beltItems.length - 1; b >= 0; b--) {
+      var it = beltItems[b];
+      it.x += BELT_SPEED * dt;
+      // the moment it clears its station, it comes out the other side changed
+      if (!it.done && it.x >= STATION_X[it.idx]) {
+        it.done = true;
+        dressBeltItem(it.m, FACTORY_STATIONS[it.idx].kind);
+      }
+      if (it.x >= BELT_X1) {
+        releaseBeltMesh(it.m);
+        beltItems.splice(b, 1);
+        continue;
+      }
+      it.m.position.set(it.x, BELT_Y + 0.35, BELT_Z + Math.sin(it.x * 0.9) * 0.45);
+      it.m.rotation.y = now * 0.002 + it.x;
+      if (it.done && FACTORY_STATIONS[it.idx].kind === "preroll") it.m.rotation.z = Math.PI / 2;
+      else it.m.rotation.z = 0;
+    }
+
+    // ---- 4. the Lounge lane ----
+    // Drinks are the one thing the bar cannot make for itself, so a share of
+    // the brewer's output is trucked straight there before anything ships
+    // wholesale. Capped by the bar's own tier cap — no point flooding it.
+    if (loungeUnlocked() && (f.bins.drink || 0) >= 1) {
+      var cap = loungeIntakeCap();
+      var have = state.loungeIntake.drink || 0;
+      if (have < cap) {
+        var send = Math.min(Math.floor(f.bins.drink), cap - have);
+        if (send > 0) {
+          f.bins.drink -= send;
+          state.loungeIntake.drink = have + send;
+        }
+      }
+    }
+
+    // ---- 5. wholesale shipping ----
+    // A container leaves on a timer, taking whatever the bins hold up to its
+    // capacity. Nothing to load by hand: this is the payoff for automating.
+    f.shipAcc += dt;
+    if (f.shipAcc >= shipSecs()) {
+      f.shipAcc = 0;
+      var space = shipLoad(), gross = 0, shipped = 0;
+      for (var k = 0; k < FACTORY_KINDS.length && space > 0; k++) {
+        var kind = FACTORY_KINDS[k];
+        var take = Math.min(Math.floor(f.bins[kind] || 0), space);
+        if (take <= 0) continue;
+        f.bins[kind] -= take;
+        space -= take;
+        shipped += take;
+        gross += infusedValue(kind) * take;
+      }
+      if (shipped > 0) {
+        factoryPayOut(Math.round(gross * (promoActive() ? PROMO_MULT : 1)));
+        lastShipAt = now;
+        lastShipUnits = shipped;
+      }
+    }
+  }
+
+  var lastShipAt = -1e9, lastShipUnits = 0;
+
+  function updateFactoryVisuals(now) {
+    var live = factoryUnlocked();
+    factoryGroup.visible = live;
+    if (!live) return;
+    var f = state.factory;
+    for (var i = 0; i < factoryStationMeshes.length; i++) {
+      var sm = factoryStationMeshes[i];
+      var sd = FACTORY_STATIONS[i];
+      var lv = stationLv(sd.id);
+      var working = lv > 0 && f.raw >= sd.raw && (f.bins[sd.kind] || 0) < FACTORY_BIN_CAP;
+      sm.group.visible = lv > 0;
+      if (lv <= 0) continue;
+      var pulse = working ? 0.45 + 0.35 * Math.sin(now * 0.008 + i) : 0.06;
+      sm.glow.material.opacity = pulse;
+      sm.lamp.material = working ? M.machineHot : M.machine;
+      var wantLbl = "Lv." + lv + "  " + stationRate(sd.id).toFixed(2) + "/s";
+      if (sm.level.userData.txt !== wantLbl) {
+        sm.level.userData.txt = wantLbl;
+        updateSpriteText(sm.level, wantLbl, "#ffe066");
+      }
+    }
+    for (var b = 0; b < factoryBinMeshes.length; b++) {
+      var bm = factoryBinMeshes[b];
+      var n = Math.floor(f.bins[bm.kind] || 0);
+      if (bm.count.userData.n !== n) {
+        bm.count.userData.n = n;
+        updateSpriteText(bm.count, n + "/" + FACTORY_BIN_CAP, n >= FACTORY_BIN_CAP ? "#ff9f6a" : "#ffe066");
+      }
+    }
+    // the inlet only glows while bud is actually flowing
+    if (factoryPipeGlow) {
+      var flowing = pipeLv() > 0 && farmUnlocked() && state.farm.silo > 0 && f.raw < FACTORY_RAW_CAP;
+      factoryPipeGlow.material.opacity = flowing ? 0.3 + 0.2 * Math.sin(now * 0.006) : 0;
+    }
+    if (now - lastShipAt < 60 && lastShipUnits > 0) {
+      addFloater(FACTORY_BINS_AT.x, FACTORY_GROUND_TOP + 4.0, BELT_Z,
+        "SHIPPED " + lastShipUnits, "#8ef0a4");
+      lastShipUnits = 0;
+    }
+  }
+
   // ---- table service: customers sit and WAIT until the player brings them
   // what they ordered. This is a real per-customer state machine with its own
   // phase + timer, not a position derived from a global clock — "waits until
@@ -3759,8 +4339,12 @@
   var LOUNGE_SERVED_TIME = 3.0;                        // savours it, then leaves
   var LOUNGE_RESPAWN_MIN = 2.0, LOUNGE_RESPAWN_MAX = 8.0;
   function loungeDoorZ() { return LOUNGE_CZ + LOUNGE_HALF_Z - 6; }
-  function loungeKindEmoji(k) { return k === "edible" ? "🍪" : k === "dab" ? "🍯" : "🌿"; }
-  function loungeKindTint(k) { return k === "edible" ? "#c9743a" : k === "dab" ? "#e09a2c" : "#4faa62"; }
+  function loungeKindEmoji(k) {
+    return k === "drink" ? "🥤" : k === "edible" ? "🍪" : k === "dab" ? "🍯" : "🌿";
+  }
+  function loungeKindTint(k) {
+    return k === "drink" ? "#ff8fbf" : k === "edible" ? "#c9743a" : k === "dab" ? "#e09a2c" : "#4faa62";
+  }
 
   // Formal attire from the Upscale Bar up — a material swap on bodies that
   // are already built, the same trick refreshFitOut() uses on the counter.
@@ -3801,8 +4385,12 @@
         if (npc.timer <= 0) {
           npc.phase = "arriving"; npc.walk = 0;
           var roll = Math.random();
-          npc.kind = (ediblesUnlocked() && roll < 0.2) ? "edible"
-                   : (dabsUnlocked() && roll < 0.5) ? "dab" : "bud";
+          // drinks only enter the rotation once the factory is actually
+          // sending them, so nobody sits waiting on a shelf that cannot fill
+          var drinksOn = factoryUnlocked() && stationLv("brewer") > 0;
+          npc.kind = (drinksOn && roll < 0.22) ? "drink"
+                   : (ediblesUnlocked() && roll < 0.42) ? "edible"
+                   : (dabsUnlocked() && roll < 0.68) ? "dab" : "bud";
           npc.want = rollLoungeOrder();
           npc.ordered = npc.want;
           npc.shown = -1;
@@ -4615,6 +5203,10 @@
   var budGeo = new THREE.ConeGeometry(0.34, 0.62, 6);       // bud, back to a cone
   var dabGeo = new THREE.IcosahedronGeometry(0.27, 0);      // dab, a glassy blob
   var edibleGeo = new THREE.BoxGeometry(0.42, 0.24, 0.42);  // edible, a little brownie
+  // ---- infused goods off the factory line ----
+  var prerollGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.66, 7);  // a joint
+  var vapeGeo = new THREE.BoxGeometry(0.16, 0.62, 0.16);               // a cartridge
+  var drinkGeo = new THREE.CylinderGeometry(0.19, 0.16, 0.56, 10);     // a can
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   var dabPile = new THREE.Group();       // dabs, on the other half of the same top
   (function dispensaryCounter() {
@@ -5949,9 +6541,13 @@
       var mm = stackMeshes[i3];
       if (mm.userData.type !== want) {
         mm.geometry = want === "seed" ? seedGeo
-          : want === "dab" ? dabGeo : want === "edible" ? edibleGeo : budGeo;
+          : want === "dab" ? dabGeo : want === "edible" ? edibleGeo
+          : want === "drink" ? drinkGeo : want === "vape" ? vapeGeo
+          : want === "preroll" ? prerollGeo : budGeo;
         mm.material = want === "seed" ? M.packA
-          : want === "dab" ? M.dab : want === "edible" ? M.edible : M.bud;
+          : want === "dab" ? M.dab : want === "edible" ? M.edible
+          : want === "drink" ? M.drink : want === "vape" ? M.vape
+          : want === "preroll" ? M.preroll : M.bud;
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
       }
@@ -7252,7 +7848,7 @@
     var moved = 0;
     for (var i = player.backpack.length - 1; i >= 0; i--) {
       var kind = player.backpack[i].type;
-      if (kind !== "bud" && kind !== "dab" && kind !== "edible") continue;
+      if (!isShopKind(kind)) continue;
       if ((state.loungeIntake[kind] || 0) >= loungeIntakeCap()) continue;
       state.loungeIntake[kind] = (state.loungeIntake[kind] || 0) + 1;
       player.backpack.splice(i, 1);
@@ -7765,7 +8361,7 @@
       var moved = 0;
       for (var i = player.backpack.length - 1; i >= 0; i--) {
         var kind = player.backpack[i].type;
-        if (kind !== "bud" && kind !== "dab" && kind !== "edible") continue;
+        if (!isShopKind(kind)) continue;
         if (!truckLoadOne(t, kind)) break;
         player.backpack.splice(i, 1);
         moved++;
@@ -8417,6 +9013,26 @@
     }
   }
 
+  // The factory ships on its own while you are anywhere else in the empire,
+  // so unlike the bar's tips this money can pile up for a long time unseen.
+  // That makes it the one till worth persisting: state.factory.pending is the
+  // authority and the till mirrors it, so a reload never eats a shipment.
+  var factoryTill = makeTill(FACTORY_CASH_PAD, 0x8ef0a4, "$ COLLECT");
+  function factoryPayOut(amount) {
+    if (amount <= 0) return;
+    state.factory.pending += amount;
+    factoryTill.payOut(amount);
+  }
+  function updateFactoryTill(now) {
+    var live = factoryUnlocked();
+    if (factoryTill.pad) factoryTill.pad.visible = live;
+    if (!live) return;
+    factoryTill.update(now, function () {
+      state.factory.pending = 0;
+      markTut("factorycash");
+    });
+  }
+
   // ---- a bag of feed that turns up on the shop floor now and then ----
   // It waits there until you walk into it — no expiry — then the next one is
   // held back for five minutes.
@@ -8903,6 +9519,9 @@
   // the first time the player actually does that thing, and once they've done
   // all of them the bar goes away for good.
   var TUT_STEPS = [
+    { key: "factorycash", text: "💵 Collect what the line has shipped" },
+    { key: "factorypipe", text: "🛢️ Run the pipeline — the line has no bud" },
+    { key: "factorybuild", text: "🏭 Build a station over the belt" },
     { key: "loungetip",   text: "💵 Collect the tip left on the table" },
     { key: "loungeserve", text: "🍸 Someone's waiting — run their order over" },
     { key: "loungegrab",  text: "🥃 Take product from the shelves behind the bar" },
@@ -8963,7 +9582,7 @@
     var anyStock = false, anyTruck = false, anyPalletStock = false;
     for (var d0 = 0; d0 < player.backpack.length; d0++) {
       var ty = player.backpack[d0].type;
-      if (ty === "bud" || ty === "dab" || ty === "edible") anyStock = true;
+      if (isShopKind(ty)) anyStock = true;
     }
     if (dockUnlocked()) {
       for (var d1 = 0; d1 < bayCount(); d1++) {
@@ -8995,7 +9614,13 @@
       loungeHasStock = (state.loungeIntake.bud || 0) + (state.loungeIntake.dab || 0) +
                        (state.loungeIntake.edible || 0) > 0;
     }
+    var atFactory = state.site === "factory" && factoryUnlocked();
+    var anyStation = stationLv("roller") + stationLv("filler") + stationLv("brewer") > 0;
     var applies = {
+      factorycash:  atFactory && factoryTill.pending() > 0,
+      // only nag about the pipeline once there is a machine waiting on it
+      factorypipe:  atFactory && anyStation && pipeLv() === 0,
+      factorybuild: atFactory && !anyStation,
       loungetip:   atLounge && loungeTipWaiting,
       loungeserve: atLounge && loungeWaiting && player.backpack.length > 0,
       loungegrab:  atLounge && loungeWaiting && !player.backpack.length && loungeHasStock,
@@ -9023,6 +9648,7 @@
     var HINT_SITE = {
       farmplant: "farm", farmharvest: "farm", farmsilo: "farm", farmship: "farm",
       loungetip: "lounge", loungeserve: "lounge", loungegrab: "lounge",
+      factorycash: "factory", factorypipe: "factory", factorybuild: "factory",
     };
     for (var i = 0; i < TUT_STEPS.length; i++) {
       var s = TUT_STEPS[i];
@@ -9690,7 +10316,102 @@
         toast("\u2b50 Level " + storeLevel() + " \u2014 " + (LEVEL_REVEALS[state.roomTier] || "bigger shop floor") + "!");
       },
     },
-  ];
+
+    // ---- the factory ----
+    // The pipeline first: with no raw material the stations have nothing to
+    // work on, so this is the pad that has to be obvious on arrival.
+    {
+      id: "factorypipe", label: "PIPELINE", icon: "\ud83d\udee2\ufe0f",
+      x: FACTORY_PIPE_PAD.x, z: FACTORY_PIPE_PAD.z,
+      site: "factory", color: 0x8ef0a4, kiosk: false,
+      hidden: function () { return !factoryUnlocked(); },
+      name: function () { return pipeLv() === 0 ? "Run the Pipeline" : "Widen the Pipeline"; },
+      desc: function () {
+        if (pipeLv() >= MAX_PIPE_LV) return "The line drinks from the silo as fast as it can";
+        if (!farmUnlocked()) return "Buy the farm first \u2014 the pipeline feeds off its silo";
+        return pipeLv() === 0
+          ? "Pipes bud from the farm silo straight into the head hopper"
+          : "Lv." + pipeLv() + "/" + MAX_PIPE_LV + " \u00b7 " + pipeRate().toFixed(1) +
+            " \u2192 " + (pipeRate() + 1.6).toFixed(1) + " bud/sec off the silo";
+      },
+      cost: costPipe,
+      maxed: function () { return pipeLv() >= MAX_PIPE_LV; },
+      buy: function () {
+        state.factory.pipeLv = pipeLv() + 1;
+        toast("\ud83d\udee2\ufe0f Pipeline at Lv." + pipeLv() + " \u2014 " + pipeRate().toFixed(1) + " bud/sec from the farm!");
+      },
+    },
+    {
+      id: "factoryquality", label: "POTENCY", icon: "\u2697\ufe0f",
+      x: FACTORY_QUALITY_PAD.x, z: FACTORY_QUALITY_PAD.z,
+      site: "factory", color: 0xff8fbf, kiosk: false,
+      hidden: function () { return !factoryUnlocked(); },
+      name: function () { return "Raise Potency"; },
+      desc: function () {
+        var q = (state.factory && state.factory.qualityLv) || 0;
+        return "Lv." + q + " \u00b7 every infused unit is worth +30% more, right across the line";
+      },
+      cost: costFactoryQuality,
+      maxed: function () { return false; },
+      buy: function () {
+        state.factory.qualityLv = ((state.factory.qualityLv) || 0) + 1;
+        toast("\u2697\ufe0f Potency up \u2014 pre-rolls, carts and drinks all fetch more!");
+      },
+    },
+    {
+      id: "factoryship", label: "SHIPPING", icon: "\ud83d\udce6",
+      x: FACTORY_SHIP_PAD.x, z: FACTORY_SHIP_PAD.z,
+      site: "factory", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !factoryUnlocked(); },
+      name: function () { return "Bigger Containers"; },
+      desc: function () {
+        if (shipLv() >= MAX_SHIP_LV) return "Full containers, back to back \u2014 nothing waits to ship";
+        return "Lv." + shipLv() + "/" + MAX_SHIP_LV + " \u00b7 " + shipLoad() + " units every " +
+          shipSecs().toFixed(0) + "s \u2192 " + (shipLoad() + 90) + " every " +
+          Math.max(6, shipSecs() - 2.6).toFixed(0) + "s";
+      },
+      cost: costShip,
+      maxed: function () { return shipLv() >= MAX_SHIP_LV; },
+      buy: function () {
+        state.factory.shipLv = shipLv() + 1;
+        toast("\ud83d\udce6 Bigger containers \u2014 " + shipLoad() + " units a run!");
+      },
+    },
+  ]
+  // One build/upgrade pad per station, generated from the same table the line
+  // itself reads. Each sits on the apron directly in front of its machine, so
+  // the pad you stand on is unmistakably the thing it upgrades.
+  .concat(FACTORY_STATIONS.map(function (sd, i) {
+    return {
+      id: "station_" + sd.id, label: sd.name.toUpperCase(), icon: sd.icon,
+      x: STATION_X[i], z: FACTORY_PAD_Z,
+      site: "factory", color: sd.color, kiosk: false,
+      hidden: function () { return !factoryUnlocked(); },
+      name: function () {
+        return stationLv(sd.id) === 0 ? "Install the " + sd.name : "Upgrade the " + sd.name;
+      },
+      desc: function () {
+        if (stationLv(sd.id) >= MAX_STATION_LV) return sd.blurb + " \u00b7 running flat out";
+        if (stationLv(sd.id) === 0) {
+          return sd.blurb + " \u00b7 " + sd.rate.toFixed(2) + "/sec, " +
+            sd.raw.toFixed(1) + " bud each";
+        }
+        return "Lv." + stationLv(sd.id) + "/" + MAX_STATION_LV + " \u00b7 " +
+          stationRate(sd.id).toFixed(2) + " \u2192 " +
+          (stationRate(sd.id) + sd.rate).toFixed(2) + " " + sd.kind + "/sec";
+      },
+      cost: function () { return stationCost(sd.id); },
+      maxed: function () { return stationLv(sd.id) >= MAX_STATION_LV; },
+      buy: function () {
+        var was = stationLv(sd.id);
+        state.factory.stations[sd.id] = was + 1;
+        addFloater(STATION_X[i], FACTORY_GROUND_TOP + 3.4, FACTORY_PAD_Z,
+          was === 0 ? "ONLINE!" : "Lv." + (was + 1), "#ffd75e");
+        toast(sd.icon + " " + sd.name + (was === 0 ? " installed \u2014 " + sd.blurb.toLowerCase() + "!"
+                                                   : " at Lv." + (was + 1) + "!"));
+      },
+    };
+  }));
   var STATION_R = 2.6;
   var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
 
@@ -10182,6 +10903,11 @@
     handleLoungeServe();
     updateLoungeStockVisuals();
     updateLoungeTills(now);
+    // The line runs no matter where you are standing — that is the whole
+    // point of automating it — the same way the presses and ovens do.
+    updateFactory(dt, now);
+    updateFactoryVisuals(now);
+    updateFactoryTill(now);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
@@ -10458,6 +11184,10 @@
 
   // the nudge survives a reload — closing the tab is not "I saw the map"
   nudgeMap(state.mapNudge);
+  // Rebuild the factory's cash pile from the save. The till keeps its own
+  // in-memory total, so without this a shipment banked before you closed the
+  // tab would come back as an invisible number you could never collect.
+  if (state.factory.pending > 0) factoryTill.payOut(state.factory.pending);
   // a save restored at Upscale or above should already be in black tie
   refreshLoungeFit();
   updateLoungeStockVisuals();
