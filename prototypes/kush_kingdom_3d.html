@@ -849,6 +849,43 @@
   // oven, which is a large part of why money stopped meaning anything.
   var EXPAND_COSTS = [0, 3000, 60000, 750000];
   function expandCost(t) { return EXPAND_COSTS[t] || 0; }
+
+  // ===================================================================
+  //  LATE-GAME PRICE SCALING
+  // ===================================================================
+  // Every price in this game was a fixed number, but income is not: a bud
+  // runs $6 at strain Lv.0, $384 at Lv.20 and $1.25M at Lv.59. So a cost that
+  // was a real decision when you first met it is loose change two decades
+  // later, and the whole back half of the game stops asking anything of you.
+  // That is a curve problem, not a number problem — raising the constants
+  // once just moves where it goes flat.
+  //
+  // So everything from the loading dock onward is quoted against the economy
+  // instead. The anchor below is roughly what a bud fetches when the dock
+  // opens; under it the multiplier is exactly 1, so the entire stretch from
+  // opening the shop to buying the dock is untouched and a save starting at
+  // $25 plays as it always did. Above it, prices ride the same strain curve
+  // your income does, and an upgrade stays the same size of decision at
+  // Lv.20 as at Lv.70.
+  //
+  // Deliberately NOT scaled: the shop interior (beds, presses, ovens, purity,
+  // recipe, ram, fan, backpack, boots, strain itself). That is all pre-dock
+  // content and moving it would change the early game.
+  // The exponent is above 1 on purpose. Income does not grow with the bud
+  // price alone — it grows with price TIMES throughput, and throughput climbs
+  // separately through staff, tables, popularity tiers and machines. Scaling
+  // prices linearly against sellValue() would therefore still fall behind
+  // real earnings every time you widened the business rather than raised the
+  // price. 1.25 makes upgrades outpace the price curve by roughly as much as
+  // throughput does, so the back half of the game keeps asking for something.
+  var DOCK_ERA_BUD = 384;                 // sellValueAt(20)
+  var LATE_EXP = 1.25;
+  function lateScale() {
+    return Math.pow(Math.max(1, sellValue() / DOCK_ERA_BUD), LATE_EXP);
+  }
+  // Wraps an existing price so its curve is preserved exactly at the moment
+  // you first reach it, and only grows from there.
+  function scaled(n) { return Math.round(n * lateScale()); }
   // ===================================================================
   //  SITES — the empire map
   // ===================================================================
@@ -1140,6 +1177,21 @@
     },
   };
   var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory];
+  // Deeds are quoted through here rather than read off the site directly, so
+  // the late-game scaling cannot be applied at one call site and missed at
+  // another — the price on the map row, the affordability check, the "you can
+  // afford somewhere new" nudge and the actual charge all come from here.
+  function deedCostOf(s) {
+    if (!s.deedCost) return 0;
+    // The factory already prices itself against its own output (factoryPrice),
+    // so it must NOT also take the empire-wide late-game multiplier — doing
+    // both scales it twice and quotes the deed in quadrillions. It uses the
+    // same scheme as the rest of the site instead, floored at its base price.
+    if (s.id === "factory") {
+      return factoryPrice(FACTORY_DEED_COST, 4 * refLineGrossPerSec(), 1, 0);
+    }
+    return scaled(s.deedCost);
+  }
   function curSite() { return SITES[state.site] || SITES.shop; }
 
   // what each level physically adds, so the upgrade card promises something
@@ -1389,13 +1441,13 @@
   var BAY_X = [-9.0, -3.0, 3.0, 9.0];
   var BAY_HALF_W = 2.6;
   function bayCount() { return Math.max(1, Math.min(MAX_BAYS, state.bayCount || 1)); }
-  function bayCost(n) { return Math.round(1000000 * Math.pow(2.6, n - 1)); }
+  function bayCost(n) { return scaled(1000000 * Math.pow(2.6, n - 1)); }
 
   // Bigger trucks haul more per run, which is the whole point of wholesale:
   // one trip moves what the counter would take a hundred customers to shift.
   var BASE_TRUCK_LOAD = 10, MAX_TRUCK_LV = 5;
   function truckCap() { return BASE_TRUCK_LOAD + 8 * (state.truckLv || 0); }
-  function truckCost(lv) { return Math.round(1000000 * Math.pow(2.3, lv)); }
+  function truckCost(lv) { return scaled(1000000 * Math.pow(2.3, lv)); }
   var TRUCK_ARRIVE_TIME = 2.6;    // seconds reversing onto the bay
   var TRUCK_DEPART_TIME = 2.6;    // seconds pulling away once loaded
   var TRUCK_GAP = 3.0;            // seconds before the next one backs in
@@ -1418,20 +1470,20 @@
   // exactly the job it automates.
   var BARBACK_ZONE = { x:  -8.0, z: -87.5 };
   var MAX_BARBACKS = 3;
-  function costBarback() { return Math.round(8000000 * Math.pow(3.0, state.barbackLv || 0)); }
+  function costBarback() { return scaled(8000000 * Math.pow(3.0, state.barbackLv || 0)); }
   // Servers work the Lounge floor. How many you may have on at once is
   // capped by the class of the room — a dive bar does not carry four staff —
   // so the headcount grows alongside the tables it has to cover.
   var MAX_SERVERS = 4;
   var LOUNGE_SERVER_CAPS = [1, 2, 3, 4];
   function maxServersForTier() { return LOUNGE_SERVER_CAPS[loungeTier()]; }
-  function costServer() { return Math.round(12000000 * Math.pow(3.2, state.serverLv || 0)); }
+  function costServer() { return scaled(12000000 * Math.pow(3.2, state.serverLv || 0)); }
   var TRUCK_ZONE  = { x:   5.0, z: -71.5 };        // upgrade to bigger trucks
   var BAY_ZONE    = { x:  11.5, z: -71.5 };        // add another loading bay
   var MAX_DRIVERS = 3;
   var MAX_PICKERS = 3;
-  function costDriver() { return Math.round(1000000 * Math.pow(2.7, state.driverLv || 0)); }
-  function costPicker() { return Math.round(1000000 * Math.pow(2.7, state.pickerLv || 0)); }
+  function costDriver() { return scaled(1000000 * Math.pow(2.7, state.driverLv || 0)); }
+  function costPicker() { return scaled(1000000 * Math.pow(2.7, state.pickerLv || 0)); }
 
   // 4 wide x 4 deep grid of grow beds, filling the back room. Everything is
   // bought a row at a time from one tile beside that row, so beds themselves
@@ -1556,7 +1608,7 @@
   var BASE_SILO_CAP = 120, MAX_SILO_LV = 4;
   function siloCapFor(lv) { return BASE_SILO_CAP + 90 * (lv || 0); }
   function siloCap() { return siloCapFor(state.farm && state.farm.siloLv); }
-  function siloCost(lv) { return Math.round(5000000 * Math.pow(2.3, lv)); }
+  function siloCost(lv) { return scaled(5000000 * Math.pow(2.3, lv)); }
 
   // Courier: the placeholder freight run. Drains the silo into the shop's
   // intake pile at a steady rate while you stand on its pad — or, once a
@@ -1564,7 +1616,7 @@
   var FARM_COURIER = { x: -15.0, z: FARM_CZ + 21.0 };
   var MAX_COURIER_LV = 4;
   function courierRate() { return 2.5 + 2.5 * (state.farm && state.farm.courierLv || 0); }
-  function courierCost(lv) { return Math.round(4000000 * Math.pow(2.4, lv)); }
+  function courierCost(lv) { return scaled(4000000 * Math.pow(2.4, lv)); }
 
   // Farm staff. Priced in the same millions bracket as the silo/courier
   // upgrades, since these are farm-tier purchases, not shop-tier ones.
@@ -1578,15 +1630,15 @@
   var MAX_HAULERS = 2;
   var MAX_GROW_LV = 5;
   var MAX_SOIL_LV = 3;
-  function costFieldHand() { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.handLv || 0)); }
-  function costHauler()    { return Math.round(6000000 * Math.pow(2.7, state.farm && state.farm.haulerLv || 0)); }
-  function costGrowLv()    { return Math.round(8000000 * Math.pow(2.5, state.farm && state.farm.growLv || 0)); }
+  function costFieldHand() { return scaled(6000000 * Math.pow(2.7, state.farm && state.farm.handLv || 0)); }
+  function costHauler()    { return scaled(6000000 * Math.pow(2.7, state.farm && state.farm.haulerLv || 0)); }
+  function costGrowLv()    { return scaled(8000000 * Math.pow(2.5, state.farm && state.farm.growLv || 0)); }
   // Same shape as the lab's hydraulics/oven's convection tracks: about +22%
   // pace a level. Stacks with weather and the free-feed boost rather than
   // replacing them.
   function farmGrowRateMult() { return Math.pow(1.22, (state.farm && state.farm.growLv) || 0); }
   var SOIL_TIER_NAMES = ["Bare Furrows", "Raised Beds", "Staked & Trellised", "Hoop House Frames"];
-  function costSoilLv()  { return Math.round(7000000 * Math.pow(2.6, state.farm && state.farm.soilLv || 0)); }
+  function costSoilLv()  { return scaled(7000000 * Math.pow(2.6, state.farm && state.farm.soilLv || 0)); }
   function soilLv() { return (state.farm && state.farm.soilLv) || 0; }
 
   // A hired manager keeps a site's staff working while you are standing
@@ -2021,11 +2073,14 @@
   }
   function staffSpeedLv(site) { return staffOf(site).speedLv || 0; }
   function staffLoadLv(site) { return staffOf(site).loadLv || 0; }
+  // The shop's desk is pre-dock content and stays fixed; the farm's and the
+  // lounge's ride the same late-game curve their crews' sites do.
+  function hrScale(site) { return site === "shop" ? 1 : lateScale(); }
   function costStaffSpeed(site) {
-    return Math.round(HR_DESKS[site].base * 4000 * Math.pow(3.4, staffSpeedLv(site)));
+    return Math.round(HR_DESKS[site].base * 4000 * Math.pow(3.4, staffSpeedLv(site)) * hrScale(site));
   }
   function costStaffLoad(site) {
-    return Math.round(HR_DESKS[site].base * 6000 * Math.pow(3.5, staffLoadLv(site)));
+    return Math.round(HR_DESKS[site].base * 6000 * Math.pow(3.5, staffLoadLv(site)) * hrScale(site));
   }
   // one multiplier and one carry bonus per crew. Four levels taking a site's
   // staff up to a bit over twice their starting pace.
@@ -10089,7 +10144,7 @@
           ? "Kingdom Farms runs itself, whether you're here or at the shop"
           : "Keeps the field hands and hauler working while you're away";
       },
-      cost: function () { return FARM_MANAGER_COST; },
+      cost: function () { return scaled(FARM_MANAGER_COST); },
       maxed: function () { return !!state.managers.farm; },
       buy: function () {
         state.managers.farm = true;
@@ -10165,7 +10220,7 @@
         return nxt.adds + " \u00b7 " + nxt.tables + " tables, " + nxt.pop + "\u00d7 a head";
       },
       cost: function () {
-        return loungeTier() >= MAX_LOUNGE_TIER ? 0 : LOUNGE_TIERS[loungeTier() + 1].cost;
+        return loungeTier() >= MAX_LOUNGE_TIER ? 0 : scaled(LOUNGE_TIERS[loungeTier() + 1].cost);
       },
       maxed: function () { return loungeTier() >= MAX_LOUNGE_TIER; },
       buy: function () {
@@ -11032,8 +11087,8 @@
         } else {
           // The deed is the one purchase that cannot be a pay square: you
           // can't go and stand on land you do not own yet.
-          btn.textContent = "$" + fmt(s.deedCost);
-          btn.disabled = state.cash < s.deedCost;
+          btn.textContent = "$" + fmt(deedCostOf(s));
+          btn.disabled = state.cash < deedCostOf(s);
           btn.addEventListener("click", function () { buyDeed(s.id); });
         }
         row.appendChild(btn);
@@ -11046,8 +11101,9 @@
   // whatever seeding/toast it needs, this just handles the cash + refresh.
   function buyDeed(id) {
     var s = SITES[id];
-    if (!s || s.unlocked() || state.cash < s.deedCost) return;
-    state.cash -= s.deedCost;
+    var price = deedCostOf(s);
+    if (!s || s.unlocked() || state.cash < price) return;
+    state.cash -= price;
     s.onUnlock();
     // owning it and knowing how to reach it are two different lessons
     nudgeMap(true);
@@ -11069,7 +11125,7 @@
     for (var i = 0; i < SITE_LIST.length; i++) {
       var s = SITE_LIST[i];
       if (!s.deedCost || s.unlocked() || state.deedSeen[s.id]) continue;
-      if (state.cash < s.deedCost) continue;
+      if (state.cash < deedCostOf(s)) continue;
       state.deedSeen[s.id] = true;
       nudgeMap(true);
       toast("🗺 " + s.icon + " " + s.name + " is up for sale — check the map!");
