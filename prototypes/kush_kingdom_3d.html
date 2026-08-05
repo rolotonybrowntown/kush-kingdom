@@ -10252,6 +10252,10 @@
     ];
     if (dabsUnlocked()) rows.push({ icon: "🍯", lv: (state.dabLv || 0) + 1, price: fmt(dabValue()) + "/dab" });
     if (ediblesUnlocked()) rows.push({ icon: "🍪", lv: (state.edibleLv || 0) + 1, price: fmt(edibleValue()) + "/edible" });
+    // Once the factory's bought, the line brews drinks for the Lounge — its
+    // qualityLv is the only lever on that price, so the row reads that
+    // directly rather than a separate per-product level like bud/dab/edible.
+    if (factoryUnlocked()) rows.push({ icon: "🥤", lv: (state.factory.qualityLv || 0) + 1, price: fmt(infusedValue("drink")) + "/drink" });
 
     productHud.classList.add("show");
     productHud.innerHTML = "";
