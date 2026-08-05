@@ -490,6 +490,25 @@
   .map-icon { font-size: 21px; flex-shrink: 0; width: 26px; }
 
   /* ---------------- menu (the shop keeps running behind it) ---------------- */
+  /* sits under the map button, same shell as the other corner controls */
+  #sound-btn {
+    position: absolute;
+    top: calc(var(--safe-t) + 126px);
+    right: calc(var(--safe-r) + 14px);
+    width: 46px; height: 46px;
+    border-radius: 14px;
+    border: 1.5px solid var(--panel-line);
+    background: var(--panel);
+    color: #eafff2;
+    font-size: 19px; line-height: 1;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 5px 16px rgba(0,0,0,0.4);
+    z-index: 8;
+    cursor: pointer;
+  }
+  #sound-btn.off { opacity: 0.5; }
+
   #map-btn {
     position: absolute;
     top: calc(var(--safe-t) + 72px);
@@ -651,6 +670,7 @@
   </div>
 
   <button id="menu-btn" aria-label="Menu">☰</button>
+  <button id="sound-btn" aria-label="Sound">🔊</button>
   <button id="map-btn" aria-label="Empire map">🗺</button>
 
   <div id="map-overlay">
@@ -1079,6 +1099,12 @@
   // its job. It is still a rounding error against what the line earns.
   var CONTRACT_MULT = 1.6;
   function contractPrice() { return sellValue() * CONTRACT_MULT; }
+  // Caps how much idle time gets paid out in one go, so leaving the game for
+  // a week does not hand back a fortune the line had nowhere to store.
+  var FACTORY_MAX_IDLE_SECS = 8 * 3600;
+  // Fraction of silo capacity the factory will not touch, so the farm always
+  // has visible stock and the courier always has something to ship.
+  var FACTORY_SILO_RESERVE = 0.5;
   // The pipeline gates everything, so it is quoted against the whole
   // reference line: with no bud in the hopper none of it earns anything.
   function costPipe() { return factoryPrice(2e12, refLineGrossPerSec(), 2.3, pipeLv()); }
@@ -1720,6 +1746,7 @@
       tutSeen: {},            // one-shot "what to do next" prompts already shown
       deedSeen: {},           // sites we have already pointed at the map about
       mapNudge: false,        // map button is pulsing; cleared by opening it
+      muted: false,           // sound off
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
@@ -1772,6 +1799,8 @@
         shipLv: 1,                      // container size and turnaround
         shipAcc: 0,                     // seconds into the current container
         pending: 0,                     // wholesale cash waiting to be collected
+        owed: 0,                        // unpaid bill for bought-in bud
+        sentToBar: 0,                   // drinks routed to the Lounge, lifetime
       },
       farm: {
         unlocked: false,
@@ -1886,6 +1915,10 @@
         ? Math.max(0, fac.shipAcc) : 0;
       fac.pending = (typeof fac.pending === "number" && isFinite(fac.pending))
         ? Math.max(0, fac.pending) : 0;
+      fac.owed = (typeof fac.owed === "number" && isFinite(fac.owed))
+        ? Math.max(0, fac.owed) : 0;
+      fac.sentToBar = (typeof fac.sentToBar === "number" && isFinite(fac.sentToBar))
+        ? Math.max(0, fac.sentToBar) : 0;
 
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
       ["shop", "farm", "lounge", "factory"].forEach(function (k) {
@@ -1997,6 +2030,7 @@
       if (!merged.tutSeen || typeof merged.tutSeen !== "object") merged.tutSeen = {};
       if (!merged.deedSeen || typeof merged.deedSeen !== "object") merged.deedSeen = {};
       merged.mapNudge = !!merged.mapNudge;
+      merged.muted = !!merged.muted;
       if (!merged.mystery || typeof merged.mystery !== "object") {
         merged.mystery = { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 };
       }
@@ -2189,6 +2223,123 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
     return String(n);
   }
+  // ===================================================================
+  //  SOUND
+  // ===================================================================
+  // Everything here is synthesised with WebAudio rather than loaded as audio
+  // files. That is not a stylistic choice: this game is one self-contained
+  // HTML file that has to keep working offline from the service worker cache,
+  // and bundling real music would mean either an external fetch (breaks
+  // offline) or megabytes of base64 (breaks the file). Oscillators cost bytes
+  // in the dozens and are royalty-free by construction.
+  //
+  // The music is a slow four-chord loop on soft triangle waves with a gentle
+  // low-pass — closer to ambient pads than a melody, so it can sit under a
+  // long session without becoming irritating.
+  var Snd = (function () {
+    var ctx = null, master = null, musicGain = null, sfxGain = null;
+    var musicTimer = null, started = false;
+
+    function ensure() {
+      if (ctx) return true;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = state.muted ? 0 : 1;
+      master.connect(ctx.destination);
+      musicGain = ctx.createGain();
+      musicGain.gain.value = 0.16;         // well under the effects
+      musicGain.connect(master);
+      sfxGain = ctx.createGain();
+      sfxGain.gain.value = 0.5;
+      sfxGain.connect(master);
+      return true;
+    }
+
+    // A short shaped blip. Everything in the game is one of these with
+    // different pitches — a "ping" is not worth a sample file.
+    function blip(freq, dur, type, vol, slideTo) {
+      if (!ensure() || state.muted) return;
+      var t = ctx.currentTime;
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      // quick attack, exponential tail — a linear fade clicks audibly
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.3, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(sfxGain);
+      o.start(t); o.stop(t + dur + 0.02);
+    }
+
+    // ---- the ambient loop ----
+    // Four chords, eight seconds each. Voiced low and quiet, with the filter
+    // rolling off anything bright, so it reads as atmosphere not melody.
+    var CHORDS = [
+      [146.83, 220.00, 261.63],   // Dm
+      [174.61, 261.63, 349.23],   // F
+      [130.81, 196.00, 261.63],   // C
+      [196.00, 246.94, 293.66],   // G
+    ];
+    var chordIdx = 0;
+    function playChord() {
+      if (!ctx || state.muted) return;
+      var t = ctx.currentTime, hold = 8.0;
+      var notes = CHORDS[chordIdx % CHORDS.length];
+      chordIdx++;
+      var filt = ctx.createBiquadFilter();
+      filt.type = "lowpass";
+      filt.frequency.value = 900;
+      filt.connect(musicGain);
+      for (var i = 0; i < notes.length; i++) {
+        var o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "triangle";
+        // a few cents of detune per voice stops it sounding like a synth chord
+        o.frequency.value = notes[i] * (1 + (i - 1) * 0.0015);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.22, t + 2.2);   // slow swell
+        g.gain.setValueAtTime(0.22, t + hold - 2.4);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + hold);
+        o.connect(g); g.connect(filt);
+        o.start(t); o.stop(t + hold + 0.1);
+      }
+    }
+    function startMusic() {
+      if (!ensure() || musicTimer) return;
+      playChord();
+      musicTimer = setInterval(playChord, 7600);   // slight overlap between chords
+    }
+
+    // Browsers refuse to start audio until the user has interacted, so the
+    // first tap anywhere is what actually boots this.
+    function unlock() {
+      if (started) return;
+      if (!ensure()) return;
+      if (ctx.state === "suspended") ctx.resume();
+      started = true;
+      startMusic();
+    }
+
+    function setMuted(m) {
+      state.muted = !!m;
+      if (master) master.gain.value = m ? 0 : 1;
+    }
+
+    return {
+      unlock: unlock,
+      setMuted: setMuted,
+      sell:    function () { blip(660, 0.13, "sine", 0.28, 990); },
+      cash:    function () { blip(523, 0.10, "triangle", 0.3); setTimeout(function () { blip(784, 0.16, "triangle", 0.26); }, 80); },
+      pick:    function () { blip(440, 0.07, "sine", 0.16); },
+      plant:   function () { blip(330, 0.12, "sine", 0.18, 420); },
+      buy:     function () { blip(392, 0.10, "square", 0.14, 587); setTimeout(function () { blip(784, 0.18, "triangle", 0.2); }, 90); },
+      upgrade: function () { [523, 659, 784, 1047].forEach(function (f, i) { setTimeout(function () { blip(f, 0.18, "triangle", 0.22); }, i * 90); }); },
+      deny:    function () { blip(180, 0.16, "square", 0.12, 120); },
+    };
+  })();
+
   function toast(msg) {
     var w = document.getElementById("toasts");
     var el = document.createElement("div");
@@ -4367,18 +4518,28 @@
       if (want > 0) {
         var fromSilo = 0;
         if (farmUnlocked()) {
-          fromSilo = Math.min(want, state.farm.silo);
+          // Only the SURPLUS above a reserve. A maxed pipeline pulls 40 bud a
+          // second and the field grows about 2.5, so drawing freely meant the
+          // silo sat pinned at zero no matter how good the crew got — you
+          // could never see it fill, and the courier had nothing left to run
+          // down to the shop. The reserve is the farm's own stock; the line
+          // buys in whatever it needs beyond that.
+          var reserve = siloCap() * FACTORY_SILO_RESERVE;
+          var spare = Math.max(0, state.farm.silo - reserve);
+          fromSilo = Math.min(want, spare);
           state.farm.silo -= fromSilo;
           f.raw += fromSilo;
         }
         var short = want - fromSilo;
         if (short > 0) {
-          var price = contractPrice();
-          var afford = Math.min(short, state.cash / price);
-          if (afford > 0) {
-            state.cash -= afford * price;
-            f.raw += afford;
-          }
+          // Billed against the line's OWN takings rather than your wallet.
+          // Taking it straight out of cash meant money quietly draining every
+          // frame with nothing on screen to explain it, so a tip you collected
+          // looked like it paid out less than it said. Now the factory settles
+          // its own input bill out of each shipment and what lands in the till
+          // is net profit.
+          f.owed = (f.owed || 0) + short * contractPrice();
+          f.raw += short;
         }
       }
     }
@@ -4455,6 +4616,10 @@
         if (send > 0) {
           f.bins.drink -= send;
           state.loungeIntake.drink = have + send;
+          // Drinks leave for the bar the moment they are made, so the DRINKS
+          // bin sits at zero and the line looks like it is not making any.
+          // This is the running total the bin actually reports.
+          f.sentToBar = (f.sentToBar || 0) + send;
         }
       }
     }
@@ -4476,7 +4641,11 @@
         gross += infusedValue(kind) * take;
       }
       if (shipped > 0) {
-        factoryPayOut(Math.round(gross * (promoActive() ? PROMO_MULT : 1)));
+        var paid = gross * (promoActive() ? PROMO_MULT : 1);
+        // settle the running input bill out of this container first
+        var bill = Math.min(f.owed || 0, paid);
+        f.owed = (f.owed || 0) - bill;
+        factoryPayOut(Math.round(paid - bill));
         lastShipAt = now;
         lastShipUnits = shipped;
       }
@@ -4509,9 +4678,18 @@
     for (var b = 0; b < factoryBinMeshes.length; b++) {
       var bm = factoryBinMeshes[b];
       var n = Math.floor(f.bins[bm.kind] || 0);
-      if (bm.count.userData.n !== n) {
-        bm.count.userData.n = n;
-        updateSpriteText(bm.count, n + "/" + FACTORY_BIN_CAP, n >= FACTORY_BIN_CAP ? "#ff9f6a" : "#ffe066");
+      var txt, col;
+      if (bm.kind === "drink" && loungeUnlocked()) {
+        // this bin never fills, by design — say where they went instead
+        txt = "\u2192 BAR " + Math.floor(f.sentToBar || 0);
+        col = "#ff8fbf";
+      } else {
+        txt = n + "/" + FACTORY_BIN_CAP;
+        col = n >= FACTORY_BIN_CAP ? "#ff9f6a" : "#ffe066";
+      }
+      if (bm.count.userData.txt !== txt) {
+        bm.count.userData.txt = txt;
+        updateSpriteText(bm.count, txt, col);
       }
     }
     // the inlet only glows while bud is actually flowing
@@ -4591,6 +4769,20 @@
     }
   }
 
+  // How long a customer will hold out for what they actually asked for
+  // before taking whatever is on the shelf instead.
+  var LOUNGE_PATIENCE = 25;
+  // Prefers whatever there is most of, so a swap lands on the shelf best able
+  // to absorb it rather than immediately emptying the one unit you just got.
+  function loungeStockedKind() {
+    var best = null, most = 0;
+    for (var i = 0; i < LOUNGE_KINDS.length; i++) {
+      var k = LOUNGE_KINDS[i], n = state.loungeIntake[k] || 0;
+      if (n > most) { most = n; best = k; }
+    }
+    return best;
+  }
+
   function payLoungeTip(npc, seat) {
     // the whole payment is left on the table: what they drank, scaled by how
     // classy the room is, plus a tip on top
@@ -4627,6 +4819,7 @@
           npc.want = rollLoungeOrder();
           npc.ordered = npc.want;
           npc.shown = -1;
+          npc.wait = 0;
         }
         continue;
       }
@@ -4639,7 +4832,27 @@
         walking = npc.walk < 1;
         if (npc.walk >= 1) npc.phase = "seated";
       } else if (npc.phase === "seated") {
-        // waits here indefinitely — handleLoungeServe() is the only way out
+        // Waits indefinitely — handleLoungeServe() is the only way out. That
+        // promise has a sharp edge though: a customer who wants something the
+        // bar has NO stock of, and no way to get, sits there forever and holds
+        // the seat. Fill every seat with those and the lounge stops earning
+        // entirely, with nothing you can do about it.
+        //
+        // It is also why drinks appeared to need an app restart: seats taken
+        // before the brewer existed never re-rolled, because nobody re-rolls
+        // until they leave, and they only leave when served.
+        //
+        // So after a spell of being ignored they will settle for something
+        // that is actually on the shelf. They still never walk out unserved.
+        npc.wait = (npc.wait || 0) + dt;
+        if (npc.wait > LOUNGE_PATIENCE && (state.loungeIntake[npc.kind] || 0) <= 0) {
+          var swap = loungeStockedKind();
+          if (swap && swap !== npc.kind) {
+            npc.kind = swap;
+            npc.shown = -1;
+            npc.wait = 0;
+          }
+        }
       } else if (npc.phase === "served") {
         if (npc.timer <= 0) {
           payLoungeTip(npc, seat);
@@ -7222,7 +7435,7 @@
       runners.push({
         obj: g, l1: l1, l2: l2, crate: crate,
         pos: { x: RUNNER_ZONE.x + 1.4 + n * 0.9, z: RUNNER_ZONE.z + 1.2 },
-        phase: "toBed", timer: 0, bedIdx: -1, carrying: 0,
+        phase: "toBed", timer: 0, bedIdx: -1, carrying: 0, pressIdx: -1,
         walkPhase: n * 2.1, slot: n,
       });
     }
@@ -7259,6 +7472,18 @@
     b.obj.rotation.y = Math.atan2(dx, dz);
     b.walkPhase += dt * 12;
     return false;
+  }
+
+  // How much bud the retail tray should hold before runners start taking the
+  // surplus out to the press line instead. Low enough that the counter never
+  // actually runs dry, high enough that production gets fed.
+  var COUNTER_ENOUGH = 12;
+  function runPressNeedingBud() {
+    var owned = pressOwned();
+    for (var i = 0; i < owned; i++) {
+      if (state.presses[i].buds < hopperCap()) return i;
+    }
+    return -1;
   }
 
   function updateRunners(now, dt) {
@@ -7309,11 +7534,51 @@
         }
 
       } else if (b.phase === "toCounter") {
+        // Runners used to march every last bud to the retail counter, which
+        // starved the presses — and with them the ovens — however many
+        // extractors were on shift, because the beds were stripped bare before
+        // an extractor could reach one. The counter only ever needs enough to
+        // serve the queue in front of it; past that, bud is worth far more as
+        // dabs and then edibles. So once the tray is comfortably stocked they
+        // take the rest out back instead.
+        var pIdx = runPressNeedingBud();
+        if (pIdx >= 0 && pileMeshes.length >= COUNTER_ENOUGH) {
+          b.pressIdx = pIdx;
+          b.phase = "toPress";
+          continue;
+        }
         var cx = SELL_ZONE.x - 1.2 + b.slot * 1.2, cz = SELL_ZONE.z + 1.4;
         var t2 = viaDoor(b, cx, cz);
         walking = !runStepTo(b, t2.x, t2.z, dt);
         if (!walking && t2.x === cx && t2.z === cz) {
           b.phase = "drop"; b.timer = RUN_DROP_TIME;
+        }
+
+      } else if (b.phase === "toPress") {
+        // the press may have filled up while we walked; re-pick or give up
+        if (b.pressIdx < 0 || b.pressIdx >= pressOwned() ||
+            state.presses[b.pressIdx].buds >= hopperCap()) {
+          b.pressIdx = runPressNeedingBud();
+        }
+        if (b.pressIdx < 0) { b.phase = "toCounter"; continue; }
+        var pd = pressDefs[b.pressIdx];
+        var t3 = viaDoor(b, pd.x, pd.z + 2.2);
+        walking = !runStepTo(b, t3.x, t3.z, dt);
+        if (!walking && t3.x === pd.x) { b.phase = "feed"; b.timer = RUN_DROP_TIME; }
+
+      } else if (b.phase === "feed") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var pi = b.pressIdx;
+          if (pi >= 0 && pi < pressOwned() && b.carrying > 0 &&
+              state.presses[pi].buds < hopperCap()) {
+            state.presses[pi].buds++;
+            b.carrying--;
+            b.timer = RUN_DROP_TIME;
+          } else {
+            b.pressIdx = -1;
+            b.phase = b.carrying > 0 ? "toCounter" : "toBed";
+          }
         }
 
       } else if (b.phase === "drop") {
@@ -7929,6 +8194,7 @@
     syncStack();
     addFloater(player.pos.x, 3.1, player.pos.z, "+SEED", "#ffe066");
     markTut("seed");
+    Snd.pick();
   }
 
   function handlePlots() {
@@ -7945,15 +8211,36 @@
             state.plots[i6] = { state: "growing", startedAt: Date.now(), duration: growTimeFor(i6) * 1000 };
             addFloater(d.x, 2.3, d.z, "PLANTED", "#9df0a0");
             markTut("plant");
+            Snd.plant();
             break;
           }
         }
-      } else if (plot.state === "ready" && player.backpack.length < backpackCap()) {
-        player.backpack.push({ type: "bud" });
-        syncStack();
-        state.plots[i6] = { state: "empty" };
-        addFloater(d.x, 2.5, d.z, "+BUD", "#a8f57a");
-        markTut("harvest");
+      } else if (plot.state === "ready") {
+        // A full bag used to simply refuse the harvest, and that could strand
+        // you: carrying nothing but seeds with no empty bed to plant them in
+        // means you cannot plant, cannot harvest, and cannot get out of it.
+        // So a seed gives up its slot for the bud instead. Seeds are free and
+        // a few steps away in the back room; a ready plant you cannot pick up
+        // is a dead end.
+        var room = player.backpack.length < backpackCap();
+        if (!room) {
+          for (var sw = player.backpack.length - 1; sw >= 0; sw--) {
+            if (player.backpack[sw].type === "seed") {
+              player.backpack.splice(sw, 1);
+              room = true;
+              addFloater(d.x, 3.1, d.z, "SEED SWAPPED", "#ffe066");
+              break;
+            }
+          }
+        }
+        if (room) {
+          player.backpack.push({ type: "bud" });
+          syncStack();
+          state.plots[i6] = { state: "empty" };
+          addFloater(d.x, 2.5, d.z, "+BUD", "#a8f57a");
+          markTut("harvest");
+          Snd.pick();
+        }
       }
     }
   }
@@ -9397,6 +9684,7 @@
         refreshCashPile();
         addFloater(pad.x, 2.6, pad.z, "+$" + fmt(claimed), "#8ff5a8");
         showCashGain(claimed);
+        Snd.cash();
         if (onClaim) onClaim(claimed);
         renderHud();
         saveState();
@@ -11158,6 +11446,7 @@
     if (paid >= z.cost - 0.01) {
       zoneResetPaid(z);
       z.complete();
+      Snd.upgrade();
       renderHud(); refreshStationTags(); saveState();
       zoneDwellKey = null;
       zoneDoneSlot = z.slot;
@@ -11190,6 +11479,7 @@
     if (zonePaid(z) >= z.cost - 0.01) {
       zoneResetPaid(z);
       z.complete();
+      Snd.upgrade();
       renderHud(); refreshStationTags(); saveState();
       zoneDoneSlot = z.slot;
     }
@@ -11265,6 +11555,51 @@
       setTimeout(function () {
         toast("🌤️ Welcome back — crops finished while you were away");
       }, 700);
+    }
+
+    // ---- the factory keeps working while the app is shut ----
+    // It is the only site that is genuinely automatic, so it is the only one
+    // that should. Everything else needs you or your staff physically on the
+    // floor, and staff only exist while the frame loop is running.
+    //
+    // Settled analytically rather than by fast-forwarding the sim: once the
+    // line is fed its throughput is a flat rate, so what it would have made is
+    // just rate x seconds, capped by the raw the pipeline could have pulled in
+    // that time. Cheap, and it cannot drift the way a replayed loop would.
+    if (factoryUnlocked() && el > 8000 && pipeLv() > 0 && lineRate() > 0) {
+      var awaySecs = Math.min(el / 1000, FACTORY_MAX_IDLE_SECS);
+      var rawPer = 0, wSum = 0;
+      for (var fs = 0; fs < FACTORY_STATIONS.length; fs++) {
+        var sdf = FACTORY_STATIONS[fs], r = stationRate(sdf.id);
+        rawPer += r * sdf.raw; wSum += r;
+      }
+      rawPer = wSum > 0 ? rawPer / wSum : 1;
+      var fed = (pipeRate() * awaySecs) / Math.max(0.001, rawPer);
+      var made = Math.min(lineRate() * awaySecs, fed);
+      if (made > 0) {
+        var grossAway = 0;
+        for (var fk = 0; fk < FACTORY_STATIONS.length; fk++) {
+          var sdk = FACTORY_STATIONS[fk];
+          var mine = made * (wSum > 0 ? stationRate(sdk.id) / wSum : 0);
+          if (sdk.kind === "drink" && loungeUnlocked()) {
+            // the bar gets topped up first, exactly as the live loop does
+            var roomBar = loungeIntakeCap() - (state.loungeIntake.drink || 0);
+            var toBar = Math.max(0, Math.min(Math.floor(mine), roomBar));
+            state.loungeIntake.drink = (state.loungeIntake.drink || 0) + toBar;
+            state.factory.sentToBar = (state.factory.sentToBar || 0) + toBar;
+            mine -= toBar;
+          }
+          grossAway += mine * infusedValue(sdk.kind);
+        }
+        // and it still settles its own bill for the bud it burned through
+        var netAway = Math.max(0, grossAway - made * rawPer * contractPrice());
+        if (netAway > 0) {
+          factoryPayOut(Math.round(netAway));
+          setTimeout(function () {
+            toast("🏭 The line ran while you were out — collect at the factory");
+          }, 1400);
+        }
+      }
     }
   })();
 
@@ -11705,6 +12040,33 @@
     hrWasNear = near;
     if (near && hrOverlay.classList.contains("show")) renderHrPanel();
   }
+
+  // ---- sound wiring ----
+  // Audio contexts are blocked until the player interacts, so the first
+  // pointer or key event anywhere is what actually starts it. Registered once
+  // and removed on the first fire.
+  (function () {
+    var btn = document.getElementById("sound-btn");
+    function paint() {
+      btn.textContent = state.muted ? "\ud83d\udd07" : "\ud83d\udd0a";
+      btn.classList.toggle("off", !!state.muted);
+    }
+    paint();
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      Snd.setMuted(!state.muted);
+      if (!state.muted) Snd.unlock();
+      paint();
+      saveState();
+    });
+    function kick() {
+      Snd.unlock();
+      window.removeEventListener("pointerdown", kick);
+      window.removeEventListener("keydown", kick);
+    }
+    window.addEventListener("pointerdown", kick);
+    window.addEventListener("keydown", kick);
+  })();
 
   // the nudge survives a reload — closing the tab is not "I saw the map"
   nudgeMap(state.mapNudge);
