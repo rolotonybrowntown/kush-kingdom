@@ -942,7 +942,7 @@
   // square, cash brick and floor decal helper works out there unmodified.
   var FARM_GROUND_TOP = FLOOR_TOP_BACK;
 
-  var FARM_DEED_COST = 2500000;
+  var FARM_DEED_COST = 5e9;
   function farmUnlocked() { return !!(state.farm && state.farm.unlocked); }
 
   // Third location. Placed well past the farm — farm's own worst-case fog
@@ -954,7 +954,7 @@
   var LOUNGE_CZ = -760;
   var LOUNGE_HALF_X = 18, LOUNGE_HALF_Z = 22;   // one interior room, far smaller than the farm's open field
   var LOUNGE_GROUND_TOP = FLOOR_TOP_BACK;       // floorTopAt(z) already returns this for any z this negative — free ride
-  var LOUNGE_DEED_COST = 6000000;
+  var LOUNGE_DEED_COST = 12e9;
   // How much of each product the bar can hold. This has to climb with the
   // class tiers, because those quadruple the seat count (4 -> 16) and so
   // quadruple how fast the shelves drain; a flat cap meant every upgrade
@@ -1248,6 +1248,14 @@
   // so you'd buy a grow light on the way to hiring a botanist.
   var HIRE_ZONE  = { x: 0.0, z: -30.0 };           // potting bench: hire botanists
   var MAX_BOTANISTS = 3;
+
+  // ---- the couch ----
+  // Sits in the customer lounge on the right of the shop floor, at world
+  // (11.8, 6.5). Nothing marks it and nothing hints at it: sit still on it
+  // long enough and it pays out. See updateCouch().
+  var COUCH_ZONE = { x: 11.3, z: 6.5, r: 2.6 };
+  var COUCH_SECS = 600;              // ten minutes, unmoving
+  var COUCH_REWARD = 1e15;           // $1Qa
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
@@ -1743,6 +1751,8 @@
       deedSeen: {},           // sites we have already pointed at the map about
       mapNudge: false,        // map button is pulsing; cleared by opening it
       muted: false,           // sound off
+      couchSecs: 0,           // how long you have sat on the shop couch
+      couchClaimed: false,    // the couch pays out once
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
@@ -2027,6 +2037,9 @@
       if (!merged.deedSeen || typeof merged.deedSeen !== "object") merged.deedSeen = {};
       merged.mapNudge = !!merged.mapNudge;
       merged.muted = !!merged.muted;
+      merged.couchSecs = (typeof merged.couchSecs === "number" && isFinite(merged.couchSecs))
+        ? Math.max(0, merged.couchSecs) : 0;
+      merged.couchClaimed = !!merged.couchClaimed;
       if (!merged.mystery || typeof merged.mystery !== "object") {
         merged.mystery = { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 };
       }
@@ -11675,6 +11688,7 @@
     updateSoilBag(now, dt);
     updateMysteryBox(now);
     updateHrProximity();
+    updateCouch(dt);
     checkDeedAffordable();
     updateStack(now);
     updateCounterPile(now, dt);
@@ -12024,6 +12038,37 @@
   // its own desk and its own books — training the farm's hands no longer
   // quietly kits out the shop floor and the lounge as well.
   var hrWasNear = false;
+  // ---- the couch ----
+  // A secret. There is deliberately no pad, no label, no progress bar and no
+  // hint anywhere in the game: the whole point is that it only rewards
+  // somebody who already knows, so anything that advertised it would defeat
+  // it. Ten minutes of sitting genuinely still on the shop's lounge couch.
+  //
+  // Stepping off resets the clock — it is a sit, not a stopwatch you can
+  // leave running. The tally IS persisted though, so an accidental reload at
+  // minute nine does not throw the whole wait away.
+  function updateCouch(dt) {
+    if (state.couchClaimed) return;
+    var onIt = state.site === "shop" && !player.moving &&
+      d2(player.pos.x, player.pos.z, COUCH_ZONE.x, COUCH_ZONE.z) <= COUCH_ZONE.r;
+    if (!onIt) {
+      if (state.couchSecs) state.couchSecs = 0;
+      return;
+    }
+    state.couchSecs += dt;
+    if (state.couchSecs < COUCH_SECS) return;
+
+    state.couchClaimed = true;
+    state.couchSecs = 0;
+    state.cash += COUCH_REWARD;
+    addFloater(COUCH_ZONE.x, 3.4, COUCH_ZONE.z, "+$" + fmt(COUCH_REWARD), "#ffe066");
+    showCashGain(COUCH_REWARD);
+    Snd.upgrade();
+    toast("\ud83d\udecb\ufe0f Nice sit. Somebody left $" + fmt(COUCH_REWARD) + " down the back.");
+    renderHud();
+    saveState();
+  }
+
   function updateHrProximity() {
     var zone = hrZoneFor(state.site);
     var near = d2(player.pos.x, player.pos.z, zone.x, zone.z) <= 3.0 + PLAYER_RADIUS;
