@@ -1252,10 +1252,22 @@
   // ---- the couch ----
   // Sits in the customer lounge on the right of the shop floor, at world
   // (11.8, 6.5). Nothing marks it and nothing hints at it: sit still on it
-  // long enough and it pays out. See updateCouch().
+  // long enough and it pays out. See updateCouch(). Resets every calendar
+  // day rather than being a lifetime one-shot, on the same dayKey() the
+  // login streak uses.
   var COUCH_ZONE = { x: 11.3, z: 6.5, r: 2.6 };
   var COUCH_SECS = 600;              // ten minutes, unmoving
   var COUCH_REWARD = 1e15;           // $1Qa
+
+  // ---- the barn ----
+  // The second secret. Stand inside the farm's big red barn — footprint
+  // centred at (-31, -380), see buildFarm() — and hold still for ten
+  // minutes. Unlike the couch this one pays out once ever: it exists to let
+  // a save skip straight to "everything is fully upgraded" for testing, not
+  // as something to keep farming, so there is no reason for it to recur.
+  var BARN_ZONE = { x: -31, z: FARM_CZ + 20, r: 3.2 };
+  var BARN_SECS = 600;
+  var BARN_REWARD = 1e15;            // $1Qa
 
   // ---- retail fittings ----
   var SELL_ZONE = { x: 5.0, z: -5.0, r: 3.0 };     // dispensary counter
@@ -1752,7 +1764,9 @@
       mapNudge: false,        // map button is pulsing; cleared by opening it
       muted: false,           // sound off
       couchSecs: 0,           // how long you have sat on the shop couch
-      couchClaimed: false,    // the couch pays out once
+      couchDay: null,         // "YYYY-M-D" of the last day the couch paid out
+      barnSecs: 0,            // how long you have stood in the farm's barn
+      barnClaimed: false,     // the barn pays out once
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
@@ -2039,7 +2053,15 @@
       merged.muted = !!merged.muted;
       merged.couchSecs = (typeof merged.couchSecs === "number" && isFinite(merged.couchSecs))
         ? Math.max(0, merged.couchSecs) : 0;
-      merged.couchClaimed = !!merged.couchClaimed;
+      // couchClaimed used to mean "ever" (one-time); a save carrying that flag
+      // already spent its claim, so it converts to "claimed today" rather than
+      // reopening a free payout on the very next load.
+      merged.couchDay = merged.couchClaimed ? dayKey(Date.now())
+        : (typeof merged.couchDay === "string" ? merged.couchDay : null);
+      delete merged.couchClaimed;
+      merged.barnSecs = (typeof merged.barnSecs === "number" && isFinite(merged.barnSecs))
+        ? Math.max(0, merged.barnSecs) : 0;
+      merged.barnClaimed = !!merged.barnClaimed;
       if (!merged.mystery || typeof merged.mystery !== "object") {
         merged.mystery = { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 };
       }
@@ -11693,6 +11715,7 @@
     updateMysteryBox(now);
     updateHrProximity();
     updateCouch(dt);
+    updateBarn(dt);
     checkDeedAffordable();
     updateStack(now);
     updateCounterPile(now, dt);
@@ -12050,9 +12073,12 @@
   //
   // Stepping off resets the clock — it is a sit, not a stopwatch you can
   // leave running. The tally IS persisted though, so an accidental reload at
-  // minute nine does not throw the whole wait away.
+  // minute nine does not throw the whole wait away. Pays out once per
+  // calendar day (dayKey(), the same boundary the login streak uses) rather
+  // than once ever.
   function updateCouch(dt) {
-    if (state.couchClaimed) return;
+    var today = dayKey(Date.now());
+    if (state.couchDay === today) return;
     var onIt = state.site === "shop" && !player.moving &&
       d2(player.pos.x, player.pos.z, COUCH_ZONE.x, COUCH_ZONE.z) <= COUCH_ZONE.r;
     if (!onIt) {
@@ -12062,13 +12088,40 @@
     state.couchSecs += dt;
     if (state.couchSecs < COUCH_SECS) return;
 
-    state.couchClaimed = true;
+    state.couchDay = today;
     state.couchSecs = 0;
     state.cash += COUCH_REWARD;
     addFloater(COUCH_ZONE.x, 3.4, COUCH_ZONE.z, "+$" + fmt(COUCH_REWARD), "#ffe066");
     showCashGain(COUCH_REWARD);
     Snd.upgrade();
-    toast("\ud83d\udecb\ufe0f Nice sit. Somebody left $" + fmt(COUCH_REWARD) + " down the back.");
+    toast("🛋️ Nice sit. Somebody left $" + fmt(COUCH_REWARD) + " down the back.");
+    renderHud();
+    saveState();
+  }
+
+  // ---- the barn ----
+  // Same shape as the couch — silent, no pad, no hint — but inside the farm's
+  // barn and gated on owning the farm rather than the shop. Pays out once
+  // ever: this one exists so a save can skip straight to "everything is
+  // fully upgraded" for testing, not as something to keep coming back to.
+  function updateBarn(dt) {
+    if (state.barnClaimed) return;
+    var onIt = state.site === "farm" && farmUnlocked() && !player.moving &&
+      d2(player.pos.x, player.pos.z, BARN_ZONE.x, BARN_ZONE.z) <= BARN_ZONE.r;
+    if (!onIt) {
+      if (state.barnSecs) state.barnSecs = 0;
+      return;
+    }
+    state.barnSecs += dt;
+    if (state.barnSecs < BARN_SECS) return;
+
+    state.barnClaimed = true;
+    state.barnSecs = 0;
+    state.cash += BARN_REWARD;
+    addFloater(BARN_ZONE.x, 3.4, BARN_ZONE.z, "+$" + fmt(BARN_REWARD), "#ffe066");
+    showCashGain(BARN_REWARD);
+    Snd.upgrade();
+    toast("🏠 Found something in the hayloft. +$" + fmt(BARN_REWARD));
     renderHud();
     saveState();
   }
