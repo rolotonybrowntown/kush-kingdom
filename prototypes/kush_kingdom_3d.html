@@ -1221,17 +1221,13 @@
   // the late-game scaling cannot be applied at one call site and missed at
   // another — the price on the map row, the affordability check, the "you can
   // afford somewhere new" nudge and the actual charge all come from here.
-  function deedCostOf(s) {
-    if (!s.deedCost) return 0;
-    // The factory already prices itself against its own output (factoryPrice),
-    // so it must NOT also take the empire-wide late-game multiplier — doing
-    // both scales it twice and quotes the deed in quadrillions. It uses the
-    // same scheme as the rest of the site instead, floored at its base price.
-    if (s.id === "factory") {
-      return factoryPrice(FACTORY_DEED_COST, 4 * refLineGrossPerSec(), 1, 0);
-    }
-    return scaled(s.deedCost);
-  }
+  // Deeds are FLAT. Everything else from the dock onward rides lateScale(),
+  // and deeds were swept up in that — which turned buying a location into a
+  // target that ran away from you: earning toward the farm raised your strain
+  // level, which raised the price of the farm. You could save five billion
+  // toward it and find it now cost eleven. A price you are saving up for has
+  // to hold still, so these are the one thing the scaling does not touch.
+  function deedCostOf(s) { return s.deedCost || 0; }
   function curSite() { return SITES[state.site] || SITES.shop; }
 
   // what each level physically adds, so the upgrade card promises something
