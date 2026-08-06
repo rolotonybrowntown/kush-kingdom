@@ -5378,6 +5378,49 @@
   var sawPads = [];
   var planerPads = [];
   var cutterPads = [];
+  var papersStockPile = null;
+
+  // A small stack of blocks that grows/shrinks with a live count — the same
+  // idea as makeTill's cash-brick pile, generalized so any machine's hopper
+  // can read as a physical pile instead of just a status bar. Blocks are
+  // children of `parentGroup` in local space, so they hide/show for free
+  // whenever the machine's own group visibility toggles.
+  function makeResourcePile(parentGroup, offsetX, offsetZ, geo, mat, maxBlocks, cols, rows, baseY) {
+    cols = cols || 2; rows = rows || 2; baseY = baseY || 0;
+    var blockH = 0.22, spacing = 0.32;
+    var blocks = [];
+    function spot(i) {
+      var perLayer = cols * rows;
+      var layer = Math.floor(i / perLayer);
+      var within = i % perLayer;
+      var col = within % cols, row = Math.floor(within / cols);
+      return {
+        x: offsetX - (cols - 1) * spacing / 2 + col * spacing,
+        z: offsetZ - (rows - 1) * spacing / 2 + row * spacing,
+        y: baseY + blockH / 2 + layer * blockH,
+      };
+    }
+    function addBlock() {
+      var s = spot(blocks.length);
+      var m = new THREE.Mesh(geo, mat);
+      m.castShadow = true; m.receiveShadow = true;
+      m.position.set(s.x, s.y, s.z);
+      m.rotation.y = (Math.random() - 0.5) * 0.4;
+      parentGroup.add(m);
+      blocks.push(m);
+    }
+    function removeBlock() {
+      var b = blocks.pop();
+      if (b) parentGroup.remove(b);
+    }
+    function setCount(n) {
+      var target = Math.max(0, Math.min(maxBlocks, Math.floor(n)));
+      while (blocks.length < target) addBlock();
+      while (blocks.length > target) removeBlock();
+    }
+    return { setCount: setCount };
+  }
+  var pileBlockGeo = new THREE.BoxGeometry(0.34, 0.22, 0.34);
 
   (function buildPapersSite() {
     var g = papersGroup;
@@ -5440,10 +5483,12 @@
       var glow = addGlow(sg, 0, 1.1, 0, 1.4, 0xffe066, 0);
       var barIn = makeStatusBar(1.8, 0xa8f57a); barIn.position.set(0, 2.75, 0); sg.add(barIn); statusBars.push(barIn);
       var barOut = makeStatusBar(1.8, 0xc9a875); barOut.position.set(0, 2.4, 0); sg.add(barOut); statusBars.push(barOut);
+      var pileIn = makeResourcePile(sg, -(SAW_SIZE / 2 + 1.0), 0, pileBlockGeo, M.woodDark, 16);
+      var pileOut = makeResourcePile(sg, SAW_SIZE / 2 + 1.0, 0, pileBlockGeo, M.wood, 16);
       sg.position.set(d.x, y, d.z);
       sg.visible = false;
       g.add(sg);
-      return { group: sg, blade: blade, glow: glow, barIn: barIn, barOut: barOut };
+      return { group: sg, blade: blade, glow: glow, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
     }
     for (var swi = 0; swi < sawDefs.length; swi++) sawObjects.push(buildSaw(sawDefs[swi]));
 
@@ -5452,6 +5497,7 @@
       var sq = makePaySquare(SAW_PAD_HALF, 0xa8875a, "#e0c090", "BUY SAW", d.z);
       sq.group.position.set(d.x, 0, d.z);
       sq.group.visible = false;
+      sq.pulse = addGlow(sq.group, 0, 4.4, 0, 1.7, 0xfff066, 0);
       g.add(sq.group);
       return sq;
     }
@@ -5473,10 +5519,12 @@
       var glow = addGlow(pg, 0, 1.1, 0, 1.6, 0xffe066, 0);
       var barIn = makeStatusBar(1.8, 0x9ad06a); barIn.position.set(0, 2.9, 0); pg.add(barIn); statusBars.push(barIn);
       var barOut = makeStatusBar(1.8, 0xd7a869); barOut.position.set(0, 2.55, 0); pg.add(barOut); statusBars.push(barOut);
+      var pileIn = makeResourcePile(pg, -(PLANER_SIZE / 2 + 1.0), 0, pileBlockGeo, M.wood, 16);
+      var pileOut = makeResourcePile(pg, PLANER_SIZE / 2 + 1.0, 0, pileBlockGeo, M.plank, 16);
       pg.position.set(d.x, y, d.z);
       pg.visible = false;
       g.add(pg);
-      return { group: pg, roller: roller, glow: glow, barIn: barIn, barOut: barOut };
+      return { group: pg, roller: roller, glow: glow, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
     }
     for (var pli = 0; pli < planerDefs.length; pli++) planerObjects.push(buildPlaner(planerDefs[pli]));
 
@@ -5485,6 +5533,7 @@
       var sq = makePaySquare(PLANER_PAD_HALF, 0xb98f52, "#e0b97a", "BUY PLANER", d.z);
       sq.group.position.set(d.x, 0, d.z);
       sq.group.visible = false;
+      sq.pulse = addGlow(sq.group, 0, 4.4, 0, 1.7, 0xfff066, 0);
       g.add(sq.group);
       return sq;
     }
@@ -5503,10 +5552,12 @@
       cg.add(blade);
       var barIn = makeStatusBar(1.8, 0xd7a869); barIn.position.set(0, 3.0, 0); cg.add(barIn); statusBars.push(barIn);
       var barOut = makeStatusBar(1.8, 0xe8dcc0); barOut.position.set(0, 2.65, 0); cg.add(barOut); statusBars.push(barOut);
+      var pileIn = makeResourcePile(cg, -(CUTTER_SIZE / 2 + 1.0), 0, pileBlockGeo, M.plank, 16);
+      var pileOut = makeResourcePile(cg, CUTTER_SIZE / 2 + 1.0, 0, pileBlockGeo, M.preroll, 16);
       cg.position.set(d.x, y, d.z);
       cg.visible = false;
       g.add(cg);
-      return { group: cg, blade: blade, barIn: barIn, barOut: barOut };
+      return { group: cg, blade: blade, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
     }
     for (var cli = 0; cli < cutterDefs.length; cli++) cutterObjects.push(buildCutter(cutterDefs[cli]));
 
@@ -5515,6 +5566,7 @@
       var sq = makePaySquare(CUTTER_PAD_HALF, 0x8a95a1, "#c9d3db", "BUY CUTTER", d.z);
       sq.group.position.set(d.x, 0, d.z);
       sq.group.visible = false;
+      sq.pulse = addGlow(sq.group, 0, 4.4, 0, 1.7, 0xfff066, 0);
       g.add(sq.group);
       return sq;
     }
@@ -5527,6 +5579,10 @@
     var standTop = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 1.2), M.woodDark);
     standTop.position.set(PAPERS_TILL_PAD.x, y + 1.36, PAPERS_TILL_PAD.z - 2.4);
     g.add(standTop);
+    // the "about to become cash" pile — the stock waiting on the stand top
+    // for the next truck, the clearest read of "the mill is working"
+    papersStockPile = makeResourcePile(g, PAPERS_TILL_PAD.x, PAPERS_TILL_PAD.z - 2.4,
+      pileBlockGeo, M.preroll, 40, 3, 3, y + 1.42);
     var signPost = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), M.woodDark);
     signPost.position.set(PAPERS_TILL_PAD.x, y + 2.0, PAPERS_TILL_PAD.z - 2.9);
     g.add(signPost);
@@ -5623,6 +5679,9 @@
 
   var papersTill = makeTill(PAPERS_TILL_PAD, 0xd7a869, "$ COLLECT");
   function updatePapersTill(now) { papersTill.update(now); }
+  function updatePapersStockPile() {
+    if (papersStockPile) papersStockPile.setCount(papersUnlocked() ? (state.papers.stock || 0) : 0);
+  }
 
   // ---- trees: chop for wood ----
   function handlePapersTrees() {
@@ -5705,6 +5764,8 @@
       so.glow.material.opacity = sObj.cutwood > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
       setBar(so.barIn, sObj.wood / papersHopperCap());
       setBar(so.barOut, sObj.cutwood / papersHopperCap());
+      so.pileIn.setCount(sObj.wood);
+      so.pileOut.setCount(sObj.cutwood);
     }
   }
   function updateSawPads(now) {
@@ -5713,7 +5774,7 @@
       var sp = sawPads[i];
       var show = (i === next);
       sp.group.visible = show;
-      if (!show) continue;
+      if (!show) { sp.pulse.material.opacity = 0; continue; }
       var cost = sawCost(i);
       var paid = state.stationPaid["saw" + i] || 0;
       var remain = Math.max(0, Math.ceil(cost - paid));
@@ -5723,6 +5784,7 @@
       }
       setPaySquareProgress(sp, Math.min(1, paid / cost));
       sp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+      sp.pulse.material.opacity = remain <= 0 || state.cash < remain ? 0 : 0.35 + Math.sin(now * 0.006) * 0.3;
     }
   }
 
@@ -5769,6 +5831,8 @@
       po.glow.material.opacity = p.lumber > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
       setBar(po.barIn, p.cutwood / papersHopperCap());
       setBar(po.barOut, p.lumber / papersHopperCap());
+      po.pileIn.setCount(p.cutwood);
+      po.pileOut.setCount(p.lumber);
     }
   }
   function updatePlanerPads(now) {
@@ -5777,7 +5841,7 @@
       var pp = planerPads[i];
       var show = (i === next);
       pp.group.visible = show;
-      if (!show) continue;
+      if (!show) { pp.pulse.material.opacity = 0; continue; }
       var cost = planerCost(i);
       var paid = state.stationPaid["planer" + i] || 0;
       var remain = Math.max(0, Math.ceil(cost - paid));
@@ -5787,6 +5851,7 @@
       }
       setPaySquareProgress(pp, Math.min(1, paid / cost));
       pp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+      pp.pulse.material.opacity = remain <= 0 || state.cash < remain ? 0 : 0.35 + Math.sin(now * 0.006) * 0.3;
     }
   }
 
@@ -5832,6 +5897,8 @@
       if (c.lumber > 0) co.blade.rotation.y = now * 0.02;
       setBar(co.barIn, c.lumber / papersHopperCap());
       setBar(co.barOut, c.papers / papersHopperCap());
+      co.pileIn.setCount(c.lumber);
+      co.pileOut.setCount(c.papers);
     }
   }
   function updateCutterPads(now) {
@@ -5840,7 +5907,7 @@
       var cp = cutterPads[i];
       var show = (i === next);
       cp.group.visible = show;
-      if (!show) continue;
+      if (!show) { cp.pulse.material.opacity = 0; continue; }
       var cost = cutterCost(i);
       var paid = state.stationPaid["cutter" + i] || 0;
       var remain = Math.max(0, Math.ceil(cost - paid));
@@ -5850,6 +5917,7 @@
       }
       setPaySquareProgress(cp, Math.min(1, paid / cost));
       cp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+      cp.pulse.material.opacity = remain <= 0 || state.cash < remain ? 0 : 0.35 + Math.sin(now * 0.006) * 0.3;
     }
   }
 
@@ -13321,6 +13389,7 @@
     updateMillhands(now, dt);
     updatePapersTruck(dt);
     updatePapersTill(now);
+    updatePapersStockPile();
     updateCourier(dt);
     updateCourierTruck(dt);
     updateIntakeVisuals();
