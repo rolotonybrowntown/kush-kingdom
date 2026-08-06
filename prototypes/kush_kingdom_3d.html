@@ -1216,35 +1216,69 @@
   // = -1364) leaves just under 100 units of slack. Re-measure this in-browser
   // if either room's camDist or footprint changes, same discipline as above.
   var PAPERS_CZ = -1400;
-  var PAPERS_HALF_X = 44, PAPERS_HALF_Z = 36;   // open mill yard, farm-scale
+  var PAPERS_HALF_X = 62, PAPERS_HALF_Z = 40;   // wide mill yard: forest left, trucks right
   var PAPERS_GROUND_TOP = FLOOR_TOP_BACK;
   var PAPERS_DEED_COST = 3e13;   // priciest deed yet — five locations deep
   function papersUnlocked() { return !!(state.papers && state.papers.unlocked); }
 
-  // ---- trees: chop for wood, they regrow on a timer ----
-  var PAPERS_TREE_COLS = 4, PAPERS_TREE_ROWS = 3;
-  var PAPERS_TREE_SPACING_X = 8.0, PAPERS_TREE_SPACING_Z = 8.0;
+  // ---- the mill reads strictly left to right: forest, saw, planer, cutter,
+  // register/trucks. Each machine stage is its own fixed X column; buying
+  // more machines in that stage adds new rows going down (+Z) rather than
+  // spreading sideways, so the columns stay columns as the site grows. ----
+  var PAPERS_ROW_SPACING = 9.0;           // vertical gap between stacked machine rows
+  function stageRowZ(row) { return -PAPERS_ROW_SPACING + row * PAPERS_ROW_SPACING; }  // 3 rows: -9, 0, +9
+
+  // ---- trees: a big forest on the far left, chop for wood, they regrow ----
+  var PAPERS_FOREST_COL_X = -PAPERS_HALF_X + 16;
+  var PAPERS_TREE_COLS = 3, PAPERS_TREE_ROWS = 5;
+  var PAPERS_TREE_SPACING_X = 7.0, PAPERS_TREE_SPACING_Z = 7.5;
   var PAPERS_TREE_SIZE = 2.4;
   var papersTreeDefs = [];
   (function () {
     var w = (PAPERS_TREE_COLS - 1) * PAPERS_TREE_SPACING_X;
-    var zNear = PAPERS_CZ + PAPERS_HALF_Z - 14;
+    var h = (PAPERS_TREE_ROWS - 1) * PAPERS_TREE_SPACING_Z;
     for (var r = 0; r < PAPERS_TREE_ROWS; r++) {
       for (var c = 0; c < PAPERS_TREE_COLS; c++) {
-        papersTreeDefs.push({ x: -w / 2 + c * PAPERS_TREE_SPACING_X, z: zNear - r * PAPERS_TREE_SPACING_Z });
+        papersTreeDefs.push({
+          x: PAPERS_FOREST_COL_X - w / 2 + c * PAPERS_TREE_SPACING_X,
+          z: PAPERS_CZ - h / 2 + r * PAPERS_TREE_SPACING_Z,
+        });
       }
     }
   })();
   var PAPERS_TREE_REGROW = 16;   // seconds for a stump to grow back
 
-  // ---- planer: wood -> lumber, one machine at a time, same shape as the
-  // rosin press ----
-  var PLANER_COLS = 3, PLANER_ROWS = 1, PLANER_SPACING_X = 7.0, PLANER_SIZE = 3.4;
+  // ---- saw: wood -> cut wood, first machine stage after the forest ----
+  var PAPERS_SAW_COL_X = -PAPERS_HALF_X + 34;
+  var SAW_SIZE = 3.2;
+  var sawDefs = [];
+  (function () {
+    for (var r = 0; r < 3; r++) sawDefs.push({ x: PAPERS_SAW_COL_X, z: PAPERS_CZ + stageRowZ(r) });
+  })();
+  var MAX_SAWS = sawDefs.length;
+  var SAW_PAD_HALF = (SAW_SIZE + 0.5) / 2;
+  var BASE_SAW_TIME = 5;
+  function sawTimeFor() {
+    var t = BASE_SAW_TIME * Math.pow(0.78, state.papers && state.papers.sawLv || 0);
+    if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
+    return Math.max(t, 0.8);
+  }
+  function sawOwned() { return Math.min((state.papers && state.papers.sawCount) || 0, MAX_SAWS); }
+  function sawSlotsAvailable() { return papersUnlocked() ? MAX_SAWS : 0; }
+  function nextSawSlot() {
+    var owned = (state.papers && state.papers.sawCount) || 0;
+    return owned < sawSlotsAvailable() ? owned : -1;
+  }
+  function sawCost(n) { return scaled(3000 * Math.pow(1.95, n)); }
+  function sawLvCost(lv) { return scaled(10000 * Math.pow(2.6, lv)); }
+
+  // ---- planer: cut wood -> lumber, same shape as the rosin press ----
+  var PAPERS_PLANER_COL_X = -PAPERS_HALF_X + 52;
+  var PLANER_SIZE = 3.4;
   var planerDefs = [];
   (function () {
-    var w = (PLANER_COLS - 1) * PLANER_SPACING_X;
-    var zc = PAPERS_CZ - 8;
-    for (var c = 0; c < PLANER_COLS; c++) planerDefs.push({ x: -w / 2 + c * PLANER_SPACING_X, z: zc });
+    for (var r = 0; r < 3; r++) planerDefs.push({ x: PAPERS_PLANER_COL_X, z: PAPERS_CZ + stageRowZ(r) });
   })();
   var MAX_PLANERS = planerDefs.length;
   var PLANER_PAD_HALF = (PLANER_SIZE + 0.5) / 2;
@@ -1268,12 +1302,11 @@
   function papersHopperCost(lv) { return scaled(6000 * Math.pow(2.5, lv)); }
 
   // ---- cutter/packager: lumber -> rolling papers, same shape as the oven ----
-  var CUTTER_COLS = 3, CUTTER_ROWS = 1, CUTTER_SPACING_X = 7.0, CUTTER_SIZE = 3.4;
+  var PAPERS_CUTTER_COL_X = -PAPERS_HALF_X + 70;
+  var CUTTER_SIZE = 3.4;
   var cutterDefs = [];
   (function () {
-    var w = (CUTTER_COLS - 1) * CUTTER_SPACING_X;
-    var zc = PAPERS_CZ - 20;
-    for (var c = 0; c < CUTTER_COLS; c++) cutterDefs.push({ x: -w / 2 + c * CUTTER_SPACING_X, z: zc });
+    for (var r = 0; r < 3; r++) cutterDefs.push({ x: PAPERS_CUTTER_COL_X, z: PAPERS_CZ + stageRowZ(r) });
   })();
   var MAX_CUTTERS = cutterDefs.length;
   var CUTTER_PAD_HALF = (CUTTER_SIZE + 0.5) / 2;
@@ -1293,7 +1326,7 @@
   function cutterCost(n) { return scaled(4000 * Math.pow(1.95, n)); }
   function cutLvCost(lv) { return scaled(12000 * Math.pow(2.6, lv)); }
 
-  // ---- register: sells rolling papers only to trucks pulling up ----
+  // ---- register: sells rolling papers only to trucks pulling up, far right ----
   var PAPERS_STOCK_CAP = 80;         // rolls waiting at the register
   var BASE_PAPERS_VALUE = 60;
   function papersValue() {
@@ -1303,15 +1336,15 @@
   var PAPERS_TRUCK_CAP = 40;
   var PAPERS_TRUCK_ARRIVE = 2.4, PAPERS_TRUCK_DEPART = 2.4, PAPERS_TRUCK_GAP = 5.0, PAPERS_TRUCK_PATIENCE = 20;
 
-  // ---- automation: two crews split the chain in half. Woodcutters chop and
-  // feed the planers directly; mill hands relay the two downstream legs
-  // (planer output -> cutter, cutter output -> register). ----
+  // ---- automation: three crews split the chain. Woodcutters chop and feed
+  // the saws; mill hands relay all three downstream legs (saw output ->
+  // planer, planer output -> cutter, cutter output -> register). ----
   var MAX_WOODCUTTERS = 4, MAX_MILLHANDS = 3;
   function costWoodcutter() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.woodcutterLv) || 0)); }
   function costMillhand() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.millhandLv) || 0)); }
-  var PAPERS_HR_ZONE = { x: 16.0, z: PAPERS_CZ + PAPERS_HALF_Z - 8 };
-  var WOODCUTTER_ZONE = { x: -18.0, z: PAPERS_CZ + PAPERS_HALF_Z - 20 };
-  var MILLHAND_ZONE = { x: 18.0, z: PAPERS_CZ - 14 };
+  var PAPERS_HR_ZONE = { x: PAPERS_HALF_X - 8, z: PAPERS_CZ - PAPERS_HALF_Z + 8 };
+  var WOODCUTTER_ZONE = { x: PAPERS_FOREST_COL_X, z: PAPERS_CZ + PAPERS_HALF_Z - 6 };
+  var MILLHAND_ZONE = { x: PAPERS_PLANER_COL_X, z: PAPERS_CZ + PAPERS_HALF_Z - 6 };
 
   // ===================================================================
   //  EXECUTIVE OFFICE — a HUD button from anywhere, and a physical annex
@@ -2152,12 +2185,15 @@
       papers: {
         unlocked: false,
         trees: papersTreeDefs.map(function () { return { state: "grown", prog: 0 }; }),
+        sawCount: 0,
+        saws: sawDefs.map(function () { return { wood: 0, cutwood: 0, acc: 0 }; }),
         planerCount: 0,
-        planers: planerDefs.map(function () { return { wood: 0, lumber: 0, acc: 0 }; }),
+        planers: planerDefs.map(function () { return { cutwood: 0, lumber: 0, acc: 0 }; }),
         cutterCount: 0,
         cutters: cutterDefs.map(function () { return { lumber: 0, papers: 0, acc: 0 }; }),
         stock: 0,               // rolling papers waiting at the register for a truck
-        hopperLv: 0,             // wood/lumber a machine holds at once
+        hopperLv: 0,             // wood/cut wood/lumber a machine holds at once
+        sawLv: 0,                // how fast a saw runs
         planeLv: 0,              // how fast a planer runs
         cutLv: 0,                // how fast a cutter runs
         valueLv: 0,              // what a roll of papers is worth
@@ -2280,11 +2316,22 @@
         if (!tr || typeof tr !== "object") pap.trees[pt] = { state: "grown", prog: 0 };
         else tr.prog = Math.max(0, typeof tr.prog === "number" && isFinite(tr.prog) ? tr.prog : 0);
       }
+      pap.sawCount = Math.max(0, Math.min(MAX_SAWS, Math.floor(pap.sawCount) || 0));
+      if (!Array.isArray(pap.saws)) pap.saws = [];
+      pap.saws.length = sawDefs.length;
+      for (var swj = 0; swj < pap.saws.length; swj++) {
+        if (!pap.saws[swj] || typeof pap.saws[swj] !== "object") pap.saws[swj] = { wood: 0, cutwood: 0, acc: 0 };
+      }
+      pap.sawLv = Math.max(0, Math.floor(pap.sawLv) || 0);
       pap.planerCount = Math.max(0, Math.min(MAX_PLANERS, Math.floor(pap.planerCount) || 0));
       if (!Array.isArray(pap.planers)) pap.planers = [];
       pap.planers.length = planerDefs.length;
       for (var ppi = 0; ppi < pap.planers.length; ppi++) {
-        if (!pap.planers[ppi] || typeof pap.planers[ppi] !== "object") pap.planers[ppi] = { wood: 0, lumber: 0, acc: 0 };
+        // older saves fed the planer with "wood" directly, pre-saw — carry
+        // any in-flight stock over as cutwood rather than dropping it
+        var oldP = pap.planers[ppi];
+        if (!oldP || typeof oldP !== "object") pap.planers[ppi] = { cutwood: 0, lumber: 0, acc: 0 };
+        else if (typeof oldP.cutwood !== "number") oldP.cutwood = (typeof oldP.wood === "number" ? oldP.wood : 0);
       }
       pap.cutterCount = Math.max(0, Math.min(MAX_CUTTERS, Math.floor(pap.cutterCount) || 0));
       if (!Array.isArray(pap.cutters)) pap.cutters = [];
@@ -5311,19 +5358,24 @@
   // ===================================================================
   //  ROLLING PAPERS MILL — geometry, production, and the truck-only register
   // ===================================================================
-  var PAPERS_REGISTER_X = 0, PAPERS_REGISTER_Z = PAPERS_CZ + PAPERS_HALF_Z - 6;
+  // The truck lane sits south of every machine row (rows run at PAPERS_CZ
+  // + {-9, 0, +9}), clear of all three, so trucks never drive through a
+  // saw/planer/cutter slot on their way to the register.
+  var PAPERS_REGISTER_X = PAPERS_HALF_X - 16, PAPERS_REGISTER_Z = PAPERS_CZ + 22;
   var PAPERS_DROP_ZONE = { x: PAPERS_REGISTER_X - 4, z: PAPERS_REGISTER_Z, half: 1.6 };
   var PAPERS_TILL_PAD = { x: PAPERS_REGISTER_X + 4, z: PAPERS_REGISTER_Z, half: 1.6 };
-  var PAPERS_TRUCK_Z = PAPERS_REGISTER_Z + 5;
-  var PAPERS_TRUCK_PARK_X = PAPERS_REGISTER_X + 2;
+  var PAPERS_TRUCK_Z = PAPERS_REGISTER_Z;
+  var PAPERS_TRUCK_PARK_X = PAPERS_REGISTER_X + 8;
   var PAPERS_TRUCK_START_X = PAPERS_HALF_X + 18;
 
   var papersGroup = new THREE.Group();
   scene.add(papersGroup);
   var papersGround;
   var papersTreeObjects = [];
+  var sawObjects = [];
   var planerObjects = [];
   var cutterObjects = [];
+  var sawPads = [];
   var planerPads = [];
   var cutterPads = [];
 
@@ -5337,8 +5389,11 @@
     papersGround.receiveShadow = true;
     g.add(papersGround);
 
-    var lane = new THREE.Mesh(new THREE.BoxGeometry(PAPERS_HALF_X * 1.6, 0.05, 12), M.track);
-    lane.position.set(0, y - 0.09, PAPERS_TRUCK_Z);
+    // the truck lane only covers where trucks actually drive — from the
+    // register out to the yard's right edge — not the whole width
+    var laneLen = (PAPERS_HALF_X + 20) - PAPERS_REGISTER_X + 10;
+    var lane = new THREE.Mesh(new THREE.BoxGeometry(laneLen, 0.05, 10), M.track);
+    lane.position.set(PAPERS_REGISTER_X + laneLen / 2 - 6, y - 0.09, PAPERS_TRUCK_Z);
     lane.receiveShadow = true;
     g.add(lane);
 
@@ -5368,6 +5423,39 @@
       return { group: tg, foliage: foliage, stump: stump, bar: bar };
     }
     for (var ti = 0; ti < papersTreeDefs.length; ti++) papersTreeObjects.push(buildTree(papersTreeDefs[ti]));
+
+    function buildSaw(d) {
+      var sg = new THREE.Group();
+      var shed = new THREE.Mesh(new THREE.BoxGeometry(SAW_SIZE, 1.9, SAW_SIZE), M.woodDark);
+      shed.position.y = 0.95; shed.castShadow = true; shed.receiveShadow = true;
+      sg.add(shed);
+      var roof = new THREE.Mesh(new THREE.BoxGeometry(SAW_SIZE + 0.5, 0.22, SAW_SIZE + 0.5), M.barnRoof);
+      roof.position.y = 2.02; roof.castShadow = true;
+      sg.add(roof);
+      var blade = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.48, 0.06, 20), M.metal);
+      blade.rotation.z = Math.PI / 2;
+      blade.position.set(0, 1.1, 0);
+      blade.castShadow = true;
+      sg.add(blade);
+      var glow = addGlow(sg, 0, 1.1, 0, 1.4, 0xffe066, 0);
+      var barIn = makeStatusBar(1.8, 0xa8f57a); barIn.position.set(0, 2.75, 0); sg.add(barIn); statusBars.push(barIn);
+      var barOut = makeStatusBar(1.8, 0xc9a875); barOut.position.set(0, 2.4, 0); sg.add(barOut); statusBars.push(barOut);
+      sg.position.set(d.x, y, d.z);
+      sg.visible = false;
+      g.add(sg);
+      return { group: sg, blade: blade, glow: glow, barIn: barIn, barOut: barOut };
+    }
+    for (var swi = 0; swi < sawDefs.length; swi++) sawObjects.push(buildSaw(sawDefs[swi]));
+
+    function makeSawPad(i) {
+      var d = sawDefs[i];
+      var sq = makePaySquare(SAW_PAD_HALF, 0xa8875a, "#e0c090", "BUY SAW", d.z);
+      sq.group.position.set(d.x, 0, d.z);
+      sq.group.visible = false;
+      g.add(sq.group);
+      return sq;
+    }
+    for (var swpi = 0; swpi < MAX_SAWS; swpi++) sawPads.push(makeSawPad(swpi));
 
     function buildPlaner(d) {
       var pg = new THREE.Group();
@@ -5574,7 +5662,71 @@
     }
   }
 
-  // ---- planer: wood -> lumber ----
+  // ---- saw: wood -> cut wood, first machine stage after the forest ----
+  function handleSaws() {
+    if (!papersUnlocked()) return;
+    var owned = sawOwned();
+    for (var i = 0; i < owned; i++) {
+      var d = sawDefs[i], sObj = state.papers.saws[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > SAW_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      var fed = 0, cap = papersHopperCap();
+      for (var b = player.backpack.length - 1; b >= 0; b--) {
+        if (sObj.wood + fed >= cap) break;
+        if (player.backpack[b].type === "wood") { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed) { sObj.wood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " WOOD", "#a8f57a"); }
+      var took = 0;
+      while (sObj.cutwood > 0 && player.backpack.length < backpackCap()) {
+        sObj.cutwood--; player.backpack.push({ type: "cutwood" }); took++;
+      }
+      if (took) addFloater(d.x, 3.4, d.z, "+" + took + " CUT WOOD", "#c9a875");
+      if (fed || took) { syncStack(); renderUpgrades(); }
+    }
+  }
+  function updateSawStates(dt) {
+    var owned = sawOwned();
+    for (var i = 0; i < owned; i++) {
+      var sObj = state.papers.saws[i];
+      if (sObj.wood <= 0) { sObj.acc = 0; continue; }
+      sObj.acc = (sObj.acc || 0) + dt;
+      var need = sawTimeFor();
+      while (sObj.acc >= need && sObj.wood > 0) { sObj.acc -= need; sObj.wood--; sObj.cutwood++; }
+    }
+  }
+  function updateSawVisuals(now) {
+    var owned = sawOwned();
+    for (var i = 0; i < sawObjects.length; i++) {
+      var so = sawObjects[i];
+      var live = papersUnlocked() && i < owned;
+      so.group.visible = live;
+      if (!live) continue;
+      var sObj = state.papers.saws[i];
+      if (sObj.wood > 0) so.blade.rotation.x = now * 0.03;
+      so.glow.material.opacity = sObj.cutwood > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
+      setBar(so.barIn, sObj.wood / papersHopperCap());
+      setBar(so.barOut, sObj.cutwood / papersHopperCap());
+    }
+  }
+  function updateSawPads(now) {
+    var next = nextSawSlot();
+    for (var i = 0; i < sawPads.length; i++) {
+      var sp = sawPads[i];
+      var show = (i === next);
+      sp.group.visible = show;
+      if (!show) continue;
+      var cost = sawCost(i);
+      var paid = state.stationPaid["saw" + i] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (sp.price.userData.last !== remain) {
+        updateSpriteText(sp.price, "$" + fmt(remain), "#e0c090");
+        sp.price.userData.last = remain;
+      }
+      setPaySquareProgress(sp, Math.min(1, paid / cost));
+      sp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
+
+  // ---- planer: cut wood -> lumber ----
   function handlePlaners() {
     if (!papersUnlocked()) return;
     var owned = planerOwned();
@@ -5583,10 +5735,10 @@
       if (d2(player.pos.x, player.pos.z, d.x, d.z) > PLANER_SIZE * 0.7 + PLAYER_RADIUS) continue;
       var fed = 0, cap = papersHopperCap();
       for (var b = player.backpack.length - 1; b >= 0; b--) {
-        if (p.wood + fed >= cap) break;
-        if (player.backpack[b].type === "wood") { player.backpack.splice(b, 1); fed++; }
+        if (p.cutwood + fed >= cap) break;
+        if (player.backpack[b].type === "cutwood") { player.backpack.splice(b, 1); fed++; }
       }
-      if (fed) { p.wood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " WOOD", "#a8f57a"); }
+      if (fed) { p.cutwood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " CUT WOOD", "#c9a875"); }
       var took = 0;
       while (p.lumber > 0 && player.backpack.length < backpackCap()) {
         p.lumber--; player.backpack.push({ type: "lumber" }); took++;
@@ -5599,10 +5751,10 @@
     var owned = planerOwned();
     for (var i = 0; i < owned; i++) {
       var p = state.papers.planers[i];
-      if (p.wood <= 0) { p.acc = 0; continue; }
+      if (p.cutwood <= 0) { p.acc = 0; continue; }
       p.acc = (p.acc || 0) + dt;
       var need = planeTimeFor();
-      while (p.acc >= need && p.wood > 0) { p.acc -= need; p.wood--; p.lumber++; }
+      while (p.acc >= need && p.cutwood > 0) { p.acc -= need; p.cutwood--; p.lumber++; }
     }
   }
   function updatePlanerVisuals(now) {
@@ -5613,9 +5765,9 @@
       po.group.visible = live;
       if (!live) continue;
       var p = state.papers.planers[i];
-      if (p.wood > 0) po.roller.rotation.x = now * 0.01;
+      if (p.cutwood > 0) po.roller.rotation.x = now * 0.01;
       po.glow.material.opacity = p.lumber > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
-      setBar(po.barIn, p.wood / papersHopperCap());
+      setBar(po.barIn, p.cutwood / papersHopperCap());
       setBar(po.barOut, p.lumber / papersHopperCap());
     }
   }
@@ -5778,11 +5930,11 @@
     }
     return -1;
   }
-  function woodcutterFindPlaner() {
-    var owned = planerOwned();
+  function woodcutterFindSaw() {
+    var owned = sawOwned();
     var best = -1, most = 0;
     for (var i = 0; i < owned; i++) {
-      var room = papersHopperCap() - state.papers.planers[i].wood;
+      var room = papersHopperCap() - state.papers.saws[i].wood;
       if (room > most) { most = room; best = i; }
     }
     return best;
@@ -5809,12 +5961,12 @@
       var cap = 3 + staffCarryBonus("papers");
 
       if (b.phase === "toTree") {
-        if (b.carrying >= cap) { b.phase = "toPlaner"; b.treeIdx = -1; continue; }
+        if (b.carrying >= cap) { b.phase = "toSaw"; b.treeIdx = -1; continue; }
         var stillGood = b.treeIdx >= 0 && state.papers.trees[b.treeIdx].state === "grown";
         if (!stillGood) {
           var idx = woodcutterFindTree(b);
           if (idx < 0) {
-            if (b.carrying > 0) { b.phase = "toPlaner"; continue; }
+            if (b.carrying > 0) { b.phase = "toSaw"; continue; }
             b.phase = "idle"; b.timer = 0.8; continue;
           }
           b.treeIdx = idx;
@@ -5834,21 +5986,21 @@
           b.phase = "toTree";
         }
 
-      } else if (b.phase === "toPlaner") {
+      } else if (b.phase === "toSaw") {
         if (b.carrying <= 0) { b.phase = "toTree"; continue; }
-        var pidx = woodcutterFindPlaner();
-        if (pidx < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
-        var pd = planerDefs[pidx];
-        walking = !wcStepTo(b, pd.x, pd.z, dt);
-        if (!walking) { b.phase = "feed"; b.timer = WOODCUTTER_ACT * staffActMult("papers"); b.feedIdx = pidx; }
+        var sidx = woodcutterFindSaw();
+        if (sidx < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var sd = sawDefs[sidx];
+        walking = !wcStepTo(b, sd.x, sd.z, dt);
+        if (!walking) { b.phase = "feed"; b.timer = WOODCUTTER_ACT * staffActMult("papers"); b.feedIdx = sidx; }
 
       } else if (b.phase === "feed") {
         b.timer -= dt;
         if (b.timer <= 0) {
-          var p = state.papers.planers[b.feedIdx];
-          var room = p ? papersHopperCap() - p.wood : 0;
+          var sObj = state.papers.saws[b.feedIdx];
+          var room = sObj ? papersHopperCap() - sObj.wood : 0;
           var put = Math.min(room, b.carrying);
-          if (put > 0) { p.wood += put; b.carrying -= put; }
+          if (put > 0) { sObj.wood += put; b.carrying -= put; }
           b.phase = b.carrying > 0 ? "idle" : "toTree";
           b.timer = 0.6;
         }
@@ -5857,7 +6009,7 @@
         b.timer -= dt;
         if (b.timer <= 0) {
           b.timer = 0.7;
-          b.phase = b.carrying > 0 ? "toPlaner" : "toTree";
+          b.phase = b.carrying > 0 ? "toSaw" : "toTree";
         }
       }
 
@@ -5880,6 +6032,8 @@
     b.walkPhase += dt * 12;
     return false;
   }
+  // Priority: whatever is closest to actually becoming cash goes first —
+  // finished papers, then planed lumber, then freshly sawn cut wood.
   function millhandFindPickup() {
     var ownedC = cutterOwned();
     var bestC = -1, mostC = 0;
@@ -5895,6 +6049,13 @@
       if (p.lumber > mostP) { mostP = p.lumber; bestP = j; }
     }
     if (bestP >= 0) return { kind: "lumber", idx: bestP };
+    var ownedS = sawOwned();
+    var bestS = -1, mostS = 0;
+    for (var k = 0; k < ownedS; k++) {
+      var sObj = state.papers.saws[k];
+      if (sObj.cutwood > mostS) { mostS = sObj.cutwood; bestS = k; }
+    }
+    if (bestS >= 0) return { kind: "cutwood", idx: bestS };
     return null;
   }
   function millhandFindCutterRoom() {
@@ -5905,6 +6066,19 @@
       if (room > most) { most = room; best = i; }
     }
     return most > 0 ? best : -1;
+  }
+  function millhandFindPlanerRoom() {
+    var owned = planerOwned();
+    var best = -1, most = -1;
+    for (var i = 0; i < owned; i++) {
+      var room = papersHopperCap() - state.papers.planers[i].cutwood;
+      if (room > most) { most = room; best = i; }
+    }
+    return most > 0 ? best : -1;
+  }
+  // Where a carried load is headed, keyed by what's in the millhand's hands.
+  function millhandDeliveryPhase(kind) {
+    return kind === "papers" ? "toRegister" : kind === "lumber" ? "toCutter" : "toPlaner";
   }
 
   function updateMillhands(now, dt) {
@@ -5918,19 +6092,20 @@
 
       if (b.phase === "seek") {
         if (b.carrying >= cap) {
-          b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter";
+          b.phase = millhandDeliveryPhase(b.carryKind);
           continue;
         }
         var job = millhandFindPickup();
         if (!job) {
-          if (b.carrying > 0) { b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter"; continue; }
+          if (b.carrying > 0) { b.phase = millhandDeliveryPhase(b.carryKind); continue; }
           b.phase = "idle"; b.timer = 0.8; continue;
         }
         if (b.carrying > 0 && b.carryKind !== job.kind) {
-          b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter";
+          b.phase = millhandDeliveryPhase(b.carryKind);
           continue;
         }
-        var src = job.kind === "papers" ? cutterDefs[job.idx] : planerDefs[job.idx];
+        var src = job.kind === "papers" ? cutterDefs[job.idx]
+                : job.kind === "lumber" ? planerDefs[job.idx] : sawDefs[job.idx];
         walking = !mhStepTo(b, src.x, src.z, dt);
         if (!walking) { b.phase = "pickup"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.pickupJob = job; }
 
@@ -5942,10 +6117,14 @@
             var c = state.papers.cutters[job2.idx];
             var take = c ? Math.min(c.papers, cap - b.carrying) : 0;
             if (take > 0) { c.papers -= take; b.carrying += take; b.carryKind = "papers"; }
-          } else {
+          } else if (job2.kind === "lumber") {
             var p = state.papers.planers[job2.idx];
             var take2 = p ? Math.min(p.lumber, cap - b.carrying) : 0;
             if (take2 > 0) { p.lumber -= take2; b.carrying += take2; b.carryKind = "lumber"; }
+          } else {
+            var sObj = state.papers.saws[job2.idx];
+            var take3 = sObj ? Math.min(sObj.cutwood, cap - b.carrying) : 0;
+            if (take3 > 0) { sObj.cutwood -= take3; b.carrying += take3; b.carryKind = "cutwood"; }
           }
           b.phase = "seek";
         }
@@ -5957,6 +6136,14 @@
         var cd = cutterDefs[cidx];
         walking = !mhStepTo(b, cd.x, cd.z, dt);
         if (!walking) { b.phase = "drop"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.dropIdx = cidx; }
+
+      } else if (b.phase === "toPlaner") {
+        if (b.carrying <= 0) { b.phase = "seek"; continue; }
+        var plidx = millhandFindPlanerRoom();
+        if (plidx < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var pld = planerDefs[plidx];
+        walking = !mhStepTo(b, pld.x, pld.z, dt);
+        if (!walking) { b.phase = "drop"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.dropIdx = plidx; }
 
       } else if (b.phase === "toRegister") {
         if (b.carrying <= 0) { b.phase = "seek"; continue; }
@@ -5971,6 +6158,11 @@
             var room = papersHopperCap() - cc.lumber;
             var put = Math.min(room, b.carrying);
             if (put > 0) { cc.lumber += put; b.carrying -= put; }
+          } else if (b.carryKind === "cutwood" && b.dropIdx >= 0) {
+            var pp = state.papers.planers[b.dropIdx];
+            var room3 = papersHopperCap() - pp.cutwood;
+            var put3 = Math.min(room3, b.carrying);
+            if (put3 > 0) { pp.cutwood += put3; b.carrying -= put3; }
           } else if (b.carryKind === "papers") {
             var room2 = PAPERS_STOCK_CAP - (state.papers.stock || 0);
             var put2 = Math.min(room2, b.carrying);
@@ -6863,6 +7055,14 @@
   var prerollGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.66, 7);  // a joint
   var vapeGeo = new THREE.BoxGeometry(0.16, 0.62, 0.16);               // a cartridge
   var drinkGeo = new THREE.CylinderGeometry(0.19, 0.16, 0.56, 10);     // a can
+  // Rolling Papers items — geometry pre-rotated so it reads correctly no
+  // matter how the stack mesh spins each frame (syncStack drives rotation.y).
+  var woodGeo = new THREE.CylinderGeometry(0.16, 0.18, 0.58, 8);       // a cut log, lying down
+  woodGeo.rotateZ(Math.PI / 2);
+  var cutwoodGeo = new THREE.CylinderGeometry(0.13, 0.14, 0.5, 8);     // a sawn section, lying down
+  cutwoodGeo.rotateZ(Math.PI / 2);
+  var lumberGeo = new THREE.BoxGeometry(0.62, 0.08, 0.2);              // a planed plank
+  var papersGeo = new THREE.BoxGeometry(0.3, 0.2, 0.05);               // a packaged pad of papers
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   var dabPile = new THREE.Group();       // dabs, on the other half of the same top
   (function dispensaryCounter() {
@@ -8335,11 +8535,17 @@
         mm.geometry = want === "seed" ? seedGeo
           : want === "dab" ? dabGeo : want === "edible" ? edibleGeo
           : want === "drink" ? drinkGeo : want === "vape" ? vapeGeo
-          : want === "preroll" ? prerollGeo : budGeo;
+          : want === "preroll" ? prerollGeo
+          : want === "wood" ? woodGeo : want === "cutwood" ? cutwoodGeo
+          : want === "lumber" ? lumberGeo : want === "papers" ? papersGeo
+          : budGeo;
         mm.material = want === "seed" ? M.packA
           : want === "dab" ? M.dab : want === "edible" ? M.edible
           : want === "drink" ? M.drink : want === "vape" ? M.vape
-          : want === "preroll" ? M.preroll : M.bud;
+          : want === "preroll" ? M.preroll
+          : want === "wood" ? M.woodDark : want === "cutwood" ? M.wood
+          : want === "lumber" ? M.plank : want === "papers" ? M.preroll
+          : M.bud;
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
       }
@@ -12068,7 +12274,7 @@
         return n >= MAX_WOODCUTTERS
           ? "The whole crew is swinging axes"
           : (n === 0
-              ? "They chop trees and feed the planers for you"
+              ? "They chop trees and feed the saws for you"
               : n + " on shift \u00b7 hire one more to keep the wood coming");
       },
       cost: costWoodcutter,
@@ -12090,7 +12296,7 @@
         return n >= MAX_MILLHANDS
           ? "The mill floor is fully staffed"
           : (n === 0
-              ? "They run lumber to the cutters and papers to the register"
+              ? "They run cut wood, lumber, and papers between every machine"
               : n + " on shift \u00b7 hire one more to keep the mill moving");
       },
       cost: costMillhand,
@@ -12697,6 +12903,28 @@
         })(nos, nod);
       }
     }
+    // the next saw slot at the mill
+    var nsw = state.site === "papers" ? nextSawSlot() : -1;
+    if (nsw >= 0) {
+      var nswd = sawDefs[nsw];
+      if (inBox(px, pz, nswd.x, nswd.z, SAW_PAD_HALF)) {
+        return (function (idx, dd) {
+          return {
+            kind: "saw", key: "saw" + idx, slot: "sawpad" + idx,
+            name: "Buy a Saw",
+            desc: "Machine " + (idx + 1) + " · holds " + papersHopperCap() + " wood at a time",
+            cost: sawCost(idx), maxed: false,
+            x: dd.x, z: dd.z, y: 1.6,
+            complete: function () {
+              state.papers.sawCount = idx + 1;
+              state.papers.saws[idx] = { wood: 0, cutwood: 0, acc: 0 };
+              addFloater(dd.x, 3.0, dd.z, "SAW IN!", "#e0c090");
+              toast("🪚 Saw installed!");
+            },
+          };
+        })(nsw, nswd);
+      }
+    }
     // the next planer slot at the mill
     var npl = state.site === "papers" ? nextPlanerSlot() : -1;
     if (npl >= 0) {
@@ -12706,12 +12934,12 @@
           return {
             kind: "planer", key: "planer" + idx, slot: "planerpad" + idx,
             name: "Buy a Planer",
-            desc: "Machine " + (idx + 1) + " · holds " + papersHopperCap() + " wood at a time",
+            desc: "Machine " + (idx + 1) + " · holds " + papersHopperCap() + " cut wood at a time",
             cost: planerCost(idx), maxed: false,
             x: dd.x, z: dd.z, y: 1.6,
             complete: function () {
               state.papers.planerCount = idx + 1;
-              state.papers.planers[idx] = { wood: 0, lumber: 0, acc: 0 };
+              state.papers.planers[idx] = { cutwood: 0, lumber: 0, acc: 0 };
               addFloater(dd.x, 3.0, dd.z, "PLANER IN!", "#e0b97a");
               toast("🪵 Planer installed!");
             },
@@ -13040,6 +13268,7 @@
     handleFarmPlots();
     handleFarmSilo();
     handlePapersTrees();
+    handleSaws();
     handlePlaners();
     handleCutters();
     handlePapersDrop();
@@ -13047,6 +13276,7 @@
     updateRowTiles(now);
     updatePressPads(now);
     updateOvenPads(now);
+    updateSawPads(now);
     updatePlanerPads(now);
     updateCutterPads(now);
     updateSoilBag(now, dt);
@@ -13081,6 +13311,8 @@
     updateHaulers(now, dt);
     updatePapersTreeGrowth(dt);
     updatePapersTreeVisuals();
+    updateSawStates(dt);
+    updateSawVisuals(now);
     updatePlanerStates(dt);
     updatePlanerVisuals(now);
     updateCutterStates(dt);
