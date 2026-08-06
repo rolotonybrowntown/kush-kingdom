@@ -383,6 +383,35 @@
     cursor: default;
   }
 
+  /* ---------------- executive office ---------------- */
+  /* Same shell as the HR panel; the rows reuse .hr-row/.hr-info/.hr-buy. */
+  #office-overlay {
+    position: fixed; inset: 0;
+    background: rgba(4, 14, 9, 0.62);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 21; padding: 24px;
+  }
+  #office-overlay.show { display: flex; }
+  #office-card {
+    width: 100%; max-width: 360px; max-height: 84vh; overflow-y: auto;
+    background: linear-gradient(180deg, #123024, #0b1f16);
+    border: 2px solid var(--panel-line);
+    border-radius: 22px;
+    padding: 20px 18px 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55);
+  }
+  #office-card h2 {
+    margin: 0 0 2px; font-size: 20px; text-align: center;
+    color: var(--green-light);
+  }
+  .office-section-title {
+    margin: 14px 0 0; text-align: left; text-transform: uppercase;
+    letter-spacing: 0.6px; font-size: 10.5px; opacity: 0.55;
+  }
+  .office-row.locked .hr-info b { opacity: 0.62; }
+
   /* ---------------- "a new build is waiting" bar ---------------- */
   /* The offline cache must never be able to hide a deploy. When a newer build
      has been fetched and parked, this says so and hands over the reload —
@@ -549,6 +578,23 @@
     #map-btn.nudge { animation: none; box-shadow: 0 5px 16px rgba(0,0,0,0.4), 0 0 0 4px rgba(255,203,46,0.5); }
   }
 
+  #office-btn {
+    position: absolute;
+    top: calc(var(--safe-t) + 180px);
+    right: calc(var(--safe-r) + 14px);
+    width: 46px; height: 46px;
+    border-radius: 14px;
+    border: 1.5px solid var(--panel-line);
+    background: var(--panel);
+    color: #eafff2;
+    font-size: 19px; line-height: 1;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 5px 16px rgba(0,0,0,0.4);
+    z-index: 8;
+    cursor: pointer;
+  }
+
   #menu-btn {
     position: absolute;
     top: calc(var(--safe-t) + 18px);
@@ -672,6 +718,28 @@
   <button id="menu-btn" aria-label="Menu">☰</button>
   <button id="sound-btn" aria-label="Sound">🔊</button>
   <button id="map-btn" aria-label="Empire map">🗺</button>
+  <button id="office-btn" aria-label="Executive Office">💼</button>
+
+  <div id="office-overlay">
+    <div id="office-card">
+      <h2>Executive Office</h2>
+      <p class="hr-sub">Run the whole operation from one desk.</p>
+
+      <p class="hr-sub office-section-title">Accountant</p>
+      <div id="office-accountant-rows"></div>
+
+      <p class="hr-sub office-section-title">Profit Boosters</p>
+      <div id="office-profit-rows"></div>
+
+      <p class="hr-sub office-section-title">Hat Locker</p>
+      <div id="office-hat-rows"></div>
+
+      <p class="hr-sub office-section-title">City Terminal</p>
+      <div id="office-city-rows"></div>
+
+      <button class="menu-action primary" id="office-close">Done</button>
+    </div>
+  </div>
 
   <div id="map-overlay">
     <div id="map-card">
@@ -813,6 +881,12 @@
   var BASE_CAP = 5;
   var SEED_COOLDOWN = 300;
   var PLAYER_RADIUS = 0.8;
+  // Declared here (rather than down by makeStatusBar/setBar, where it
+  // conceptually belongs) because the Rolling Papers site builds its bars
+  // during an early top-level IIFE and pushes into this array immediately —
+  // it has to exist before that runs, not just before frame() first calls
+  // faceBarsAtCamera().
+  var statusBars = [];
 
   // ===================================================================
   //  COMPACT BASE LAYOUT  (fits one phone screen, like the reference ad)
@@ -1076,8 +1150,9 @@
          : kind === "drink" ? BASE_DRINK_VALUE : BASE_PREROLL_VALUE;
   }
   function infusedValue(kind) {
-    return infusedBase(kind) * (sellValue() / BASE_SELL_VALUE) *
-           (1 + 0.3 * ((state.factory && state.factory.qualityLv) || 0));
+    return infusedBase(kind) * (sellValueBase() / BASE_SELL_VALUE) *
+           (1 + 0.3 * ((state.factory && state.factory.qualityLv) || 0)) *
+           officeProfitMult("factory");
   }
   // Potency lifts every unit by 30%, so it is quoted against 30% of the
   // reference line rather than against any one station.
@@ -1120,6 +1195,166 @@
   // Shipping only matters once the bins are filling faster than containers
   // leave, so it is quoted against half the reference line.
   function costShip() { return factoryPrice(2.5e12, 0.5 * refLineGrossPerSec(), 2.4, shipLv() - 1); }
+
+  // ===================================================================
+  //  ROLLING PAPERS MILL
+  // ===================================================================
+  // Fifth location. Measured off the factory's own worst-case reach, same
+  // method as every other site: standing at the factory's deepest reachable
+  // z (FACTORY_CZ - FACTORY_HALF_Z + 1.5 = -1064.5) puts the camera at
+  // roughly -1038.6 (camDist 54, trailing by ~half that toward +z, the same
+  // ratio the lounge/factory derivations above used), with fog.far 226.8
+  // (54 * 4.2) closing the sky at -1265.4. PAPERS_CZ's near edge (-1400 + 36
+  // = -1364) leaves just under 100 units of slack. Re-measure this in-browser
+  // if either room's camDist or footprint changes, same discipline as above.
+  var PAPERS_CZ = -1400;
+  var PAPERS_HALF_X = 44, PAPERS_HALF_Z = 36;   // open mill yard, farm-scale
+  var PAPERS_GROUND_TOP = FLOOR_TOP_BACK;
+  var PAPERS_DEED_COST = 3e13;   // priciest deed yet — five locations deep
+  function papersUnlocked() { return !!(state.papers && state.papers.unlocked); }
+
+  // ---- trees: chop for wood, they regrow on a timer ----
+  var PAPERS_TREE_COLS = 4, PAPERS_TREE_ROWS = 3;
+  var PAPERS_TREE_SPACING_X = 8.0, PAPERS_TREE_SPACING_Z = 8.0;
+  var PAPERS_TREE_SIZE = 2.4;
+  var papersTreeDefs = [];
+  (function () {
+    var w = (PAPERS_TREE_COLS - 1) * PAPERS_TREE_SPACING_X;
+    var zNear = PAPERS_CZ + PAPERS_HALF_Z - 14;
+    for (var r = 0; r < PAPERS_TREE_ROWS; r++) {
+      for (var c = 0; c < PAPERS_TREE_COLS; c++) {
+        papersTreeDefs.push({ x: -w / 2 + c * PAPERS_TREE_SPACING_X, z: zNear - r * PAPERS_TREE_SPACING_Z });
+      }
+    }
+  })();
+  var PAPERS_TREE_REGROW = 16;   // seconds for a stump to grow back
+
+  // ---- planer: wood -> lumber, one machine at a time, same shape as the
+  // rosin press ----
+  var PLANER_COLS = 3, PLANER_ROWS = 1, PLANER_SPACING_X = 7.0, PLANER_SIZE = 3.4;
+  var planerDefs = [];
+  (function () {
+    var w = (PLANER_COLS - 1) * PLANER_SPACING_X;
+    var zc = PAPERS_CZ - 8;
+    for (var c = 0; c < PLANER_COLS; c++) planerDefs.push({ x: -w / 2 + c * PLANER_SPACING_X, z: zc });
+  })();
+  var MAX_PLANERS = planerDefs.length;
+  var PLANER_PAD_HALF = (PLANER_SIZE + 0.5) / 2;
+  var BASE_PLANE_TIME = 6;
+  var BASE_PAPER_HOPPER = 8;
+  function papersHopperCap() { return BASE_PAPER_HOPPER + 3 * (state.papers && state.papers.hopperLv || 0); }
+  function planeTimeFor() {
+    var t = BASE_PLANE_TIME * Math.pow(0.78, state.papers && state.papers.planeLv || 0);
+    if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
+    return Math.max(t, 0.8);
+  }
+  function planerOwned() { return Math.min((state.papers && state.papers.planerCount) || 0, MAX_PLANERS); }
+  function planerSlotsAvailable() { return papersUnlocked() ? MAX_PLANERS : 0; }
+  function nextPlanerSlot() {
+    var owned = (state.papers && state.papers.planerCount) || 0;
+    return owned < planerSlotsAvailable() ? owned : -1;
+  }
+  function planerCost(n) { return scaled(4000 * Math.pow(1.95, n)); }
+  function planeLvCost(lv) { return scaled(12000 * Math.pow(2.6, lv)); }
+  function papersHopperCost(lv) { return scaled(6000 * Math.pow(2.5, lv)); }
+
+  // ---- cutter/packager: lumber -> rolling papers, same shape as the oven ----
+  var CUTTER_COLS = 3, CUTTER_ROWS = 1, CUTTER_SPACING_X = 7.0, CUTTER_SIZE = 3.4;
+  var cutterDefs = [];
+  (function () {
+    var w = (CUTTER_COLS - 1) * CUTTER_SPACING_X;
+    var zc = PAPERS_CZ - 20;
+    for (var c = 0; c < CUTTER_COLS; c++) cutterDefs.push({ x: -w / 2 + c * CUTTER_SPACING_X, z: zc });
+  })();
+  var MAX_CUTTERS = cutterDefs.length;
+  var CUTTER_PAD_HALF = (CUTTER_SIZE + 0.5) / 2;
+  var BASE_CUT_TIME = 6;
+  function cutTimeFor() {
+    var t = BASE_CUT_TIME * Math.pow(0.78, state.papers && state.papers.cutLv || 0);
+    if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
+    return Math.max(t, 0.8);
+  }
+  function cutterOwned() { return Math.min((state.papers && state.papers.cutterCount) || 0, MAX_CUTTERS); }
+  function cutterSlotsAvailable() { return papersUnlocked() ? MAX_CUTTERS : 0; }
+  function nextCutterSlot() {
+    var owned = (state.papers && state.papers.cutterCount) || 0;
+    return owned < cutterSlotsAvailable() ? owned : -1;
+  }
+  function cutterCost(n) { return scaled(4000 * Math.pow(1.95, n)); }
+  function cutLvCost(lv) { return scaled(12000 * Math.pow(2.6, lv)); }
+
+  // ---- register: sells rolling papers only to trucks pulling up ----
+  var PAPERS_STOCK_CAP = 80;         // rolls waiting at the register
+  var BASE_PAPERS_VALUE = 60;
+  function papersValue() {
+    return BASE_PAPERS_VALUE * (1 + 0.35 * (state.papers && state.papers.valueLv || 0)) * officeProfitMult("papers");
+  }
+  function costPapersValueLv() { return scaled(9000 * Math.pow(1.85, (state.papers && state.papers.valueLv) || 0)); }
+  var PAPERS_TRUCK_CAP = 40;
+  var PAPERS_TRUCK_ARRIVE = 2.4, PAPERS_TRUCK_DEPART = 2.4, PAPERS_TRUCK_GAP = 5.0, PAPERS_TRUCK_PATIENCE = 20;
+
+  // ---- automation: two crews split the chain in half. Woodcutters chop and
+  // feed the planers directly; mill hands relay the two downstream legs
+  // (planer output -> cutter, cutter output -> register). ----
+  var MAX_WOODCUTTERS = 4, MAX_MILLHANDS = 3;
+  function costWoodcutter() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.woodcutterLv) || 0)); }
+  function costMillhand() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.millhandLv) || 0)); }
+  var PAPERS_HR_ZONE = { x: 16.0, z: PAPERS_CZ + PAPERS_HALF_Z - 8 };
+  var WOODCUTTER_ZONE = { x: -18.0, z: PAPERS_CZ + PAPERS_HALF_Z - 20 };
+  var MILLHAND_ZONE = { x: 18.0, z: PAPERS_CZ - 14 };
+
+  // ===================================================================
+  //  EXECUTIVE OFFICE — reached only from its own HUD button, no 3D room
+  // ===================================================================
+  // Every location has its own upgrade curve already; this is one more
+  // curve, on top, that the player buys into per-location rather than
+  // walking anywhere for. All state lives flat on `state` since there is
+  // no world position to key it to.
+  var ACCOUNTANT_COST = 5e13;
+  function accountantHired() { return !!state.accountantHired; }
+
+  var PROFIT_TIER_MULT = [1, 1.10, 1.30, 1.50];
+  var PROFIT_TIER_LABELS = ["", "+10%", "+30%", "+50%"];
+  var MAX_PROFIT_TIER = PROFIT_TIER_MULT.length - 1;
+  function profitTierOf(site) { return (state.profitTier && state.profitTier[site]) || 0; }
+  // Every location's own value function multiplies this in once — see
+  // sellValue()/loungeValue()/infusedValue()/papersValue()/farmGrowMult().
+  function officeProfitMult(site) { return PROFIT_TIER_MULT[profitTierOf(site)]; }
+  // Cost climbs steeply per tier and rides the same late-game curve every
+  // other post-dock price does, scaled again per location the way HR desks
+  // are (a farm tier costs less to open than a papers tier).
+  var PROFIT_TIER_BASE = { shop: 20000, farm: 20000, lounge: 40000, factory: 80000, papers: 120000 };
+  function costProfitTier(site) {
+    return scaled(PROFIT_TIER_BASE[site] * Math.pow(6, profitTierOf(site)));
+  }
+
+  // ---- hats ----
+  var HATS = {
+    reliable:  { name: "Ole Reliable", desc: "A stylish hat.", bonus: 0, cost: 0 },
+    executive: { name: "The Executive", desc: "+10% production in this city.", bonus: 0.10, cost: 8e13 },
+  };
+  function hatProdMult() {
+    var h = HATS[state.equippedHat] || HATS.reliable;
+    return 1 + h.bonus;
+  }
+
+  // ---- cities: today there is only Hometown, but the map and the
+  // terminal both read through this so a second city is a data change,
+  // not a rewrite. ----
+  var CITIES = [
+    { id: "home", name: "Hometown", siteIds: ["shop", "farm", "lounge", "factory", "papers"] },
+    { id: "next", name: "???", comingSoon: true },
+  ];
+  function currentCityId() { return state.cityId || "home"; }
+  function currentCityDef() {
+    for (var i = 0; i < CITIES.length; i++) if (CITIES[i].id === currentCityId()) return CITIES[i];
+    return CITIES[0];
+  }
+  function citySites() {
+    return currentCityDef().siteIds.map(function (id) { return SITES[id]; });
+  }
 
   var SITES = {
     shop: {
@@ -1215,8 +1450,32 @@
         toast("🏭 Deed signed — the Infused Products Factory is yours!");
       },
     },
+    papers: {
+      id: "papers", name: "Rolling Mill", icon: "🪵",
+      skyColor: new THREE.Color(0x8fae7a),   // hazy forest afternoon
+      sub: function () {
+        if (!papersUnlocked()) return "Buy the deed to open the mill";
+        return planerOwned() + "/" + MAX_PLANERS + " planers · " +
+               cutterOwned() + "/" + MAX_CUTTERS + " cutters";
+      },
+      spawn: { x: 0, z: PAPERS_CZ + PAPERS_HALF_Z - 8 },
+      camDist: function () { return 60; },
+      groundOf: function () { return papersGround; },
+      unlocked: papersUnlocked,
+      bounds: function () {
+        return {
+          minX: -PAPERS_HALF_X + 1.5, maxX: PAPERS_HALF_X - 1.5,
+          minZ: PAPERS_CZ - PAPERS_HALF_Z + 1.5, maxZ: PAPERS_CZ + PAPERS_HALF_Z - 1.5,
+        };
+      },
+      deedCost: PAPERS_DEED_COST,
+      onUnlock: function () {
+        state.papers.unlocked = true;
+        toast("🪵 Deed signed — the Rolling Mill is yours!");
+      },
+    },
   };
-  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory];
+  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory, SITES.papers];
   // Deeds are quoted through here rather than read off the site directly, so
   // the late-game scaling cannot be applied at one call site and missed at
   // another — the price on the map row, the affordability check, the "you can
@@ -1352,14 +1611,17 @@
               who: "Trains field hands and haulers" },
     lounge: { base: 2000, title: "Lounge HR", crew: "the lounge crew",
               who: "Trains barbacks and servers" },
+    papers: { base: 6000, title: "Mill HR",   crew: "the mill crew",
+              who: "Trains woodcutters and mill hands" },
   };
-  var HR_SITES = ["shop", "farm", "lounge"];
+  var HR_SITES = ["shop", "farm", "lounge", "papers"];
   // The factory has no hired hands — the line IS the labour — so it gets no
   // desk of its own and hrZoneFor parks its zone somewhere unreachable rather
   // than silently handing the player the shop's books at another site.
   function hrZoneFor(site) {
     if (site === "farm") return FARM_HR_ZONE;
     if (site === "lounge") return LOUNGE_HR_ZONE;
+    if (site === "papers") return PAPERS_HR_ZONE;
     if (site === "factory") return { x: 1e6, z: 1e6 };
     return HR_ZONE;
   }
@@ -1480,7 +1742,7 @@
     var base = kind === "drink" ? infusedValue("drink")
              : kind === "edible" ? edibleValue()
              : kind === "dab" ? dabValue() : sellValue();
-    return base * LOUNGE_MARKUP;
+    return base * LOUNGE_MARKUP * officeProfitMult("lounge");
   }
   function loungeTipPct() { return LOUNGE_TIP_MIN + Math.random() * (LOUNGE_TIP_MAX - LOUNGE_TIP_MIN); }
   function ovenSlotsAvailable() { return ediblesUnlocked() ? MAX_OVENS : 0; }
@@ -1770,6 +2032,12 @@
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
+      // ---- executive office ----
+      accountantHired: false,
+      profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0 },
+      equippedHat: "reliable",
+      hatsOwned: { reliable: true, executive: false },
+      cityId: "home",
       plotsUnlocked: STARTING_PLOTS,
       plots: plotDefs.map(function () { return { state: "locked" }; }),
       // grow-light level per row (every bed in a row lights up together)
@@ -1804,7 +2072,7 @@
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       // ---- empire ----
       site: "shop",                     // which location you are standing in
-      sitePos: { shop: null, farm: null, lounge: null, factory: null },  // where you left off at each one
+      sitePos: { shop: null, farm: null, lounge: null, factory: null, papers: null },  // where you left off at each one
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
       loungeIntake: { bud: 0, dab: 0, edible: 0, drink: 0 },   // stock delivered to the lounge, also its sellable stock
@@ -1834,6 +2102,21 @@
         haulerLv: 0,
         growLv: 0,
         soilLv: 0,
+      },
+      papers: {
+        unlocked: false,
+        trees: papersTreeDefs.map(function () { return { state: "grown", prog: 0 }; }),
+        planerCount: 0,
+        planers: planerDefs.map(function () { return { wood: 0, lumber: 0, acc: 0 }; }),
+        cutterCount: 0,
+        cutters: cutterDefs.map(function () { return { lumber: 0, papers: 0, acc: 0 }; }),
+        stock: 0,               // rolling papers waiting at the register for a truck
+        hopperLv: 0,             // wood/lumber a machine holds at once
+        planeLv: 0,              // how fast a planer runs
+        cutLv: 0,                // how fast a cutter runs
+        valueLv: 0,              // what a roll of papers is worth
+        woodcutterLv: 0,
+        millhandLv: 0,
       },
       dailyStreak: 0,                   // consecutive calendar days played
       lastLoginDate: null,              // "YYYY-M-D" of the last day a reward was granted
@@ -1940,8 +2223,52 @@
       fac.sentToBar = (typeof fac.sentToBar === "number" && isFinite(fac.sentToBar))
         ? Math.max(0, fac.sentToBar) : 0;
 
+      // ---- rolling papers mill ----
+      if (!merged.papers || typeof merged.papers !== "object") merged.papers = defaultState().papers;
+      var pap = merged.papers;
+      pap.unlocked = !!pap.unlocked;
+      if (!Array.isArray(pap.trees)) pap.trees = [];
+      pap.trees.length = papersTreeDefs.length;
+      for (var pt = 0; pt < pap.trees.length; pt++) {
+        var tr = pap.trees[pt];
+        if (!tr || typeof tr !== "object") pap.trees[pt] = { state: "grown", prog: 0 };
+        else tr.prog = Math.max(0, typeof tr.prog === "number" && isFinite(tr.prog) ? tr.prog : 0);
+      }
+      pap.planerCount = Math.max(0, Math.min(MAX_PLANERS, Math.floor(pap.planerCount) || 0));
+      if (!Array.isArray(pap.planers)) pap.planers = [];
+      pap.planers.length = planerDefs.length;
+      for (var ppi = 0; ppi < pap.planers.length; ppi++) {
+        if (!pap.planers[ppi] || typeof pap.planers[ppi] !== "object") pap.planers[ppi] = { wood: 0, lumber: 0, acc: 0 };
+      }
+      pap.cutterCount = Math.max(0, Math.min(MAX_CUTTERS, Math.floor(pap.cutterCount) || 0));
+      if (!Array.isArray(pap.cutters)) pap.cutters = [];
+      pap.cutters.length = cutterDefs.length;
+      for (var pci = 0; pci < pap.cutters.length; pci++) {
+        if (!pap.cutters[pci] || typeof pap.cutters[pci] !== "object") pap.cutters[pci] = { lumber: 0, papers: 0, acc: 0 };
+      }
+      pap.stock = (typeof pap.stock === "number" && isFinite(pap.stock)) ? Math.max(0, Math.min(PAPERS_STOCK_CAP, pap.stock)) : 0;
+      pap.hopperLv = Math.max(0, Math.floor(pap.hopperLv) || 0);
+      pap.planeLv = Math.max(0, Math.floor(pap.planeLv) || 0);
+      pap.cutLv = Math.max(0, Math.floor(pap.cutLv) || 0);
+      pap.valueLv = Math.max(0, Math.floor(pap.valueLv) || 0);
+      pap.woodcutterLv = Math.max(0, Math.min(MAX_WOODCUTTERS, Math.floor(pap.woodcutterLv) || 0));
+      pap.millhandLv = Math.max(0, Math.min(MAX_MILLHANDS, Math.floor(pap.millhandLv) || 0));
+
+      // ---- executive office ----
+      merged.accountantHired = !!merged.accountantHired;
+      if (!merged.profitTier || typeof merged.profitTier !== "object") merged.profitTier = {};
+      ["shop", "farm", "lounge", "factory", "papers"].forEach(function (k) {
+        var t = merged.profitTier[k];
+        merged.profitTier[k] = (typeof t === "number" && isFinite(t)) ? Math.max(0, Math.min(3, Math.floor(t))) : 0;
+      });
+      if (!merged.hatsOwned || typeof merged.hatsOwned !== "object") merged.hatsOwned = {};
+      merged.hatsOwned.reliable = true;   // always in the locker
+      merged.hatsOwned.executive = !!merged.hatsOwned.executive;
+      merged.equippedHat = (merged.equippedHat === "executive" && merged.hatsOwned.executive) ? "executive" : "reliable";
+      merged.cityId = (typeof merged.cityId === "string" && merged.cityId) ? merged.cityId : "home";
+
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
-      ["shop", "farm", "lounge", "factory"].forEach(function (k) {
+      ["shop", "farm", "lounge", "factory", "papers"].forEach(function (k) {
         var p = merged.sitePos[k];
         if (!p || typeof p.x !== "number" || typeof p.z !== "number") merged.sitePos[k] = null;
       });
@@ -1952,7 +2279,8 @@
       if (merged.site !== "shop" &&
           !(merged.site === "farm" && merged.farm.unlocked) &&
           !(merged.site === "lounge" && merged.lounge.unlocked) &&
-          !(merged.site === "factory" && fac.unlocked)) {
+          !(merged.site === "factory" && fac.unlocked) &&
+          !(merged.site === "papers" && pap.unlocked)) {
         merged.site = "shop";
       }
       // Beds unlock a whole row at a time now — round an older save's count up
@@ -2109,7 +2437,12 @@
   function sellValueAt(lv) {
     return (BASE_SELL_VALUE + 4 * (lv % 10)) * Math.pow(8, Math.floor(lv / 10));
   }
-  function sellValue() { return sellValueAt(state.sellLv || 0); }
+  // The raw strain-based price, with no office multiplier — kept separate
+  // from sellValue() because infusedValue() below uses this as a scale
+  // anchor for factory goods, which must NOT inherit the shop's own
+  // profit-tier bonus just because they share a formula shape.
+  function sellValueBase() { return sellValueAt(state.sellLv || 0); }
+  function sellValue() { return sellValueBase() * officeProfitMult("shop"); }
   var STRAIN_NAMES = [
     "Bag Seed", "Green Crack", "Sour Diesel", "Blue Dream", "Gelato",
     "Wedding Cake", "Purple Punch", "Zkittlez", "Runtz", "Gorilla Glue",
@@ -2148,7 +2481,7 @@
   }
   // Every production line divides its cycle time by this, so one number is all
   // that has to change if the perk is ever retuned.
-  function perkProdMult() { return perkActive("prod") ? 1.25 : 1; }
+  function perkProdMult() { return (perkActive("prod") ? 1.25 : 1) * hatProdMult(); }
   // A crate is on the ground when the cooldown is up and nobody has opened it.
   function mysteryReady() { return Date.now() >= ((state.mystery && state.mystery.nextAt) || 0); }
 
@@ -4814,6 +5147,691 @@
     return best;
   }
 
+  // ===================================================================
+  //  ROLLING PAPERS MILL — geometry, production, and the truck-only register
+  // ===================================================================
+  var PAPERS_REGISTER_X = 0, PAPERS_REGISTER_Z = PAPERS_CZ + PAPERS_HALF_Z - 6;
+  var PAPERS_DROP_ZONE = { x: PAPERS_REGISTER_X - 4, z: PAPERS_REGISTER_Z, half: 1.6 };
+  var PAPERS_TILL_PAD = { x: PAPERS_REGISTER_X + 4, z: PAPERS_REGISTER_Z, half: 1.6 };
+  var PAPERS_TRUCK_Z = PAPERS_REGISTER_Z + 5;
+  var PAPERS_TRUCK_PARK_X = PAPERS_REGISTER_X + 2;
+  var PAPERS_TRUCK_START_X = PAPERS_HALF_X + 18;
+
+  var papersGroup = new THREE.Group();
+  scene.add(papersGroup);
+  var papersGround;
+  var papersTreeObjects = [];
+  var planerObjects = [];
+  var cutterObjects = [];
+  var planerPads = [];
+  var cutterPads = [];
+
+  (function buildPapersSite() {
+    var g = papersGroup;
+    var y = PAPERS_GROUND_TOP;
+
+    papersGround = new THREE.Mesh(
+      new THREE.BoxGeometry(PAPERS_HALF_X * 2 + 10, 0.3, PAPERS_HALF_Z * 2 + 10), M.grassDk);
+    papersGround.position.set(0, y - 0.15, PAPERS_CZ);
+    papersGround.receiveShadow = true;
+    g.add(papersGround);
+
+    var lane = new THREE.Mesh(new THREE.BoxGeometry(PAPERS_HALF_X * 1.6, 0.05, 12), M.track);
+    lane.position.set(0, y - 0.09, PAPERS_TRUCK_Z);
+    lane.receiveShadow = true;
+    g.add(lane);
+
+    function buildTree(d) {
+      var tg = new THREE.Group();
+      var trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.36, 3.2, 8), M.woodDark);
+      trunk.position.y = 1.6; trunk.castShadow = true;
+      tg.add(trunk);
+      var foliage = new THREE.Group();
+      for (var t = 0; t < 3; t++) {
+        var cone = new THREE.Mesh(new THREE.ConeGeometry(1.5 - t * 0.35, 2.0, 8), t % 2 ? M.plantDeep : M.plant);
+        cone.position.y = 3.4 + t * 1.5;
+        cone.castShadow = true;
+        foliage.add(cone);
+      }
+      tg.add(foliage);
+      var stump = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.4, 0.5, 8), M.woodDark);
+      stump.position.y = 0.25; stump.visible = false; stump.castShadow = true;
+      tg.add(stump);
+      var bar = makeStatusBar(1.6, 0x9ad06a);
+      bar.position.set(0, 4.6, 0);
+      bar.visible = false;
+      tg.add(bar);
+      statusBars.push(bar);
+      tg.position.set(d.x, y, d.z);
+      g.add(tg);
+      return { group: tg, foliage: foliage, stump: stump, bar: bar };
+    }
+    for (var ti = 0; ti < papersTreeDefs.length; ti++) papersTreeObjects.push(buildTree(papersTreeDefs[ti]));
+
+    function buildPlaner(d) {
+      var pg = new THREE.Group();
+      var shed = new THREE.Mesh(new THREE.BoxGeometry(PLANER_SIZE, 2.0, PLANER_SIZE), M.plank);
+      shed.position.y = 1.0; shed.castShadow = true; shed.receiveShadow = true;
+      pg.add(shed);
+      var roof = new THREE.Mesh(new THREE.BoxGeometry(PLANER_SIZE + 0.5, 0.25, PLANER_SIZE + 0.5), M.woodDark);
+      roof.position.y = 2.12; roof.castShadow = true;
+      pg.add(roof);
+      var roller = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, PLANER_SIZE - 0.6, 10), M.pressBody);
+      roller.rotation.z = Math.PI / 2;
+      roller.position.y = 1.1;
+      roller.castShadow = true;
+      pg.add(roller);
+      var glow = addGlow(pg, 0, 1.1, 0, 1.6, 0xffe066, 0);
+      var barIn = makeStatusBar(1.8, 0x9ad06a); barIn.position.set(0, 2.9, 0); pg.add(barIn); statusBars.push(barIn);
+      var barOut = makeStatusBar(1.8, 0xd7a869); barOut.position.set(0, 2.55, 0); pg.add(barOut); statusBars.push(barOut);
+      pg.position.set(d.x, y, d.z);
+      pg.visible = false;
+      g.add(pg);
+      return { group: pg, roller: roller, glow: glow, barIn: barIn, barOut: barOut };
+    }
+    for (var pli = 0; pli < planerDefs.length; pli++) planerObjects.push(buildPlaner(planerDefs[pli]));
+
+    function makePlanerPad(i) {
+      var d = planerDefs[i];
+      var sq = makePaySquare(PLANER_PAD_HALF, 0xb98f52, "#e0b97a", "BUY PLANER", d.z);
+      sq.group.position.set(d.x, 0, d.z);
+      sq.group.visible = false;
+      g.add(sq.group);
+      return sq;
+    }
+    for (var ppi2 = 0; ppi2 < MAX_PLANERS; ppi2++) planerPads.push(makePlanerPad(ppi2));
+
+    function buildCutter(d) {
+      var cg = new THREE.Group();
+      var shed = new THREE.Mesh(new THREE.BoxGeometry(CUTTER_SIZE, 2.1, CUTTER_SIZE), M.metal);
+      shed.position.y = 1.05; shed.castShadow = true; shed.receiveShadow = true;
+      cg.add(shed);
+      var roof = new THREE.Mesh(new THREE.BoxGeometry(CUTTER_SIZE + 0.5, 0.2, CUTTER_SIZE + 0.5), M.barnRoof);
+      roof.position.y = 2.2; roof.castShadow = true;
+      cg.add(roof);
+      var blade = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.08, 16), M.pressPlate);
+      blade.position.y = 1.5; blade.castShadow = true;
+      cg.add(blade);
+      var barIn = makeStatusBar(1.8, 0xd7a869); barIn.position.set(0, 3.0, 0); cg.add(barIn); statusBars.push(barIn);
+      var barOut = makeStatusBar(1.8, 0xe8dcc0); barOut.position.set(0, 2.65, 0); cg.add(barOut); statusBars.push(barOut);
+      cg.position.set(d.x, y, d.z);
+      cg.visible = false;
+      g.add(cg);
+      return { group: cg, blade: blade, barIn: barIn, barOut: barOut };
+    }
+    for (var cli = 0; cli < cutterDefs.length; cli++) cutterObjects.push(buildCutter(cutterDefs[cli]));
+
+    function makeCutterPad(i) {
+      var d = cutterDefs[i];
+      var sq = makePaySquare(CUTTER_PAD_HALF, 0x8a95a1, "#c9d3db", "BUY CUTTER", d.z);
+      sq.group.position.set(d.x, 0, d.z);
+      sq.group.visible = false;
+      g.add(sq.group);
+      return sq;
+    }
+    for (var cpi2 = 0; cpi2 < MAX_CUTTERS; cpi2++) cutterPads.push(makeCutterPad(cpi2));
+
+    var stand = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.3, 1.0), M.plank);
+    stand.position.set(PAPERS_TILL_PAD.x, y + 0.65, PAPERS_TILL_PAD.z - 2.4);
+    stand.castShadow = true;
+    g.add(stand);
+    var standTop = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 1.2), M.woodDark);
+    standTop.position.set(PAPERS_TILL_PAD.x, y + 1.36, PAPERS_TILL_PAD.z - 2.4);
+    g.add(standTop);
+    var signPost = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), M.woodDark);
+    signPost.position.set(PAPERS_TILL_PAD.x, y + 2.0, PAPERS_TILL_PAD.z - 2.9);
+    g.add(signPost);
+    var signLbl = textSprite("ROLLING PAPERS", "#f2ece0");
+    signLbl.scale.set(3.4, 0.72, 1);
+    signLbl.position.set(PAPERS_TILL_PAD.x, y + 2.8, PAPERS_TILL_PAD.z - 2.9);
+    g.add(signLbl);
+
+    var dropSign = textSprite("DROP HERE", "#a8f57a");
+    dropSign.scale.set(2.2, 0.5, 1);
+    dropSign.position.set(PAPERS_DROP_ZONE.x, y + 2.2, PAPERS_DROP_ZONE.z);
+    g.add(dropSign);
+
+    var desk = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.0, 1.0), M.wood);
+    desk.position.set(PAPERS_HR_ZONE.x, y + 0.5, PAPERS_HR_ZONE.z);
+    desk.castShadow = true;
+    g.add(desk);
+    addGlow(g, PAPERS_HR_ZONE.x, y + 1.4, PAPERS_HR_ZONE.z, 3.0, 0xffd98a, 0.24);
+    var hrLbl = textSprite("HR OFFICE", "#ffe9b0");
+    hrLbl.scale.set(2.4, 0.54, 1);
+    hrLbl.position.set(PAPERS_HR_ZONE.x, y + 2.1, PAPERS_HR_ZONE.z);
+    g.add(hrLbl);
+  })();
+
+  // ---- the truck: the only customer the register ever sees ----
+  var papersTruck = null;
+  (function buildPapersTruck() {
+    var g = new THREE.Group();
+    var box = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.4, 5.6), M.truckBox);
+    box.position.set(0, 1.6, 0); box.castShadow = true;
+    g.add(box);
+    var cab = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.0, 2.0), M.truckCab);
+    cab.position.set(0, 1.4, -3.6); cab.castShadow = true;
+    g.add(cab);
+    var trim = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.3, 5.7), M.truckTrim);
+    trim.position.set(0, 0.5, 0);
+    g.add(trim);
+    var tyreGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.4, 12);
+    [[-1.5, -3.6], [1.5, -3.6], [-1.5, 1.8], [1.5, 1.8]].forEach(function (p) {
+      var tyre = new THREE.Mesh(tyreGeo, M.tyre);
+      tyre.rotation.z = Math.PI / 2;
+      tyre.position.set(p[0], 0.55, p[1]);
+      g.add(tyre);
+    });
+    g.rotation.y = Math.PI / 2;
+    g.position.set(PAPERS_TRUCK_START_X, PAPERS_GROUND_TOP, PAPERS_TRUCK_Z);
+    g.visible = false;
+    papersGroup.add(g);
+    papersTruck = { obj: g, phase: "gone", timer: PAPERS_TRUCK_GAP, load: 0 };
+  })();
+
+  function dispatchPapersTruck(t) {
+    if (t.load <= 0) return;
+    var paid = Math.round(t.load * papersValue() * (promoActive() ? PROMO_MULT : 1));
+    t.load = 0;
+    if (paid > 0) papersTill.payOut(paid);
+  }
+
+  function updatePapersTruck(dt) {
+    var t = papersTruck;
+    if (!papersUnlocked()) { t.obj.visible = false; return; }
+    if (t.phase === "gone") {
+      t.obj.visible = false;
+      t.timer -= dt;
+      if (t.timer <= 0) { t.phase = "arriving"; t.timer = PAPERS_TRUCK_ARRIVE; }
+    } else if (t.phase === "arriving") {
+      t.obj.visible = true;
+      t.timer -= dt;
+      var pa = 1 - Math.max(0, t.timer) / PAPERS_TRUCK_ARRIVE;
+      var ea = 1 - Math.pow(1 - pa, 3);
+      t.obj.position.x = PAPERS_TRUCK_START_X + (PAPERS_TRUCK_PARK_X - PAPERS_TRUCK_START_X) * ea;
+      if (t.timer <= 0) { t.phase = "loading"; t.timer = PAPERS_TRUCK_PATIENCE; }
+    } else if (t.phase === "loading") {
+      t.obj.visible = true;
+      t.obj.position.x = PAPERS_TRUCK_PARK_X;
+      t.timer -= dt;
+      var stock = state.papers.stock || 0;
+      var take = Math.min(stock, PAPERS_TRUCK_CAP - t.load);
+      if (take > 0) { state.papers.stock -= take; t.load += take; }
+      if (t.load >= PAPERS_TRUCK_CAP || (t.timer <= 0 && t.load > 0)) {
+        dispatchPapersTruck(t);
+        t.phase = "departing"; t.timer = PAPERS_TRUCK_DEPART;
+      } else if (t.timer <= 0) {
+        t.phase = "departing"; t.timer = PAPERS_TRUCK_DEPART;
+      }
+    } else if (t.phase === "departing") {
+      t.obj.visible = true;
+      t.timer -= dt;
+      var pd = 1 - Math.max(0, t.timer) / PAPERS_TRUCK_DEPART;
+      t.obj.position.x = PAPERS_TRUCK_PARK_X + (PAPERS_TRUCK_START_X - PAPERS_TRUCK_PARK_X) * (pd * pd);
+      if (t.timer <= 0) { t.phase = "gone"; t.timer = PAPERS_TRUCK_GAP; }
+    }
+  }
+
+  var papersTill = makeTill(PAPERS_TILL_PAD, 0xd7a869, "$ COLLECT");
+  function updatePapersTill(now) { papersTill.update(now); }
+
+  // ---- trees: chop for wood ----
+  function handlePapersTrees() {
+    if (!papersUnlocked()) return;
+    for (var i = 0; i < papersTreeDefs.length; i++) {
+      var d = papersTreeDefs[i], tr = state.papers.trees[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > PAPERS_TREE_SIZE * 0.9 + PLAYER_RADIUS) continue;
+      if (tr.state !== "grown") continue;
+      if (player.backpack.length >= backpackCap()) continue;
+      player.backpack.push({ type: "wood" });
+      state.papers.trees[i] = { state: "stump", prog: 0 };
+      addFloater(d.x, 4.2, d.z, "+WOOD", "#a8f57a");
+      syncStack();
+      renderUpgrades();
+    }
+  }
+  function updatePapersTreeGrowth(dt) {
+    if (!papersUnlocked()) return;
+    for (var i = 0; i < state.papers.trees.length; i++) {
+      var tr = state.papers.trees[i];
+      if (tr.state !== "stump") continue;
+      tr.prog += dt / PAPERS_TREE_REGROW;
+      if (tr.prog >= 1) { tr.state = "grown"; tr.prog = 0; }
+    }
+  }
+  function updatePapersTreeVisuals() {
+    for (var i = 0; i < papersTreeObjects.length; i++) {
+      var to = papersTreeObjects[i], tr = state.papers.trees[i];
+      var live = papersUnlocked();
+      to.group.visible = live;
+      if (!live) continue;
+      var grown = tr.state === "grown";
+      to.foliage.visible = grown;
+      to.stump.visible = !grown;
+      to.bar.visible = !grown;
+      if (!grown) setBar(to.bar, tr.prog);
+    }
+  }
+
+  // ---- planer: wood -> lumber ----
+  function handlePlaners() {
+    if (!papersUnlocked()) return;
+    var owned = planerOwned();
+    for (var i = 0; i < owned; i++) {
+      var d = planerDefs[i], p = state.papers.planers[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > PLANER_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      var fed = 0, cap = papersHopperCap();
+      for (var b = player.backpack.length - 1; b >= 0; b--) {
+        if (p.wood + fed >= cap) break;
+        if (player.backpack[b].type === "wood") { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed) { p.wood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " WOOD", "#a8f57a"); }
+      var took = 0;
+      while (p.lumber > 0 && player.backpack.length < backpackCap()) {
+        p.lumber--; player.backpack.push({ type: "lumber" }); took++;
+      }
+      if (took) addFloater(d.x, 3.4, d.z, "+" + took + " LUMBER", "#d7a869");
+      if (fed || took) { syncStack(); renderUpgrades(); }
+    }
+  }
+  function updatePlanerStates(dt) {
+    var owned = planerOwned();
+    for (var i = 0; i < owned; i++) {
+      var p = state.papers.planers[i];
+      if (p.wood <= 0) { p.acc = 0; continue; }
+      p.acc = (p.acc || 0) + dt;
+      var need = planeTimeFor();
+      while (p.acc >= need && p.wood > 0) { p.acc -= need; p.wood--; p.lumber++; }
+    }
+  }
+  function updatePlanerVisuals(now) {
+    var owned = planerOwned();
+    for (var i = 0; i < planerObjects.length; i++) {
+      var po = planerObjects[i];
+      var live = papersUnlocked() && i < owned;
+      po.group.visible = live;
+      if (!live) continue;
+      var p = state.papers.planers[i];
+      if (p.wood > 0) po.roller.rotation.x = now * 0.01;
+      po.glow.material.opacity = p.lumber > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
+      setBar(po.barIn, p.wood / papersHopperCap());
+      setBar(po.barOut, p.lumber / papersHopperCap());
+    }
+  }
+  function updatePlanerPads(now) {
+    var next = nextPlanerSlot();
+    for (var i = 0; i < planerPads.length; i++) {
+      var pp = planerPads[i];
+      var show = (i === next);
+      pp.group.visible = show;
+      if (!show) continue;
+      var cost = planerCost(i);
+      var paid = state.stationPaid["planer" + i] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (pp.price.userData.last !== remain) {
+        updateSpriteText(pp.price, "$" + fmt(remain), "#e0b97a");
+        pp.price.userData.last = remain;
+      }
+      setPaySquareProgress(pp, Math.min(1, paid / cost));
+      pp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
+
+  // ---- cutter: lumber -> rolling papers ----
+  function handleCutters() {
+    if (!papersUnlocked()) return;
+    var owned = cutterOwned();
+    for (var i = 0; i < owned; i++) {
+      var d = cutterDefs[i], c = state.papers.cutters[i];
+      if (d2(player.pos.x, player.pos.z, d.x, d.z) > CUTTER_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      var fed = 0, cap = papersHopperCap();
+      for (var b = player.backpack.length - 1; b >= 0; b--) {
+        if (c.lumber + fed >= cap) break;
+        if (player.backpack[b].type === "lumber") { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed) { c.lumber += fed; addFloater(d.x, 3.6, d.z, "+" + fed + " LUMBER", "#d7a869"); }
+      var took = 0;
+      while (c.papers > 0 && player.backpack.length < backpackCap()) {
+        c.papers--; player.backpack.push({ type: "papers" }); took++;
+      }
+      if (took) addFloater(d.x, 4.0, d.z, "+" + took + " PAPERS", "#e8dcc0");
+      if (fed || took) { syncStack(); renderUpgrades(); }
+    }
+  }
+  function updateCutterStates(dt) {
+    var owned = cutterOwned();
+    for (var i = 0; i < owned; i++) {
+      var c = state.papers.cutters[i];
+      if (c.lumber <= 0) { c.acc = 0; continue; }
+      c.acc = (c.acc || 0) + dt;
+      var need = cutTimeFor();
+      while (c.acc >= need && c.lumber > 0) { c.acc -= need; c.lumber--; c.papers++; }
+    }
+  }
+  function updateCutterVisuals(now) {
+    var owned = cutterOwned();
+    for (var i = 0; i < cutterObjects.length; i++) {
+      var co = cutterObjects[i];
+      var live = papersUnlocked() && i < owned;
+      co.group.visible = live;
+      if (!live) continue;
+      var c = state.papers.cutters[i];
+      if (c.lumber > 0) co.blade.rotation.y = now * 0.02;
+      setBar(co.barIn, c.lumber / papersHopperCap());
+      setBar(co.barOut, c.papers / papersHopperCap());
+    }
+  }
+  function updateCutterPads(now) {
+    var next = nextCutterSlot();
+    for (var i = 0; i < cutterPads.length; i++) {
+      var cp = cutterPads[i];
+      var show = (i === next);
+      cp.group.visible = show;
+      if (!show) continue;
+      var cost = cutterCost(i);
+      var paid = state.stationPaid["cutter" + i] || 0;
+      var remain = Math.max(0, Math.ceil(cost - paid));
+      if (cp.price.userData.last !== remain) {
+        updateSpriteText(cp.price, "$" + fmt(remain), "#c9d3db");
+        cp.price.userData.last = remain;
+      }
+      setPaySquareProgress(cp, Math.min(1, paid / cost));
+      cp.dash.material.opacity = 0.7 + Math.sin(now * 0.004) * 0.25;
+    }
+  }
+
+  // ---- register: drop rolling papers here, trucks buy from the pile ----
+  function handlePapersDrop() {
+    if (!papersUnlocked()) return;
+    if (Math.abs(player.pos.x - PAPERS_DROP_ZONE.x) > PAPERS_DROP_ZONE.half + PLAYER_RADIUS) return;
+    if (Math.abs(player.pos.z - PAPERS_DROP_ZONE.z) > PAPERS_DROP_ZONE.half + PLAYER_RADIUS) return;
+    var room = PAPERS_STOCK_CAP - (state.papers.stock || 0);
+    if (room <= 0) return;
+    var moved = 0;
+    for (var i = player.backpack.length - 1; i >= 0 && moved < room; i--) {
+      if (player.backpack[i].type === "papers") { player.backpack.splice(i, 1); moved++; }
+    }
+    if (moved) {
+      state.papers.stock += moved;
+      syncStack();
+      addFloater(PAPERS_DROP_ZONE.x, 3.4, PAPERS_DROP_ZONE.z, "+" + moved + " PAPERS", "#e8dcc0");
+      renderUpgrades();
+    }
+  }
+
+  // ---- automation: woodcutters chop and feed the planers directly; mill
+  // hands relay the two downstream legs (planer output -> cutter, cutter
+  // output -> register) ----
+  var woodcutters = [];
+  var millhands = [];
+  var WOODCUTTER_SPEED = 5.4, WOODCUTTER_ACT = 0.9;
+  var MILLHAND_SPEED = 5.8, MILLHAND_ACT = 0.7;
+
+  function buildMillWorker(shirtMat, hatMat) {
+    var g = new THREE.Group();
+    var torso = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), shirtMat);
+    torso.position.y = 1.1; torso.castShadow = true; g.add(torso);
+    var head = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.6), M.skin);
+    head.position.y = 1.88; head.castShadow = true; g.add(head);
+    var hat = new THREE.Mesh(new THREE.SphereGeometry(0.36, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), hatMat);
+    hat.position.y = 2.18; hat.castShadow = true; g.add(hat);
+    var lgeo = new THREE.BoxGeometry(0.26, 0.7, 0.26);
+    var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.19, 0.35, 0); l1.castShadow = true;
+    var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.19, 0.35, 0); l2.castShadow = true;
+    g.add(l1); g.add(l2);
+    g.visible = false;
+    scene.add(g);
+    return { obj: g, l1: l1, l2: l2 };
+  }
+  (function buildWoodcutters() {
+    for (var n = 0; n < MAX_WOODCUTTERS; n++) {
+      var w = buildMillWorker(M.hoodieDk, M.strawHat);
+      woodcutters.push({
+        obj: w.obj, l1: w.l1, l2: w.l2,
+        pos: { x: WOODCUTTER_ZONE.x + 1.4 + n * 0.9, z: WOODCUTTER_ZONE.z + 1.4 },
+        phase: "toTree", timer: 0, treeIdx: -1, carrying: 0, walkPhase: n * 1.7, slot: n,
+      });
+    }
+  })();
+  (function buildMillhands() {
+    for (var n = 0; n < MAX_MILLHANDS; n++) {
+      var w = buildMillWorker(M.runnerVest, M.runnerCap);
+      millhands.push({
+        obj: w.obj, l1: w.l1, l2: w.l2,
+        pos: { x: MILLHAND_ZONE.x + 1.4 + n * 0.9, z: MILLHAND_ZONE.z + 1.4 },
+        phase: "seek", timer: 0, carrying: 0, carryKind: null, walkPhase: n * 1.4, slot: n,
+      });
+    }
+  })();
+
+  function papersTreeClaimed(self, idx) {
+    for (var i = 0; i < woodcutters.length; i++) {
+      var w = woodcutters[i];
+      if (w !== self && w.obj.visible && w.treeIdx === idx) return true;
+    }
+    return false;
+  }
+  function woodcutterFindTree(self) {
+    for (var i = 0; i < papersTreeDefs.length; i++) {
+      if (state.papers.trees[i].state === "grown" && !papersTreeClaimed(self, i)) return i;
+    }
+    return -1;
+  }
+  function woodcutterFindPlaner() {
+    var owned = planerOwned();
+    var best = -1, most = 0;
+    for (var i = 0; i < owned; i++) {
+      var room = papersHopperCap() - state.papers.planers[i].wood;
+      if (room > most) { most = room; best = i; }
+    }
+    return best;
+  }
+  function wcStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(WOODCUTTER_SPEED * staffSpeedMult("papers") * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function updateWoodcutters(now, dt) {
+    for (var i = 0; i < woodcutters.length; i++) {
+      var b = woodcutters[i];
+      var hired = papersUnlocked() && siteActive("papers") && i < (state.papers.woodcutterLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.treeIdx = -1; continue; }
+      var walking = false;
+      var cap = 3 + staffCarryBonus("papers");
+
+      if (b.phase === "toTree") {
+        if (b.carrying >= cap) { b.phase = "toPlaner"; b.treeIdx = -1; continue; }
+        var stillGood = b.treeIdx >= 0 && state.papers.trees[b.treeIdx].state === "grown";
+        if (!stillGood) {
+          var idx = woodcutterFindTree(b);
+          if (idx < 0) {
+            if (b.carrying > 0) { b.phase = "toPlaner"; continue; }
+            b.phase = "idle"; b.timer = 0.8; continue;
+          }
+          b.treeIdx = idx;
+        }
+        var d = papersTreeDefs[b.treeIdx];
+        walking = !wcStepTo(b, d.x, d.z, dt);
+        if (!walking) { b.phase = "chop"; b.timer = WOODCUTTER_ACT * staffActMult("papers"); }
+
+      } else if (b.phase === "chop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.treeIdx >= 0 && state.papers.trees[b.treeIdx].state === "grown") {
+            state.papers.trees[b.treeIdx] = { state: "stump", prog: 0 };
+            b.carrying++;
+          }
+          b.treeIdx = -1;
+          b.phase = "toTree";
+        }
+
+      } else if (b.phase === "toPlaner") {
+        if (b.carrying <= 0) { b.phase = "toTree"; continue; }
+        var pidx = woodcutterFindPlaner();
+        if (pidx < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var pd = planerDefs[pidx];
+        walking = !wcStepTo(b, pd.x, pd.z, dt);
+        if (!walking) { b.phase = "feed"; b.timer = WOODCUTTER_ACT * staffActMult("papers"); b.feedIdx = pidx; }
+
+      } else if (b.phase === "feed") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var p = state.papers.planers[b.feedIdx];
+          var room = p ? papersHopperCap() - p.wood : 0;
+          var put = Math.min(room, b.carrying);
+          if (put > 0) { p.wood += put; b.carrying -= put; }
+          b.phase = b.carrying > 0 ? "idle" : "toTree";
+          b.timer = 0.6;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          b.timer = 0.7;
+          b.phase = b.carrying > 0 ? "toPlaner" : "toTree";
+        }
+      }
+
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw;
+      b.l2.rotation.x = -sw;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
+  function mhStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(MILLHAND_SPEED * staffSpeedMult("papers") * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+  function millhandFindPickup() {
+    var ownedC = cutterOwned();
+    var bestC = -1, mostC = 0;
+    for (var i = 0; i < ownedC; i++) {
+      var c = state.papers.cutters[i];
+      if (c.papers > mostC) { mostC = c.papers; bestC = i; }
+    }
+    if (bestC >= 0) return { kind: "papers", idx: bestC };
+    var ownedP = planerOwned();
+    var bestP = -1, mostP = 0;
+    for (var j = 0; j < ownedP; j++) {
+      var p = state.papers.planers[j];
+      if (p.lumber > mostP) { mostP = p.lumber; bestP = j; }
+    }
+    if (bestP >= 0) return { kind: "lumber", idx: bestP };
+    return null;
+  }
+  function millhandFindCutterRoom() {
+    var owned = cutterOwned();
+    var best = -1, most = -1;
+    for (var i = 0; i < owned; i++) {
+      var room = papersHopperCap() - state.papers.cutters[i].lumber;
+      if (room > most) { most = room; best = i; }
+    }
+    return most > 0 ? best : -1;
+  }
+
+  function updateMillhands(now, dt) {
+    for (var i = 0; i < millhands.length; i++) {
+      var b = millhands[i];
+      var hired = papersUnlocked() && siteActive("papers") && i < (state.papers.millhandLv || 0);
+      b.obj.visible = hired;
+      if (!hired) { b.carryKind = null; continue; }
+      var walking = false;
+      var cap = 3 + staffCarryBonus("papers");
+
+      if (b.phase === "seek") {
+        if (b.carrying >= cap) {
+          b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter";
+          continue;
+        }
+        var job = millhandFindPickup();
+        if (!job) {
+          if (b.carrying > 0) { b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter"; continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        if (b.carrying > 0 && b.carryKind !== job.kind) {
+          b.phase = b.carryKind === "papers" ? "toRegister" : "toCutter";
+          continue;
+        }
+        var src = job.kind === "papers" ? cutterDefs[job.idx] : planerDefs[job.idx];
+        walking = !mhStepTo(b, src.x, src.z, dt);
+        if (!walking) { b.phase = "pickup"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.pickupJob = job; }
+
+      } else if (b.phase === "pickup") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var job2 = b.pickupJob;
+          if (job2.kind === "papers") {
+            var c = state.papers.cutters[job2.idx];
+            var take = c ? Math.min(c.papers, cap - b.carrying) : 0;
+            if (take > 0) { c.papers -= take; b.carrying += take; b.carryKind = "papers"; }
+          } else {
+            var p = state.papers.planers[job2.idx];
+            var take2 = p ? Math.min(p.lumber, cap - b.carrying) : 0;
+            if (take2 > 0) { p.lumber -= take2; b.carrying += take2; b.carryKind = "lumber"; }
+          }
+          b.phase = "seek";
+        }
+
+      } else if (b.phase === "toCutter") {
+        if (b.carrying <= 0) { b.phase = "seek"; continue; }
+        var cidx = millhandFindCutterRoom();
+        if (cidx < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var cd = cutterDefs[cidx];
+        walking = !mhStepTo(b, cd.x, cd.z, dt);
+        if (!walking) { b.phase = "drop"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.dropIdx = cidx; }
+
+      } else if (b.phase === "toRegister") {
+        if (b.carrying <= 0) { b.phase = "seek"; continue; }
+        walking = !mhStepTo(b, PAPERS_DROP_ZONE.x, PAPERS_DROP_ZONE.z, dt);
+        if (!walking) { b.phase = "drop"; b.timer = MILLHAND_ACT * staffActMult("papers"); b.dropIdx = -1; }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.carryKind === "lumber" && b.dropIdx >= 0) {
+            var cc = state.papers.cutters[b.dropIdx];
+            var room = papersHopperCap() - cc.lumber;
+            var put = Math.min(room, b.carrying);
+            if (put > 0) { cc.lumber += put; b.carrying -= put; }
+          } else if (b.carryKind === "papers") {
+            var room2 = PAPERS_STOCK_CAP - (state.papers.stock || 0);
+            var put2 = Math.min(room2, b.carrying);
+            if (put2 > 0) { state.papers.stock += put2; b.carrying -= put2; }
+          }
+          if (b.carrying <= 0) b.carryKind = null;
+          b.phase = "seek"; b.timer = 0.5;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) { b.timer = 0.7; b.phase = "seek"; }
+      }
+
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw2 = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw2;
+      b.l2.rotation.x = -sw2;
+      b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
+    }
+  }
+
   function payLoungeTip(npc, seat) {
     // the whole payment is left on the table: what they drank, scaled by how
     // classy the room is, plus a tip on top
@@ -5984,7 +7002,8 @@
     return g;
   }
   // bars always face the camera, so drive them from the render loop
-  var statusBars = [];
+  // (statusBars itself is declared much earlier — see the comment by
+  // PLAYER_RADIUS — because Rolling Papers Mill needs it before this point)
   function setBar(bar, frac) {
     frac = Math.max(0, Math.min(1, frac));
     var f = bar.userData.fill, w = bar.userData.w;
@@ -6531,7 +7550,10 @@
   // like the indoor beds. That is what will let weather change the rate
   // partway through a grow without rewriting every plot's timer.
   function farmGrowMult() {
-    return weatherNow().grow * (boostActive() ? 2 : 1) * farmGrowRateMult() * perkProdMult();
+    // Farm has no sale price of its own — bud sells through the shop's
+    // sellValue() — so its office profit tier boosts throughput instead.
+    return weatherNow().grow * (boostActive() ? 2 : 1) * farmGrowRateMult() *
+           perkProdMult() * officeProfitMult("farm");
   }
   // Growth across a stretch that may span several weather slots. The offline
   // catch-up needs this: it cannot just multiply elapsed time by the sky it
@@ -7004,6 +8026,7 @@
   })();
   var stackAnchor = new THREE.Group();
   var legL, legR, armL, armR, bodyGroup;
+  var hatGroup, hatReliableGroup, hatExecutiveGroup;
 
   (function buildPlayer() {
     bodyGroup = new THREE.Group();
@@ -7053,15 +8076,35 @@
       bodyGroup.add(tip);
     });
 
-    // ---- beanie: rounded dome with a rolled brim ----
+    // ---- hats: one toggleable group per hat, only one visible at a time,
+    // swapped by refreshHat() based on state.equippedHat ----
+    hatGroup = new THREE.Group();
+    bodyGroup.add(hatGroup);
+
+    // "Ole Reliable" — the beanie every save starts with: rounded dome
+    // with a rolled brim.
+    hatReliableGroup = new THREE.Group();
     var beanie = new THREE.Mesh(new THREE.SphereGeometry(0.405, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), M.beanie);
     beanie.position.y = 2.34; beanie.scale.set(1, 1.15, 1);
-    beanie.castShadow = true; bodyGroup.add(beanie);
+    beanie.castShadow = true; hatReliableGroup.add(beanie);
     var brim = new THREE.Mesh(new THREE.TorusGeometry(0.375, 0.095, 10, 24), M.beanieDk);
     brim.position.y = 2.36; brim.rotation.x = Math.PI / 2;
-    brim.castShadow = true; bodyGroup.add(brim);
+    brim.castShadow = true; hatReliableGroup.add(brim);
     var nub = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), M.beanieDk);
-    nub.position.y = 2.79; bodyGroup.add(nub);
+    nub.position.y = 2.79; hatReliableGroup.add(nub);
+    hatGroup.add(hatReliableGroup);
+
+    // "The Executive" — a flat-topped fedora, dark with a gold band, bought
+    // from the office's hat locker.
+    hatExecutiveGroup = new THREE.Group();
+    var fedoraCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.28, 18), M.dark);
+    fedoraCrown.position.y = 2.5; fedoraCrown.castShadow = true; hatExecutiveGroup.add(fedoraCrown);
+    var fedoraBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.05, 22), M.dark);
+    fedoraBrim.position.y = 2.37; fedoraBrim.castShadow = true; hatExecutiveGroup.add(fedoraBrim);
+    var fedoraBand = new THREE.Mesh(new THREE.CylinderGeometry(0.285, 0.285, 0.07, 18), M.gold);
+    fedoraBand.position.y = 2.4; hatExecutiveGroup.add(fedoraBand);
+    hatExecutiveGroup.visible = false;
+    hatGroup.add(hatExecutiveGroup);
 
     // ---- arms: pivot at the shoulder so the swing looks natural ----
     function makeArm(side) {
@@ -7105,6 +8148,13 @@
     player.obj.scale.setScalar(1.12);
     scene.add(player.obj);
   })();
+
+  function refreshHat() {
+    var executive = state.equippedHat === "executive";
+    hatReliableGroup.visible = !executive;
+    hatExecutiveGroup.visible = executive;
+  }
+  refreshHat();
 
   var stackMeshes = [];
 
@@ -9688,6 +10738,15 @@
 
     function payOut(amount) {
       if (amount <= 0) return;
+      // The accountant is the whole point of the office: once hired, every
+      // till in the game (this one included) skips the physical pile and
+      // drops straight into the bankroll.
+      if (accountantHired()) {
+        state.cash += amount;
+        renderHud();
+        saveState();
+        return;
+      }
       pendingCash += amount;
       refreshCashPile();
     }
@@ -10837,6 +11896,50 @@
       },
     },
     {
+      id: "woodcutter", label: "WOODCUTTER", icon: "\ud83e\udeb5", x: WOODCUTTER_ZONE.x, z: WOODCUTTER_ZONE.z,
+      site: "papers", color: 0x8ef0a4, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () {
+        return (state.papers.woodcutterLv || 0) === 0 ? "Hire a Woodcutter" : "Hire Another Woodcutter";
+      },
+      desc: function () {
+        var n = state.papers.woodcutterLv || 0;
+        return n >= MAX_WOODCUTTERS
+          ? "The whole crew is swinging axes"
+          : (n === 0
+              ? "They chop trees and feed the planers for you"
+              : n + " on shift \u00b7 hire one more to keep the wood coming");
+      },
+      cost: costWoodcutter,
+      maxed: function () { return (state.papers.woodcutterLv || 0) >= MAX_WOODCUTTERS; },
+      buy: function () {
+        state.papers.woodcutterLv = (state.papers.woodcutterLv || 0) + 1;
+        toast("\ud83e\udeb5 Woodcutter hired \u2014 the trees don't stand a chance!");
+      },
+    },
+    {
+      id: "millhand", label: "MILL HAND", icon: "\ud83e\udea2", x: MILLHAND_ZONE.x, z: MILLHAND_ZONE.z,
+      site: "papers", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () {
+        return (state.papers.millhandLv || 0) === 0 ? "Hire a Mill Hand" : "Hire Another Mill Hand";
+      },
+      desc: function () {
+        var n = state.papers.millhandLv || 0;
+        return n >= MAX_MILLHANDS
+          ? "The mill floor is fully staffed"
+          : (n === 0
+              ? "They run lumber to the cutters and papers to the register"
+              : n + " on shift \u00b7 hire one more to keep the mill moving");
+      },
+      cost: costMillhand,
+      maxed: function () { return (state.papers.millhandLv || 0) >= MAX_MILLHANDS; },
+      buy: function () {
+        state.papers.millhandLv = (state.papers.millhandLv || 0) + 1;
+        toast("\ud83e\udea2 Mill hand hired \u2014 the relay runs itself!");
+      },
+    },
+    {
       // One-time purchase, unlike everything else here \u2014 there's only ever
       // one manager. This is what turns the field hands and hauler from
       // "workers who show up when you do" into "the farm runs itself".
@@ -11409,6 +12512,50 @@
         })(nos, nod);
       }
     }
+    // the next planer slot at the mill
+    var npl = state.site === "papers" ? nextPlanerSlot() : -1;
+    if (npl >= 0) {
+      var npld = planerDefs[npl];
+      if (inBox(px, pz, npld.x, npld.z, PLANER_PAD_HALF)) {
+        return (function (idx, dd) {
+          return {
+            kind: "planer", key: "planer" + idx, slot: "planerpad" + idx,
+            name: "Buy a Planer",
+            desc: "Machine " + (idx + 1) + " · holds " + papersHopperCap() + " wood at a time",
+            cost: planerCost(idx), maxed: false,
+            x: dd.x, z: dd.z, y: 1.6,
+            complete: function () {
+              state.papers.planerCount = idx + 1;
+              state.papers.planers[idx] = { wood: 0, lumber: 0, acc: 0 };
+              addFloater(dd.x, 3.0, dd.z, "PLANER IN!", "#e0b97a");
+              toast("🪵 Planer installed!");
+            },
+          };
+        })(npl, npld);
+      }
+    }
+    // the next cutter slot at the mill
+    var ncu = state.site === "papers" ? nextCutterSlot() : -1;
+    if (ncu >= 0) {
+      var ncud = cutterDefs[ncu];
+      if (inBox(px, pz, ncud.x, ncud.z, CUTTER_PAD_HALF)) {
+        return (function (idx, dd) {
+          return {
+            kind: "cutter", key: "cutter" + idx, slot: "cutterpad" + idx,
+            name: "Buy a Cutter",
+            desc: "Machine " + (idx + 1) + " · packages lumber into rolling papers worth $" + fmt(papersValue()),
+            cost: cutterCost(idx), maxed: false,
+            x: dd.x, z: dd.z, y: 1.6,
+            complete: function () {
+              state.papers.cutterCount = idx + 1;
+              state.papers.cutters[idx] = { lumber: 0, papers: 0, acc: 0 };
+              addFloater(dd.x, 3.4, dd.z, "CUTTER IN!", "#c9d3db");
+              toast("✂️ Cutter installed!");
+            },
+          };
+        })(ncu, ncud);
+      }
+    }
     for (var i = 0; i < stationDefs.length; i++) {
       var st = stationDefs[i];
       if ((st.site || "shop") !== state.site) continue;
@@ -11707,10 +12854,16 @@
     handleIntake();
     handleFarmPlots();
     handleFarmSilo();
+    handlePapersTrees();
+    handlePlaners();
+    handleCutters();
+    handlePapersDrop();
     updatePlotVisuals(now);
     updateRowTiles(now);
     updatePressPads(now);
     updateOvenPads(now);
+    updatePlanerPads(now);
+    updateCutterPads(now);
     updateSoilBag(now, dt);
     updateMysteryBox(now);
     updateHrProximity();
@@ -11740,6 +12893,16 @@
     updateFarmRowTiles(now);
     updateFieldHands(now, dt);
     updateHaulers(now, dt);
+    updatePapersTreeGrowth(dt);
+    updatePapersTreeVisuals();
+    updatePlanerStates(dt);
+    updatePlanerVisuals(now);
+    updateCutterStates(dt);
+    updateCutterVisuals(now);
+    updateWoodcutters(now, dt);
+    updateMillhands(now, dt);
+    updatePapersTruck(dt);
+    updatePapersTill(now);
     updateCourier(dt);
     updateCourierTruck(dt);
     updateIntakeVisuals();
@@ -11810,7 +12973,8 @@
 
   function renderMap() {
     mapRows.innerHTML = "";
-    for (var i = 0; i < SITE_LIST.length; i++) {
+    var sites = citySites();
+    for (var i = 0; i < sites.length; i++) {
       (function (s) {
         var here = s.id === state.site;
         var open = s.unlocked();
@@ -11849,7 +13013,7 @@
         }
         row.appendChild(btn);
         mapRows.appendChild(row);
-      })(SITE_LIST[i]);
+      })(sites[i]);
     }
   }
 
@@ -11878,8 +13042,9 @@
     mapBtn.classList.toggle("nudge", !!on);
   }
   function checkDeedAffordable() {
-    for (var i = 0; i < SITE_LIST.length; i++) {
-      var s = SITE_LIST[i];
+    var sites = citySites();
+    for (var i = 0; i < sites.length; i++) {
+      var s = sites[i];
       if (!s.deedCost || s.unlocked() || state.deedSeen[s.id]) continue;
       if (state.cash < deedCostOf(s)) continue;
       state.deedSeen[s.id] = true;
@@ -11895,6 +13060,138 @@
   mapBtn.addEventListener("click", openMap);
   document.getElementById("map-close").addEventListener("click", closeMap);
   mapOverlay.addEventListener("click", function (e) { if (e.target === mapOverlay) closeMap(); });
+
+  // ---- executive office ----
+  // Reached only from its own HUD button — deliberately not a world
+  // location, so it never competes with the map for "where do I go".
+  var officeOverlay = document.getElementById("office-overlay");
+  var officeBtn = document.getElementById("office-btn");
+  var officeAccountantRows = document.getElementById("office-accountant-rows");
+  var officeProfitRows = document.getElementById("office-profit-rows");
+  var officeHatRows = document.getElementById("office-hat-rows");
+  var officeCityRows = document.getElementById("office-city-rows");
+
+  // One row-builder shared by every section: icon optional, name/desc/button.
+  function buildOfficeRow(opts) {
+    var row = document.createElement("div");
+    row.className = "hr-row office-row" + (opts.locked ? " locked" : "");
+    var info = document.createElement("div");
+    info.className = "hr-info";
+    var name = document.createElement("b");
+    name.textContent = opts.name;
+    var desc = document.createElement("span");
+    desc.textContent = opts.desc;
+    info.appendChild(name); info.appendChild(desc);
+    row.appendChild(info);
+    var btn = document.createElement("button");
+    btn.className = "hr-buy";
+    btn.textContent = opts.btnText;
+    btn.disabled = !!opts.disabled;
+    if (opts.onClick) btn.addEventListener("click", opts.onClick);
+    row.appendChild(btn);
+    return row;
+  }
+
+  function renderOfficePanel() {
+    // ---- accountant ----
+    officeAccountantRows.innerHTML = "";
+    officeAccountantRows.appendChild(buildOfficeRow({
+      name: "Hire an Accountant",
+      desc: accountantHired()
+        ? "Every till in the empire pays straight into your bankroll."
+        : "Skip the walk — every sale drops straight into your cash, everywhere.",
+      btnText: accountantHired() ? "Hired" : "$" + fmt(ACCOUNTANT_COST),
+      disabled: accountantHired() || state.cash < ACCOUNTANT_COST,
+      onClick: function () {
+        if (accountantHired() || state.cash < ACCOUNTANT_COST) return;
+        state.cash -= ACCOUNTANT_COST;
+        state.accountantHired = true;
+        toast("🧾 Accountant hired — every till pays straight in from now on.");
+        renderHud(); renderOfficePanel(); saveState();
+      },
+    }));
+
+    // ---- profit boosters ----
+    officeProfitRows.innerHTML = "";
+    var profitSites = [
+      { id: "shop", label: "Shop", icon: "🏪" },
+      { id: "farm", label: "Farm", icon: "🌾" },
+      { id: "lounge", label: "Lounge", icon: "🍸" },
+      { id: "factory", label: "Factory", icon: "🏭" },
+      { id: "papers", label: "Rolling Mill", icon: "🪵" },
+    ];
+    profitSites.forEach(function (ps) {
+      var s = SITES[ps.id];
+      var unlocked = s && s.unlocked();
+      var tier = profitTierOf(ps.id);
+      var maxed = tier >= MAX_PROFIT_TIER;
+      officeProfitRows.appendChild(buildOfficeRow({
+        name: ps.icon + " " + ps.label,
+        desc: !unlocked
+          ? "Not open for business yet"
+          : maxed
+            ? "Maxed — " + PROFIT_TIER_LABELS[tier] + " profit"
+            : "Tier " + tier + "/" + MAX_PROFIT_TIER + " · next: " + PROFIT_TIER_LABELS[tier + 1] +
+              (ps.id === "farm" ? " throughput" : " profit"),
+        btnText: !unlocked ? "Locked" : maxed ? "MAX" : "$" + fmt(costProfitTier(ps.id)),
+        disabled: !unlocked || maxed || state.cash < costProfitTier(ps.id),
+        locked: !unlocked,
+        onClick: function () {
+          if (!unlocked || maxed || state.cash < costProfitTier(ps.id)) return;
+          state.cash -= costProfitTier(ps.id);
+          state.profitTier[ps.id] = tier + 1;
+          toast(ps.icon + " " + ps.label + " profit boosted to " + PROFIT_TIER_LABELS[tier + 1] + "!");
+          renderHud(); renderOfficePanel(); saveState();
+        },
+      }));
+    });
+
+    // ---- hat locker ----
+    officeHatRows.innerHTML = "";
+    ["reliable", "executive"].forEach(function (id) {
+      var h = HATS[id];
+      var owned = !!(state.hatsOwned && state.hatsOwned[id]);
+      var equipped = state.equippedHat === id;
+      officeHatRows.appendChild(buildOfficeRow({
+        name: h.name,
+        desc: h.desc,
+        btnText: equipped ? "Equipped" : owned ? "Equip" : "$" + fmt(h.cost),
+        disabled: equipped || (!owned && state.cash < h.cost),
+        onClick: function () {
+          if (equipped) return;
+          if (!owned) {
+            if (state.cash < h.cost) return;
+            state.cash -= h.cost;
+            state.hatsOwned[id] = true;
+            toast("🎩 " + h.name + " unlocked!");
+          }
+          state.equippedHat = id;
+          refreshHat();
+          toast("🎩 Wearing " + h.name + " now.");
+          renderHud(); renderOfficePanel(); saveState();
+        },
+      }));
+    });
+
+    // ---- city terminal ----
+    officeCityRows.innerHTML = "";
+    CITIES.forEach(function (c) {
+      var here = c.id === currentCityId();
+      officeCityRows.appendChild(buildOfficeRow({
+        name: c.name,
+        desc: here ? "Your current city" : (c.comingSoon ? "Scouting the next location..." : ""),
+        btnText: here ? "Here" : "Coming Soon",
+        disabled: true,
+        locked: !here,
+      }));
+    });
+  }
+
+  function openOffice() { renderOfficePanel(); officeOverlay.classList.add("show"); }
+  function closeOffice() { officeOverlay.classList.remove("show"); }
+  officeBtn.addEventListener("click", openOffice);
+  document.getElementById("office-close").addEventListener("click", closeOffice);
+  officeOverlay.addEventListener("click", function (e) { if (e.target === officeOverlay) closeOffice(); });
 
   // ---- mystery box card ----
   var mysteryOverlay = document.getElementById("mystery-overlay");
