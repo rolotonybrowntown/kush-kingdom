@@ -1306,13 +1306,19 @@
   var MILLHAND_ZONE = { x: 18.0, z: PAPERS_CZ - 14 };
 
   // ===================================================================
-  //  EXECUTIVE OFFICE — reached only from its own HUD button, no 3D room
+  //  EXECUTIVE OFFICE — a HUD button from anywhere, and a physical annex
+  //  off the retail floor for the same panel
   // ===================================================================
   // Every location has its own upgrade curve already; this is one more
   // curve, on top, that the player buys into per-location rather than
   // walking anywhere for. All state lives flat on `state` since there is
   // no world position to key it to.
   var ACCOUNTANT_COST = 5e13;
+  // The annex opens off the retail floor's left wall, spanning the exact
+  // same fixed Z range (PARTITION_Z..RETAIL_MAX_Z) so SITES.shop.bounds()
+  // only ever needs one unconditional width, never a partial-Z carve-out.
+  var OFFICE_ANNEX_WIDTH = 14;
+  var OFFICE_ZONE = { x: -HALF_X - OFFICE_ANNEX_WIDTH / 2, z: 1 };
   function accountantHired() { return !!state.accountantHired; }
 
   var PROFIT_TIER_MULT = [1, 1.10, 1.30, 1.50];
@@ -1366,8 +1372,15 @@
       groundOf: function () { return ground; },
       unlocked: function () { return true; },
       bounds: function () {
+        // The executive suite annex opens off the retail floor's left wall
+        // (no dividing wall — see rebuildRoom()) rather than being its own
+        // site, so it only widens the walkable rectangle while the player
+        // is actually within the retail floor's Z-span; anywhere deeper in
+        // the back rooms, the wall there is real and the old edge holds.
+        var inRetailBand = player.pos.z >= PARTITION_Z && player.pos.z <= RETAIL_MAX_Z;
         return {
-          minX: -HALF_X + 1, maxX: HALF_X - 1,
+          minX: (inRetailBand ? -HALF_X - OFFICE_ANNEX_WIDTH : -HALF_X) + 1,
+          maxX: HALF_X - 1,
           minZ: backMinZForTier(state.roomTier) + 1.4, maxZ: RETAIL_MAX_Z - 1.4,
         };
       },
@@ -3327,7 +3340,13 @@
     frontWallGroup.add(frontWall);
     wallSlab(wallThick, PARTITION_Z - minZ, -HALF_X, (minZ + PARTITION_Z) / 2, M.wallBack);
     wallSlab(wallThick, PARTITION_Z - minZ, HALF_X, (minZ + PARTITION_Z) / 2, M.wallBack);
-    wallSlab(wallThick, maxZ - PARTITION_Z, -HALF_X, (PARTITION_Z + maxZ) / 2);
+    // The retail floor's left wall is open instead of solid — that's where
+    // the executive suite annex sits (built once, always visible, in its
+    // own IIFE), marked only by a brass threshold strip, same convention
+    // the back rooms already use instead of dividers.
+    var officeThreshold = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, maxZ - PARTITION_Z), M.threshold);
+    officeThreshold.position.set(-HALF_X, 0.27, (PARTITION_Z + maxZ) / 2);
+    roomGroup.add(officeThreshold);
     wallSlab(wallThick, maxZ - PARTITION_Z, HALF_X, (PARTITION_Z + maxZ) / 2);
 
     // There is no partition and there are no dividers between the back rooms
@@ -3481,6 +3500,85 @@
       g2.rotation.y = -Math.PI / 2;
       roomGroup.add(g2);
       spotFixture(roomGroup, 10.2, 6.5, 0xffd9a0);
+    })();
+
+    // ---- executive suite annex: open off the retail floor's left wall,
+    // same fixed Z-span, no dividing wall — see the threshold strip above
+    // and SITES.shop.bounds() ----
+    (function buildOfficeAnnex() {
+      var g3 = new THREE.Group();
+      var annexMinX = -HALF_X - OFFICE_ANNEX_WIDTH;
+      var annexCx = (annexMinX + -HALF_X) / 2;
+      var annexCz = (PARTITION_Z + maxZ) / 2;
+      var annexDz = maxZ - PARTITION_Z;
+
+      var annexFloor = new THREE.Mesh(
+        new THREE.BoxGeometry(OFFICE_ANNEX_WIDTH, 0.3, annexDz), M.growFloor);
+      annexFloor.position.set(annexCx, 0.08, annexCz);
+      annexFloor.receiveShadow = true;
+      g3.add(annexFloor);
+
+      var wt = 0.4;
+      function annexWall(sizeX, sizeZ, x, z) {
+        var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, WALL_H, sizeZ), M.wallAccent);
+        wall.position.set(x, WALL_H / 2, z);
+        wall.receiveShadow = true;
+        g3.add(wall);
+      }
+      annexWall(wt, annexDz, annexMinX, annexCz);              // far (outer) wall
+      annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, PARTITION_Z);  // back wall
+      annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, maxZ);         // front wall
+
+      // a run of windows along the outer wall, looking out over the block —
+      // the "watching over the operation" framing from the pitch, without
+      // needing a literal second floor to look down from
+      for (var wi = 0; wi < 3; wi++) {
+        var wz = PARTITION_Z + annexDz * (wi + 1) / 4;
+        var pane = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2, 3.4), M.windowGlass);
+        pane.position.set(annexMinX + 0.05, 4.6, wz);
+        g3.add(pane);
+      }
+
+      // ---- decoration: everything below is dressing. The one interaction
+      // is a proximity zone (updateOfficeProximity) that opens the same
+      // #office-overlay the HUD button already does. ----
+      var deskTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 1.4), M.woodDark);
+      deskTop.position.set(annexCx, 1.1, PARTITION_Z + 3.2);
+      deskTop.castShadow = true; g3.add(deskTop);
+      var deskLeg = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.0, 1.2), M.dark);
+      deskLeg.position.set(annexCx, 0.55, PARTITION_Z + 3.2);
+      g3.add(deskLeg);
+
+      var locker = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 0.7), M.locker);
+      locker.position.set(annexMinX + 5.0, 1.1, PARTITION_Z + 1.0);
+      locker.castShadow = true; g3.add(locker);
+      var lockerTrim = new THREE.Mesh(new THREE.BoxGeometry(1.44, 0.1, 0.74), M.gold);
+      lockerTrim.position.set(annexMinX + 5.0, 2.22, PARTITION_Z + 1.0);
+      g3.add(lockerTrim);
+
+      var terminal = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 0.9), M.metal);
+      terminal.position.set(annexMinX + 9.5, 0.7, maxZ - 2.8);
+      terminal.castShadow = true; g3.add(terminal);
+      var terminalScreen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.06), M.neonGreen);
+      terminalScreen.position.set(annexMinX + 9.5, 1.55, maxZ - 2.8 - 0.4);
+      terminalScreen.rotation.x = -0.35;
+      g3.add(terminalScreen);
+
+      [-2.0, 2.0].forEach(function (dz) {
+        var screen = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.2, 0.08), M.dark);
+        screen.position.set(annexCx, 5.4, annexCz + dz);
+        g3.add(screen);
+        var glow = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.9, 0.02), M.neonGreen);
+        glow.position.set(annexCx, 5.4, annexCz + dz - 0.05);
+        g3.add(glow);
+      });
+
+      var sign = textSprite("EXECUTIVE SUITE", "#ffe9b0");
+      sign.scale.set(4.2, 0.9, 1);
+      sign.position.set(annexCx, 7.2, PARTITION_Z + 0.5);
+      g3.add(sign);
+
+      roomGroup.add(g3);
     })();
   }
   rebuildRoom();
@@ -12867,6 +12965,7 @@
     updateSoilBag(now, dt);
     updateMysteryBox(now);
     updateHrProximity();
+    updateOfficeProximity();
     updateCouch(dt);
     updateBarn(dt);
     checkDeedAffordable();
@@ -13434,6 +13533,17 @@
     if (!near && hrWasNear) closeHr();
     hrWasNear = near;
     if (near && hrOverlay.classList.contains("show")) renderHrPanel();
+  }
+
+  // ---- executive suite annex: standing near the desk opens the same
+  // #office-overlay the HUD button does — same pattern as the HR desk ----
+  var officeWasNear = false;
+  function updateOfficeProximity() {
+    var near = state.site === "shop" &&
+      d2(player.pos.x, player.pos.z, OFFICE_ZONE.x, OFFICE_ZONE.z) <= 4.0 + PLAYER_RADIUS;
+    if (near && !officeWasNear) openOffice();
+    if (!near && officeWasNear) closeOffice();
+    officeWasNear = near;
   }
 
   // ---- sound wiring ----
