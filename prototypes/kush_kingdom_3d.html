@@ -411,6 +411,10 @@
     letter-spacing: 0.6px; font-size: 10.5px; opacity: 0.55;
   }
   .office-row.locked .hr-info b { opacity: 0.62; }
+  /* Only one prop's section shows at a time — walking up to the desk
+     shows the accountant row, the locker shows hats, etc. */
+  .office-section { display: none; }
+  .office-section.show { display: block; }
 
   /* ---------------- "a new build is waiting" bar ---------------- */
   /* The offline cache must never be able to hide a deploy. When a newer build
@@ -722,20 +726,24 @@
 
   <div id="office-overlay">
     <div id="office-card">
-      <h2>Executive Office</h2>
-      <p class="hr-sub">Run the whole operation from one desk.</p>
+      <h2 id="office-title">Executive Office</h2>
+      <p class="hr-sub" id="office-sub">Run the whole operation from one desk.</p>
 
-      <p class="hr-sub office-section-title">Accountant</p>
-      <div id="office-accountant-rows"></div>
+      <div class="office-section" id="office-sec-accountant">
+        <div id="office-accountant-rows"></div>
+      </div>
 
-      <p class="hr-sub office-section-title">Profit Boosters</p>
-      <div id="office-profit-rows"></div>
+      <div class="office-section" id="office-sec-profit">
+        <div id="office-profit-rows"></div>
+      </div>
 
-      <p class="hr-sub office-section-title">Hat Locker</p>
-      <div id="office-hat-rows"></div>
+      <div class="office-section" id="office-sec-hats">
+        <div id="office-hat-rows"></div>
+      </div>
 
-      <p class="hr-sub office-section-title">City Terminal</p>
-      <div id="office-city-rows"></div>
+      <div class="office-section" id="office-sec-city">
+        <div id="office-city-rows"></div>
+      </div>
 
       <button class="menu-action primary" id="office-close">Done</button>
     </div>
@@ -1318,7 +1326,31 @@
   // same fixed Z range (PARTITION_Z..RETAIL_MAX_Z) so SITES.shop.bounds()
   // only ever needs one unconditional width, never a partial-Z carve-out.
   var OFFICE_ANNEX_WIDTH = 14;
-  var OFFICE_ZONE = { x: -HALF_X - OFFICE_ANNEX_WIDTH / 2, z: 1 };
+  var OFFICE_ANNEX_MIN_X = -HALF_X - OFFICE_ANNEX_WIDTH;
+  var OFFICE_ANNEX_CX = (OFFICE_ANNEX_MIN_X + -HALF_X) / 2;
+  var OFFICE_ANNEX_CZ = (PARTITION_Z + RETAIL_MAX_Z) / 2;
+  var OFFICE_ZONE = { x: OFFICE_ANNEX_CX, z: OFFICE_ANNEX_CZ };   // teleport landing spot
+  // one zone per interactive prop, one per corner of the annex — spaced
+  // well past each other's interaction radius so no two ever overlap
+  var OFFICE_DESK_ZONE     = { x: OFFICE_ANNEX_MIN_X + 3.5, z: PARTITION_Z + 3.0 };   // back-left
+  var OFFICE_LOCKER_ZONE   = { x: -HALF_X - 3.5,            z: PARTITION_Z + 3.0 };   // back-right
+  var OFFICE_TERMINAL_ZONE = { x: OFFICE_ANNEX_MIN_X + 3.5, z: RETAIL_MAX_Z - 3.0 };  // front-left
+  var OFFICE_PROFIT_ZONE   = { x: -HALF_X - 3.5,            z: RETAIL_MAX_Z - 3.0 };  // front-right
+
+  // ---- office tiers: same shape as LOUNGE_TIERS — a full reskin per tier,
+  // climbing from a modest back office to a Batman-style tech lair ----
+  var OFFICE_TIERS = [
+    { name: "Back Office",    cost: 0,
+      adds: "A desk, a locker, and a terminal — modest, but it's yours" },
+    { name: "Highrise Suite", cost: 2e13,
+      adds: "Floor-to-ceiling glass and a skyline view" },
+    { name: "The Lair",       cost: 3e14,
+      adds: "Dark tech panels, a glowing city map, the works" },
+  ];
+  var MAX_OFFICE_TIER = OFFICE_TIERS.length - 1;
+  function officeTier()    { return state.officeTier || 0; }
+  function officeTierDef() { return OFFICE_TIERS[officeTier()]; }
+  var OFFICE_TIER_PAD = { x: OFFICE_ANNEX_CX, z: RETAIL_MAX_Z - 1.0 };
   function accountantHired() { return !!state.accountantHired; }
 
   var PROFIT_TIER_MULT = [1, 1.10, 1.30, 1.50];
@@ -2047,6 +2079,7 @@
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
       // ---- executive office ----
       accountantHired: false,
+      officeTier: 0,
       profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0 },
       equippedHat: "reliable",
       hatsOwned: { reliable: true, executive: false },
@@ -2269,6 +2302,7 @@
 
       // ---- executive office ----
       merged.accountantHired = !!merged.accountantHired;
+      merged.officeTier = Math.max(0, Math.min(MAX_OFFICE_TIER, Math.floor(merged.officeTier) || 0));
       if (!merged.profitTier || typeof merged.profitTier !== "object") merged.profitTier = {};
       ["shop", "farm", "lounge", "factory", "papers"].forEach(function (k) {
         var t = merged.profitTier[k];
@@ -3501,87 +3535,116 @@
       roomGroup.add(g2);
       spotFixture(roomGroup, 10.2, 6.5, 0xffd9a0);
     })();
-
-    // ---- executive suite annex: open off the retail floor's left wall,
-    // same fixed Z-span, no dividing wall — see the threshold strip above
-    // and SITES.shop.bounds() ----
-    (function buildOfficeAnnex() {
-      var g3 = new THREE.Group();
-      var annexMinX = -HALF_X - OFFICE_ANNEX_WIDTH;
-      var annexCx = (annexMinX + -HALF_X) / 2;
-      var annexCz = (PARTITION_Z + maxZ) / 2;
-      var annexDz = maxZ - PARTITION_Z;
-
-      var annexFloor = new THREE.Mesh(
-        new THREE.BoxGeometry(OFFICE_ANNEX_WIDTH, 0.3, annexDz), M.growFloor);
-      annexFloor.position.set(annexCx, 0.08, annexCz);
-      annexFloor.receiveShadow = true;
-      g3.add(annexFloor);
-
-      var wt = 0.4;
-      function annexWall(sizeX, sizeZ, x, z) {
-        var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, WALL_H, sizeZ), M.wallAccent);
-        wall.position.set(x, WALL_H / 2, z);
-        wall.receiveShadow = true;
-        g3.add(wall);
-      }
-      annexWall(wt, annexDz, annexMinX, annexCz);              // far (outer) wall
-      annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, PARTITION_Z);  // back wall
-      annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, maxZ);         // front wall
-
-      // a run of windows along the outer wall, looking out over the block —
-      // the "watching over the operation" framing from the pitch, without
-      // needing a literal second floor to look down from
-      for (var wi = 0; wi < 3; wi++) {
-        var wz = PARTITION_Z + annexDz * (wi + 1) / 4;
-        var pane = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2, 3.4), M.windowGlass);
-        pane.position.set(annexMinX + 0.05, 4.6, wz);
-        g3.add(pane);
-      }
-
-      // ---- decoration: everything below is dressing. The one interaction
-      // is a proximity zone (updateOfficeProximity) that opens the same
-      // #office-overlay the HUD button already does. ----
-      var deskTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 1.4), M.woodDark);
-      deskTop.position.set(annexCx, 1.1, PARTITION_Z + 3.2);
-      deskTop.castShadow = true; g3.add(deskTop);
-      var deskLeg = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.0, 1.2), M.dark);
-      deskLeg.position.set(annexCx, 0.55, PARTITION_Z + 3.2);
-      g3.add(deskLeg);
-
-      var locker = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 0.7), M.locker);
-      locker.position.set(annexMinX + 5.0, 1.1, PARTITION_Z + 1.0);
-      locker.castShadow = true; g3.add(locker);
-      var lockerTrim = new THREE.Mesh(new THREE.BoxGeometry(1.44, 0.1, 0.74), M.gold);
-      lockerTrim.position.set(annexMinX + 5.0, 2.22, PARTITION_Z + 1.0);
-      g3.add(lockerTrim);
-
-      var terminal = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 0.9), M.metal);
-      terminal.position.set(annexMinX + 9.5, 0.7, maxZ - 2.8);
-      terminal.castShadow = true; g3.add(terminal);
-      var terminalScreen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.06), M.neonGreen);
-      terminalScreen.position.set(annexMinX + 9.5, 1.55, maxZ - 2.8 - 0.4);
-      terminalScreen.rotation.x = -0.35;
-      g3.add(terminalScreen);
-
-      [-2.0, 2.0].forEach(function (dz) {
-        var screen = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.2, 0.08), M.dark);
-        screen.position.set(annexCx, 5.4, annexCz + dz);
-        g3.add(screen);
-        var glow = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.9, 0.02), M.neonGreen);
-        glow.position.set(annexCx, 5.4, annexCz + dz - 0.05);
-        g3.add(glow);
-      });
-
-      var sign = textSprite("EXECUTIVE SUITE", "#ffe9b0");
-      sign.scale.set(4.2, 0.9, 1);
-      sign.position.set(annexCx, 7.2, PARTITION_Z + 0.5);
-      g3.add(sign);
-
-      roomGroup.add(g3);
-    })();
   }
   rebuildRoom();
+
+  // ===================================================================
+  //  EXECUTIVE SUITE ANNEX — independent of rebuildRoom(); opens off the
+  //  retail floor's left wall via the threshold strip cut there above.
+  //  Rebuilt on its own tier changes, not on shop level-ups.
+  // ===================================================================
+  var officeAnnexGroup = new THREE.Group();
+  scene.add(officeAnnexGroup);
+
+  function rebuildOfficeAnnex() {
+    while (officeAnnexGroup.children.length) officeAnnexGroup.remove(officeAnnexGroup.children[0]);
+    var g3 = officeAnnexGroup;
+    var tier = officeTier();
+    var annexMinX = OFFICE_ANNEX_MIN_X, annexCx = OFFICE_ANNEX_CX, annexCz = OFFICE_ANNEX_CZ;
+    var annexDz = RETAIL_MAX_Z - PARTITION_Z;
+
+    // ---- per-tier palette ----
+    var floorMat  = tier >= 2 ? M.dark : tier >= 1 ? M.dockFloor : M.growFloor;
+    var wallMat   = tier >= 2 ? M.dark : M.wallAccent;
+    var trimMat   = tier >= 1 ? M.gold : M.woodDark;
+    var paneScale = tier >= 1 ? 1.8 : 1.0;   // windows widen at the Highrise tier
+    var screenMat = tier >= 2 ? M.neonPink : M.neonGreen;
+
+    var annexFloor = new THREE.Mesh(
+      new THREE.BoxGeometry(OFFICE_ANNEX_WIDTH, 0.3, annexDz), floorMat);
+    annexFloor.position.set(annexCx, 0.08, annexCz);
+    annexFloor.receiveShadow = true;
+    g3.add(annexFloor);
+
+    var wt = 0.4;
+    function annexWall(sizeX, sizeZ, x, z) {
+      var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, WALL_H, sizeZ), wallMat);
+      wall.position.set(x, WALL_H / 2, z);
+      wall.receiveShadow = true;
+      g3.add(wall);
+    }
+    annexWall(wt, annexDz, annexMinX, annexCz);               // far (outer) wall
+    annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, PARTITION_Z);  // back wall
+    annexWall(OFFICE_ANNEX_WIDTH, wt, annexCx, RETAIL_MAX_Z); // front wall
+
+    // a run of windows along the outer wall, looking out over the block —
+    // the "watching over the operation" framing from the pitch, without
+    // needing a literal second floor to look down from. Widen at Highrise.
+    for (var wi = 0; wi < 3; wi++) {
+      var wz = PARTITION_Z + annexDz * (wi + 1) / 4;
+      var pane = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2 * paneScale, 3.4 * paneScale), M.windowGlass);
+      pane.position.set(annexMinX + 0.05, 4.6, wz);
+      g3.add(pane);
+    }
+
+    // ---- decoration + the four interactive props. Everything below is
+    // dressing; the actual interactions are the four proximity zones
+    // (updateOfficeProps) that each open only their own popup. ----
+    var deskTop = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 1.4), trimMat);
+    deskTop.position.set(OFFICE_DESK_ZONE.x, 1.1, OFFICE_DESK_ZONE.z);
+    deskTop.castShadow = true; g3.add(deskTop);
+    var deskLeg = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.0, 1.2), M.dark);
+    deskLeg.position.set(OFFICE_DESK_ZONE.x, 0.55, OFFICE_DESK_ZONE.z);
+    g3.add(deskLeg);
+
+    var locker = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 0.7), M.locker);
+    locker.position.set(OFFICE_LOCKER_ZONE.x, 1.1, OFFICE_LOCKER_ZONE.z);
+    locker.castShadow = true; g3.add(locker);
+    var lockerTrim = new THREE.Mesh(new THREE.BoxGeometry(1.44, 0.1, 0.74), trimMat);
+    lockerTrim.position.set(OFFICE_LOCKER_ZONE.x, 2.22, OFFICE_LOCKER_ZONE.z);
+    g3.add(lockerTrim);
+
+    var terminal = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 0.9), M.metal);
+    terminal.position.set(OFFICE_TERMINAL_ZONE.x, 0.7, OFFICE_TERMINAL_ZONE.z);
+    terminal.castShadow = true; g3.add(terminal);
+    var terminalScreen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.06), screenMat);
+    terminalScreen.position.set(OFFICE_TERMINAL_ZONE.x, 1.55, OFFICE_TERMINAL_ZONE.z - 0.4);
+    terminalScreen.rotation.x = -0.35;
+    g3.add(terminalScreen);
+
+    // the profit dashboard: a standing console at its own corner, the
+    // interactive prop for that zone
+    var big = tier >= 2;
+    var dash = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.5, 0.5), M.metal);
+    dash.position.set(OFFICE_PROFIT_ZONE.x, 0.75, OFFICE_PROFIT_ZONE.z);
+    dash.castShadow = true; g3.add(dash);
+    var dashScreen = new THREE.Mesh(new THREE.BoxGeometry(big ? 1.3 : 1.0, big ? 0.9 : 0.7, 0.06), screenMat);
+    dashScreen.position.set(OFFICE_PROFIT_ZONE.x, 1.65, OFFICE_PROFIT_ZONE.z - 0.15);
+    dashScreen.rotation.x = -0.3;
+    g3.add(dashScreen);
+
+    // one purely decorative wall screen, centered on the back wall
+    var decoScreen = new THREE.Mesh(new THREE.BoxGeometry(big ? 2.6 : 2.0, big ? 1.6 : 1.2, 0.08), M.dark);
+    decoScreen.position.set(annexCx, 5.4, PARTITION_Z + 0.3);
+    g3.add(decoScreen);
+    var decoGlow = new THREE.Mesh(new THREE.BoxGeometry(big ? 2.3 : 1.7, big ? 1.3 : 0.9, 0.02), screenMat);
+    decoGlow.position.set(annexCx, 5.4, PARTITION_Z + 0.25);
+    g3.add(decoGlow);
+
+    // tier 2: a glowing "hologram" city map, the Lair's signature prop
+    if (tier >= 2) {
+      var disc = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.08, 24), M.neonGreen);
+      disc.position.set(annexCx, 1.3, annexCz + 3.0);
+      g3.add(disc);
+      addGlow(g3, annexCx, 1.7, annexCz + 3.0, 3.2, 0x2bd977, 0.4);
+    }
+
+    var sign = textSprite(officeTierDef().name.toUpperCase(), "#ffe9b0");
+    sign.scale.set(4.6, 0.9, 1);
+    sign.position.set(annexCx, 7.2, PARTITION_Z + 0.5);
+    g3.add(sign);
+  }
+  rebuildOfficeAnnex();
 
   // ===================================================================
   //  SEED SHED + SELL COUNTER
@@ -12139,6 +12202,30 @@
       },
     },
     {
+      id: "officetier", label: "UPGRADE", icon: "\ud83c\udfd9\ufe0f",
+      x: OFFICE_TIER_PAD.x, z: OFFICE_TIER_PAD.z,
+      site: "shop", color: 0xd6b06f, kiosk: true,
+      name: function () {
+        return officeTier() >= MAX_OFFICE_TIER
+          ? "The Lair"
+          : "Open " + OFFICE_TIERS[officeTier() + 1].name;
+      },
+      desc: function () {
+        if (officeTier() >= MAX_OFFICE_TIER) return "As high-tech as it gets";
+        return OFFICE_TIERS[officeTier() + 1].adds;
+      },
+      cost: function () {
+        return officeTier() >= MAX_OFFICE_TIER ? 0 : scaled(OFFICE_TIERS[officeTier() + 1].cost);
+      },
+      maxed: function () { return officeTier() >= MAX_OFFICE_TIER; },
+      buy: function () {
+        state.officeTier++;
+        rebuildOfficeAnnex();
+        addFloater(OFFICE_TIER_PAD.x, 3.2, OFFICE_TIER_PAD.z, officeTierDef().name + "!", "#ffd75e");
+        toast("\ud83c\udfd9\ufe0f " + officeTierDef().name + " \u2014 " + officeTierDef().adds + "!");
+      },
+    },
+    {
       // Look, not pace \u2014 a separate track from GROW SPEED so a player who
       // only cares about output never has to buy this, and one who wants the
       // field to look the part never has to touch growLv.
@@ -12965,7 +13052,7 @@
     updateSoilBag(now, dt);
     updateMysteryBox(now);
     updateHrProximity();
-    updateOfficeProximity();
+    updateOfficeProps();
     updateCouch(dt);
     updateBarn(dt);
     checkDeedAffordable();
@@ -13286,9 +13373,38 @@
     });
   }
 
-  function openOffice() { renderOfficePanel(); officeOverlay.classList.add("show"); }
+  var officeTitleEl = document.getElementById("office-title");
+  var officeSubEl = document.getElementById("office-sub");
+  var OFFICE_SECTIONS = {
+    accountant: { title: "Hire an Accountant", sub: "Skip the walk — every sale drops straight into your cash, everywhere." },
+    profit:     { title: "Profit Boosters", sub: "Buy each location's way to a bigger cut, three tiers deep." },
+    hats:       { title: "Hat Locker", sub: "Swap hats — some come with a production bonus." },
+    city:       { title: "City Terminal", sub: "Browse where the operation goes next." },
+  };
+  // Called by whichever prop's proximity zone the player just entered —
+  // shows only that section, hides the other three.
+  function openOfficeSection(mode) {
+    renderOfficePanel();
+    for (var m in OFFICE_SECTIONS) {
+      document.getElementById("office-sec-" + m).classList.toggle("show", m === mode);
+    }
+    var def = OFFICE_SECTIONS[mode];
+    officeTitleEl.textContent = def.title;
+    officeSubEl.textContent = def.sub;
+    officeOverlay.classList.add("show");
+  }
   function closeOffice() { officeOverlay.classList.remove("show"); }
-  officeBtn.addEventListener("click", openOffice);
+  function teleportToOffice() {
+    travelTo("shop");   // stows backpack, snaps camera, saves — the real
+                         // travel path, same discipline as every other site
+    player.pos.x = OFFICE_ZONE.x;
+    player.pos.z = OFFICE_ZONE.z;
+    placeCameraAt(camDistForTier(state.roomTier));
+    renderHud();
+    saveState();
+    toast("💼 Welcome to the Executive Office");
+  }
+  officeBtn.addEventListener("click", teleportToOffice);
   document.getElementById("office-close").addEventListener("click", closeOffice);
   officeOverlay.addEventListener("click", function (e) { if (e.target === officeOverlay) closeOffice(); });
 
@@ -13535,15 +13651,29 @@
     if (near && hrOverlay.classList.contains("show")) renderHrPanel();
   }
 
-  // ---- executive suite annex: standing near the desk opens the same
-  // #office-overlay the HUD button does — same pattern as the HR desk ----
-  var officeWasNear = false;
-  function updateOfficeProximity() {
-    var near = state.site === "shop" &&
-      d2(player.pos.x, player.pos.z, OFFICE_ZONE.x, OFFICE_ZONE.z) <= 4.0 + PLAYER_RADIUS;
-    if (near && !officeWasNear) openOffice();
-    if (!near && officeWasNear) closeOffice();
-    officeWasNear = near;
+  // ---- executive suite annex: each prop opens only its own popup, same
+  // enter/leave shape as updateHrProximity() ----
+  var OFFICE_PROPS = [
+    { mode: "accountant", zone: OFFICE_DESK_ZONE, r: 2.4 },
+    { mode: "hats",       zone: OFFICE_LOCKER_ZONE, r: 2.2 },
+    { mode: "city",       zone: OFFICE_TERMINAL_ZONE, r: 2.2 },
+    { mode: "profit",     zone: OFFICE_PROFIT_ZONE, r: 2.4 },
+  ];
+  var officeNearMode = null;
+  function updateOfficeProps() {
+    var found = null;
+    if (state.site === "shop") {
+      for (var i = 0; i < OFFICE_PROPS.length; i++) {
+        var p = OFFICE_PROPS[i];
+        if (d2(player.pos.x, player.pos.z, p.zone.x, p.zone.z) <= p.r + PLAYER_RADIUS) {
+          found = p.mode;
+          break;
+        }
+      }
+    }
+    if (found && found !== officeNearMode) openOfficeSection(found);
+    if (!found && officeNearMode) closeOffice();
+    officeNearMode = found;
   }
 
   // ---- sound wiring ----
