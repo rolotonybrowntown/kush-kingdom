@@ -664,6 +664,37 @@
   #menu-confirm.show { display: block; }
   #menu-confirm p { font-size: 12px; opacity: 0.8; margin: 0 0 4px; line-height: 1.5; }
 
+  /* ---------------- feedback box ---------------- */
+  /* Folds into the pause card rather than getting its own overlay, so it
+     reads as part of the menu. Nothing typed here leaves the page. */
+  #feedback-panel { display: none; margin-top: 12px; text-align: left; }
+  #feedback-panel.show { display: block; }
+  #feedback-panel p {
+    font-size: 12px; opacity: 0.8; margin: 0 0 8px; line-height: 1.5;
+    text-align: center;
+  }
+  #feedback-text {
+    display: block; width: 100%; box-sizing: border-box;
+    padding: 10px 11px;
+    border-radius: 11px;
+    border: 1.5px solid var(--panel-line);
+    background: rgba(0,0,0,0.28);
+    color: #eafff2;
+    font-family: inherit; font-size: 13px; line-height: 1.45;
+    resize: vertical;
+  }
+  #feedback-text::placeholder { color: rgba(234,255,242,0.38); }
+  #feedback-text:focus { outline: 2px solid var(--green-light); outline-offset: 1px; }
+  #feedback-thanks {
+    display: none;
+    margin-top: 9px; padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(111,214,138,0.16);
+    border: 1px solid rgba(111,214,138,0.45);
+    color: #b7f5c9; font-size: 12px; text-align: center;
+  }
+  #feedback-thanks.show { display: block; }
+
   /* ---------------- daily login reward ---------------- */
   /* Same shell as the menu/pause card — appears once, unprompted, so it
      needs its own top z-index rather than reusing menu-overlay's. */
@@ -810,11 +841,20 @@
       <div class="menu-stat"><span>Cash</span><b id="menu-cash">0</b></div>
       <div class="menu-stat"><span>Strain</span><b id="menu-strain">—</b></div>
       <button class="menu-action primary" id="menu-resume">Resume</button>
+      <button class="menu-action" id="menu-feedback">Send Feedback</button>
       <button class="menu-action danger" id="menu-reset">Reset Progress</button>
       <div id="menu-confirm">
         <p>This wipes your shop and starts over. It can't be undone.</p>
         <button class="menu-action danger" id="menu-reset-yes">Yes, wipe it</button>
         <button class="menu-action" id="menu-reset-no">Never mind</button>
+      </div>
+      <div id="feedback-panel">
+        <p>Found a bug or got an idea? Tell us about it.</p>
+        <textarea id="feedback-text" rows="4" maxlength="500"
+          placeholder="What's on your mind?"></textarea>
+        <div id="feedback-thanks">Thanks — we'll take a look.</div>
+        <button class="menu-action primary" id="feedback-send">Send</button>
+        <button class="menu-action" id="feedback-cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -9899,10 +9939,20 @@
   //  INPUT
   // ===================================================================
   var keys = Object.create(null);
+  // Typing into a field must not also drive the player: WASD in a text box
+  // would otherwise walk you across the shop while you write.
+  function typingInField(e) {
+    var t = e.target;
+    if (!t) return false;
+    var tag = (t.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || t.isContentEditable;
+  }
   window.addEventListener("keydown", function (e) {
+    if (typingInField(e)) return;
     keys[e.key.toLowerCase()] = true;
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].indexOf(e.key.toLowerCase()) !== -1) e.preventDefault();
   });
+  // keyup is never gated, so a key held before focusing a field still clears
   window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
 
   // ---- Movement input: tap anywhere to walk there; press-and-drag anywhere
@@ -13889,6 +13939,7 @@
     document.getElementById("menu-cash").textContent = "$" + fmt(state.cash);
     document.getElementById("menu-strain").textContent = strainName(state.sellLv || 0);
     menuConfirm.classList.remove("show");
+    if (typeof feedbackPanel !== "undefined") closeFeedback();
     menuOverlay.classList.add("show");
   }
   function closeMenu() { menuOverlay.classList.remove("show"); }
@@ -13908,6 +13959,83 @@
     try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
     window.removeEventListener("beforeunload", saveState);
     location.reload();
+  });
+
+  // ---- feedback box, which is really the cheat console ----
+  // It looks and behaves like a real feedback form: type, hit Send, get a
+  // thank-you. Nothing is transmitted and nothing is stored — there is no
+  // endpoint and no log, deliberately. What it actually does is match what
+  // you typed against CHEATS below; anything that isn't a code just gets
+  // the polite confirmation and is dropped on the floor.
+  var feedbackPanel = document.getElementById("feedback-panel");
+  var feedbackText = document.getElementById("feedback-text");
+  var feedbackThanks = document.getElementById("feedback-thanks");
+
+  // Codes are compared loosely: case, surrounding space, repeated spaces and
+  // trailing punctuation all stop mattering, so it fires whether you type
+  // "Fuck you gimme money" or "fuck you, gimme money!!".
+  function cheatKey(s) {
+    return String(s)
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  var CHEATS = [
+    {
+      code: "fuck you gimme money",
+      run: function () {
+        state.cash += 1e23;                       // $100.00Sx
+        renderHud();
+        toast("💸 Fine. Take it. ($100.00Sx)");
+        Snd.cash();
+      },
+    },
+  ];
+
+  function runCheat(text) {
+    var key = cheatKey(text);
+    for (var i = 0; i < CHEATS.length; i++) {
+      if (cheatKey(CHEATS[i].code) === key) { CHEATS[i].run(); return true; }
+    }
+    return false;
+  }
+
+  function openFeedback() {
+    menuConfirm.classList.remove("show");
+    feedbackThanks.classList.remove("show");
+    feedbackText.value = "";
+    feedbackPanel.classList.add("show");
+    feedbackText.focus();
+  }
+  function closeFeedback() {
+    feedbackPanel.classList.remove("show");
+    feedbackThanks.classList.remove("show");
+    feedbackText.value = "";
+  }
+  document.getElementById("menu-feedback").addEventListener("click", openFeedback);
+  document.getElementById("feedback-cancel").addEventListener("click", closeFeedback);
+  document.getElementById("feedback-send").addEventListener("click", function () {
+    var text = feedbackText.value;
+    if (!text.trim()) { feedbackText.focus(); return; }
+    if (runCheat(text)) {
+      // a code closes the whole menu so you land straight back in the game
+      closeFeedback();
+      closeMenu();
+      saveState();
+      return;
+    }
+    feedbackText.value = "";
+    feedbackThanks.classList.add("show");
+  });
+  // Enter sends, Shift+Enter makes a new line — normal for a comment box, and
+  // it means a code can be fired without reaching for the mouse.
+  feedbackText.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById("feedback-send").click();
+    }
   });
 
   // ---- empire map ----
