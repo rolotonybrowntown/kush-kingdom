@@ -1216,7 +1216,7 @@
   // = -1364) leaves just under 100 units of slack. Re-measure this in-browser
   // if either room's camDist or footprint changes, same discipline as above.
   var PAPERS_CZ = -1400;
-  var PAPERS_HALF_X = 62, PAPERS_HALF_Z = 40;   // wide mill yard: forest left, trucks right
+  var PAPERS_HALF_X = 46, PAPERS_HALF_Z = 30;   // mill yard: forest left, trucks right
   var PAPERS_GROUND_TOP = FLOOR_TOP_BACK;
   var PAPERS_DEED_COST = 3e13;   // priciest deed yet — five locations deep
   function papersUnlocked() { return !!(state.papers && state.papers.unlocked); }
@@ -1225,11 +1225,20 @@
   // register/trucks. Each machine stage is its own fixed X column; buying
   // more machines in that stage adds new rows going down (+Z) rather than
   // spreading sideways, so the columns stay columns as the site grows. ----
-  var PAPERS_ROW_SPACING = 9.0;           // vertical gap between stacked machine rows
-  function stageRowZ(row) { return -PAPERS_ROW_SPACING + row * PAPERS_ROW_SPACING; }  // 3 rows: -9, 0, +9
+  var PAPERS_ROW_SPACING = 8.0;           // vertical gap between stacked machine rows
+  function stageRowZ(row) { return -PAPERS_ROW_SPACING + row * PAPERS_ROW_SPACING; }  // 3 rows: -8, 0, +8
+
+  // Three Z bands keep the yard readable no matter how many rows are bought:
+  // upgrades sit above their own column, machines occupy the middle, and the
+  // hire pads and the truck lane sit below, in that order. The lane has to
+  // clear the lowest machine row by enough that a truck never drives over a
+  // machine or a pad, which the first layout got wrong in both directions.
+  var PAPERS_UPGRADE_Z = PAPERS_CZ - 15;    // pad band, above every column
+  var PAPERS_HIRE_Z    = PAPERS_CZ + 14;    // crew pads, below the machines
+  var PAPERS_LANE_Z    = PAPERS_CZ + 22;    // truck lane, clear of everything
 
   // ---- trees: a big forest on the far left, chop for wood, they regrow ----
-  var PAPERS_FOREST_COL_X = -PAPERS_HALF_X + 16;
+  var PAPERS_FOREST_COL_X = -PAPERS_HALF_X + 12;
   var PAPERS_TREE_COLS = 3, PAPERS_TREE_ROWS = 5;
   var PAPERS_TREE_SPACING_X = 7.0, PAPERS_TREE_SPACING_Z = 7.5;
   var PAPERS_TREE_SIZE = 2.4;
@@ -1249,7 +1258,7 @@
   var PAPERS_TREE_REGROW = 16;   // seconds for a stump to grow back
 
   // ---- saw: wood -> cut wood, first machine stage after the forest ----
-  var PAPERS_SAW_COL_X = -PAPERS_HALF_X + 34;
+  var PAPERS_SAW_COL_X = -PAPERS_HALF_X + 30;
   var SAW_SIZE = 3.2;
   var sawDefs = [];
   (function () {
@@ -1274,7 +1283,7 @@
   function sawLvCost(lv) { return scaled(10000 * Math.pow(2.6, lv)); }
 
   // ---- planer: cut wood -> lumber, same shape as the rosin press ----
-  var PAPERS_PLANER_COL_X = -PAPERS_HALF_X + 52;
+  var PAPERS_PLANER_COL_X = -PAPERS_HALF_X + 44;
   var PLANER_SIZE = 3.4;
   var planerDefs = [];
   (function () {
@@ -1302,7 +1311,7 @@
   function papersHopperCost(lv) { return scaled(6000 * Math.pow(2.5, lv)); }
 
   // ---- cutter/packager: lumber -> rolling papers, same shape as the oven ----
-  var PAPERS_CUTTER_COL_X = -PAPERS_HALF_X + 70;
+  var PAPERS_CUTTER_COL_X = -PAPERS_HALF_X + 58;
   var CUTTER_SIZE = 3.4;
   var cutterDefs = [];
   (function () {
@@ -1342,9 +1351,9 @@
   var MAX_WOODCUTTERS = 4, MAX_MILLHANDS = 3;
   function costWoodcutter() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.woodcutterLv) || 0)); }
   function costMillhand() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.millhandLv) || 0)); }
-  var PAPERS_HR_ZONE = { x: PAPERS_HALF_X - 8, z: PAPERS_CZ - PAPERS_HALF_Z + 8 };
-  var WOODCUTTER_ZONE = { x: PAPERS_FOREST_COL_X, z: PAPERS_CZ + PAPERS_HALF_Z - 6 };
-  var MILLHAND_ZONE = { x: PAPERS_PLANER_COL_X, z: PAPERS_CZ + PAPERS_HALF_Z - 6 };
+  var PAPERS_HR_ZONE = { x: PAPERS_HALF_X - 10, z: PAPERS_LANE_Z + 7 };
+  var WOODCUTTER_ZONE = { x: PAPERS_FOREST_COL_X, z: PAPERS_HIRE_Z };
+  var MILLHAND_ZONE = { x: PAPERS_PLANER_COL_X, z: PAPERS_HIRE_Z };
 
   // ===================================================================
   //  EXECUTIVE OFFICE — a HUD button from anywhere, and a physical annex
@@ -1383,7 +1392,12 @@
   var MAX_OFFICE_TIER = OFFICE_TIERS.length - 1;
   function officeTier()    { return state.officeTier || 0; }
   function officeTierDef() { return OFFICE_TIERS[officeTier()]; }
-  var OFFICE_TIER_PAD = { x: OFFICE_ANNEX_CX, z: RETAIL_MAX_Z - 1.0 };
+  // Just inside the threshold, mid-wall. It used to sit at RETAIL_MAX_Z - 1,
+  // which is past bounds() maxZ (RETAIL_MAX_Z - 1.4) and inside the terminal's
+  // popup radius, so walking at it opened the city menu over the top of the
+  // pad and there was barely any standable square left to reach. Here it is
+  // the first thing you meet on the way in and clear of all four props.
+  var OFFICE_TIER_PAD = { x: -HALF_X - 2.5, z: OFFICE_ANNEX_CZ };
   function accountantHired() { return !!state.accountantHired; }
 
   var PROFIT_TIER_MULT = [1, 1.10, 1.30, 1.50];
@@ -1536,8 +1550,10 @@
         return planerOwned() + "/" + MAX_PLANERS + " planers · " +
                cutterOwned() + "/" + MAX_CUTTERS + " cutters";
       },
-      spawn: { x: 0, z: PAPERS_CZ + PAPERS_HALF_Z - 8 },
-      camDist: function () { return 60; },
+      spawn: { x: 0, z: PAPERS_CZ + 4 },
+      // pulled in with the yard: at 60 over a narrower site everything read
+      // as distant specks, which was half of "this level looks bad"
+      camDist: function () { return 50; },
       groundOf: function () { return papersGround; },
       unlocked: papersUnlocked,
       bounds: function () {
@@ -1638,14 +1654,81 @@
     { kind: "crew", icon: "🏃", name: "Rally the Crew",
       blurb: "+50% walking speed for every hired hand, at every location" },
   ];
+  // A crate only stands around for this long before it gives up and goes back
+  // on cooldown. Without a window a ready crate sat on the same square
+  // indefinitely, which reads as "there is always a mystery box" rather than
+  // "an offer just turned up" — the cooldown was never the problem.
+  var MYSTERY_WINDOW_MS = 300 * 1000;
   // It follows you: the crate is drawn at whichever site you are standing in,
-  // so an offer is never stranded three locations away.
+  // so an offer is never stranded three locations away. Several candidates per
+  // site, picked fresh each window, so it stops being furniture at one spot.
   var MYSTERY_SPOTS = {
-    shop:   { x: 8.0,  z: 6.0 },
-    farm:   { x: 8.0,  z: FARM_CZ + 20.0 },
-    lounge: { x: -5.0, z: LOUNGE_CZ + 17.0 },
+    shop: [
+      { x: 6.0, z: 8.0 }, { x: -6.0, z: 8.0 }, { x: 10.0, z: 0.0 },
+      { x: 6.0, z: -7.0 }, { x: -9.0, z: -7.0 },
+    ],
+    farm: [
+      { x: 20.0, z: FARM_CZ + 22.0 }, { x: -24.0, z: FARM_CZ + 22.0 },
+      { x: 30.0, z: FARM_CZ - 6.0 },  { x: -32.0, z: FARM_CZ + 6.0 },
+      { x: 0.0,  z: FARM_CZ + 30.0 },
+    ],
+    lounge: [
+      { x: -5.0, z: LOUNGE_CZ + 17.0 }, { x: 5.0, z: LOUNGE_CZ + 18.0 },
+      { x: -14.0, z: LOUNGE_CZ + 6.0 }, { x: -14.0, z: LOUNGE_CZ - 10.0 },
+    ],
+    factory: [
+      { x: -26.0, z: FACTORY_CZ + 18.0 }, { x: 26.0, z: FACTORY_CZ + 18.0 },
+      { x: -26.0, z: FACTORY_CZ - 16.0 }, { x: 26.0, z: FACTORY_CZ - 16.0 },
+    ],
+    papers: [
+      { x: -50.0, z: PAPERS_CZ - 28.0 }, { x: 0.0, z: PAPERS_CZ - 30.0 },
+      { x: 40.0,  z: PAPERS_CZ - 24.0 }, { x: -50.0, z: PAPERS_CZ + 30.0 },
+      { x: 20.0,  z: PAPERS_CZ + 32.0 },
+    ],
   };
-  function mysterySpot() { return MYSTERY_SPOTS[state.site] || MYSTERY_SPOTS.shop; }
+  // Anything you stand on to spend money is off limits — a crate parked on the
+  // silo pad hides the pad and steals its proximity prompt. stationDefs is read
+  // at call time because it is built much further down the file.
+  var MYSTERY_CLEARANCE = 4.0;
+  function mysterySpotBlocked(site, p) {
+    if (typeof stationDefs !== "undefined") {
+      for (var i = 0; i < stationDefs.length; i++) {
+        var st = stationDefs[i];
+        if ((st.site || "shop") !== site) continue;
+        if (d2(p.x, p.z, st.x, st.z) < MYSTERY_CLEARANCE) return true;
+      }
+    }
+    var tills = MYSTERY_TILLS[site];
+    for (var t = 0; tills && t < tills.length; t++) {
+      if (d2(p.x, p.z, tills[t].x, tills[t].z) < MYSTERY_CLEARANCE) return true;
+    }
+    return false;
+  }
+  // Cash trays and delivery squares are not stations, so they need naming.
+  // Filled in below once those constants exist.
+  var MYSTERY_TILLS = {};
+  function pickMysterySpot(site) {
+    var list = MYSTERY_SPOTS[site] || MYSTERY_SPOTS.shop;
+    var open = [];
+    for (var i = 0; i < list.length; i++) {
+      if (!mysterySpotBlocked(site, list[i])) open.push(i);
+    }
+    if (!open.length) return 0;              // everything crowded — first spot wins
+    return open[Math.floor(Math.random() * open.length)];
+  }
+  // The chosen index is shared across sites (the crate follows you), and the
+  // lists differ in length and in what they collide with, so re-check on
+  // arrival and step forward to the next clear spot rather than trusting an
+  // index that was only ever vetted against the site it was picked at.
+  function mysterySpot() {
+    var list = MYSTERY_SPOTS[state.site] || MYSTERY_SPOTS.shop;
+    var start = ((state.mystery && state.mystery.spot) || 0) % list.length;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[(start + i) % list.length];
+      if (!mysterySpotBlocked(state.site, p)) return p;
+    }
+    return list[start];
+  }
   // Priced off what a bud fetches, the same trick costPromo() uses, so the
   // crate stays a real decision at every stage instead of going trivial once
   // strain levels scale up.
@@ -2109,7 +2192,7 @@
       barnClaimed: false,     // the barn pays out once
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
-      mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0 },
+      mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0, spot: 0, expiresAt: 0 },
       // ---- executive office ----
       accountantHired: false,
       officeTier: 0,
@@ -2496,6 +2579,11 @@
       // A clock that jumped forward (timezone change, a save edited by hand)
       // must not push the next crate hours out — cap the wait at one cooldown.
       my.nextAt = Math.min(my.nextAt, Date.now() + MYSTERY_COOLDOWN_MS);
+      if (typeof my.spot !== "number" || !isFinite(my.spot) || my.spot < 0) my.spot = 0;
+      // Saves from before the window existed have no expiry; treat them as a
+      // closed window so the next tick opens a fresh one at a fresh spot.
+      if (typeof my.expiresAt !== "number" || !isFinite(my.expiresAt)) my.expiresAt = 0;
+      my.expiresAt = Math.min(my.expiresAt, Date.now() + MYSTERY_WINDOW_MS);
       if (!merged.stationPaid || typeof merged.stationPaid !== "object") merged.stationPaid = {};
       if (typeof merged.roomTier !== "number" || merged.roomTier < 0 || merged.roomTier > MAX_ROOM_TIER) {
         merged.roomTier = 0;
@@ -2577,7 +2665,33 @@
   // that has to change if the perk is ever retuned.
   function perkProdMult() { return (perkActive("prod") ? 1.25 : 1) * hatProdMult(); }
   // A crate is on the ground when the cooldown is up and nobody has opened it.
-  function mysteryReady() { return Date.now() >= ((state.mystery && state.mystery.nextAt) || 0); }
+  // Live only inside its window: past nextAt, before expiresAt.
+  function mysteryReady() {
+    var m = state.mystery;
+    if (!m) return false;
+    var now = Date.now();
+    return now >= (m.nextAt || 0) && now < (m.expiresAt || 0);
+  }
+  // Opens and closes the window. A crate that times out unclaimed goes back on
+  // cooldown rather than lingering, and the next one picks a fresh spot.
+  function tickMysteryWindow() {
+    var m = state.mystery;
+    if (!m) return;
+    var now = Date.now();
+    if (now < (m.nextAt || 0)) return;        // still on cooldown
+    if (now < (m.expiresAt || 0)) return;     // window open and running
+    if (m.expiresAt) {                        // window just closed unclaimed
+      m.nextAt = now + MYSTERY_COOLDOWN_MS;
+      m.expiresAt = 0;
+      m.cost = 0;
+      saveState();
+      return;
+    }
+    m.spot = pickMysterySpot(state.site);
+    m.expiresAt = now + MYSTERY_WINDOW_MS;
+    m.cost = 0;
+    saveState();
+  }
 
   function rowOf(idx) { return Math.floor(idx / PLOT_COLS); }
   function lightLvOf(idx) { return (state.rowLight && state.rowLight[rowOf(idx)]) || 0; }
@@ -3009,6 +3123,61 @@
     return finishTex(c, 1.6, 1.6, true);
   }
 
+  // Actual grass. The mill yard used to borrow soilTex and just tint it green,
+  // which is why it read as digital noise rather than ground: soil is round
+  // crumbs, grass is directional blades. Built the same way — broad tonal
+  // patches first, then thousands of short strokes that all lean roughly the
+  // same way, with a few darker clumps so it does not tile flat.
+  function makeGrassTexture() {
+    var S = 512;
+    var c = document.createElement("canvas");
+    c.width = c.height = S;
+    var g = c.getContext("2d");
+    g.fillStyle = "#ffffff"; g.fillRect(0, 0, S, S);
+
+    // broad patches of lighter and darker turf
+    for (var i = 0; i < 46; i++) {
+      var v = 150 + Math.random() * 80;
+      g.fillStyle = "rgba(" + (v - 40) + "," + v + "," + (v - 70) + "," + (0.12 + Math.random() * 0.16) + ")";
+      g.beginPath();
+      g.arc(Math.random() * S, Math.random() * S, 18 + Math.random() * 52, 0, 6.283);
+      g.fill();
+    }
+
+    // the blades themselves: short strokes with a shared prevailing lean, so
+    // the surface has a grain direction instead of looking like static
+    var lean = -0.42;
+    for (var b = 0; b < 5200; b++) {
+      var x = Math.random() * S, y = Math.random() * S;
+      var len = 4 + Math.random() * 9;
+      var ang = lean + (Math.random() - 0.5) * 0.9;
+      var sh = 110 + Math.random() * 105;
+      g.strokeStyle = "rgba(" + Math.round(sh * 0.42) + "," + Math.round(sh) + "," +
+                      Math.round(sh * 0.34) + "," + (0.34 + Math.random() * 0.4) + ")";
+      g.lineWidth = 0.7 + Math.random() * 1.1;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.sin(ang) * len, y - Math.cos(ang) * len);
+      g.stroke();
+    }
+
+    // a scattering of darker tufts to break up the repeat
+    for (var t = 0; t < 150; t++) {
+      var tx = Math.random() * S, ty = Math.random() * S;
+      for (var n = 0; n < 7; n++) {
+        var tl = 5 + Math.random() * 7;
+        var ta = lean + (Math.random() - 0.5) * 1.3;
+        g.strokeStyle = "rgba(28,74,32," + (0.3 + Math.random() * 0.32) + ")";
+        g.lineWidth = 0.9 + Math.random();
+        g.beginPath();
+        g.moveTo(tx + (Math.random() - 0.5) * 6, ty + (Math.random() - 0.5) * 6);
+        g.lineTo(tx + Math.sin(ta) * tl, ty - Math.cos(ta) * tl);
+        g.stroke();
+      }
+    }
+    return finishTex(c, 9, 9, true);
+  }
+
   // woven fabric for upholstery
   function makeFabricTexture() {
     var S = 128;
@@ -3059,6 +3228,7 @@
   var plasterTex = makePlasterTexture();
   var woodTex = makeWoodTexture();
   var soilTex = makeSoilTexture();
+  var grassTex = makeGrassTexture();
   var cashTopTex = makeCashTopTexture();
   var fabricTex = makeFabricTexture();
   var glowTex = makeGlowTexture();
@@ -3108,8 +3278,8 @@
     kitchenFloor: mat(0x8d7259, { map: walnutTex, roughness: 0.42 }),  // pale
     dockFloor:   mat(0x8d9299, { map: plasterTex, roughness: 0.85 }),  // sealed concrete
     // ---- the farm ----
-    grass:       matFlat(0x5f9e4a, { map: soilTex, roughness: 0.95 }),
-    grassDk:     matFlat(0x4b8039, { map: soilTex, roughness: 0.95 }),
+    grass:       matFlat(0x6faa52, { map: grassTex, roughness: 0.95 }),
+    grassDk:     matFlat(0x5a9440, { map: grassTex, roughness: 0.95 }),
     tilled:      matFlat(0x6d4a2c, { map: soilTex, roughness: 1 }),
     furrow:      matFlat(0x54371f, { map: soilTex, roughness: 1 }),
     track:       matFlat(0xa8916d, { map: soilTex, roughness: 1 }),
@@ -5361,12 +5531,20 @@
   // The truck lane sits south of every machine row (rows run at PAPERS_CZ
   // + {-9, 0, +9}), clear of all three, so trucks never drive through a
   // saw/planer/cutter slot on their way to the register.
-  var PAPERS_REGISTER_X = PAPERS_HALF_X - 16, PAPERS_REGISTER_Z = PAPERS_CZ + 22;
+  var PAPERS_REGISTER_X = PAPERS_HALF_X - 18, PAPERS_REGISTER_Z = PAPERS_LANE_Z;
   var PAPERS_DROP_ZONE = { x: PAPERS_REGISTER_X - 4, z: PAPERS_REGISTER_Z, half: 1.6 };
   var PAPERS_TILL_PAD = { x: PAPERS_REGISTER_X + 4, z: PAPERS_REGISTER_Z, half: 1.6 };
   var PAPERS_TRUCK_Z = PAPERS_REGISTER_Z;
-  var PAPERS_TRUCK_PARK_X = PAPERS_REGISTER_X + 8;
+  var PAPERS_TRUCK_PARK_X = PAPERS_REGISTER_X + 12;
   var PAPERS_TRUCK_START_X = PAPERS_HALF_X + 18;
+
+  // Non-station squares the mystery crate must keep off (see mysterySpotBlocked).
+  // Declared here rather than up with MYSTERY_SPOTS because these are the last
+  // of the pad constants to come into existence.
+  MYSTERY_TILLS.shop = [CASH_PAD, INTAKE_SPOT];
+  MYSTERY_TILLS.farm = [FARM_COURIER];
+  MYSTERY_TILLS.factory = [FACTORY_CASH_PAD];
+  MYSTERY_TILLS.papers = [PAPERS_TILL_PAD, PAPERS_DROP_ZONE];
 
   var papersGroup = new THREE.Group();
   scene.add(papersGroup);
@@ -5380,6 +5558,34 @@
   var cutterPads = [];
   var papersStockPile = null;
 
+  // Every mill machine is the same long chassis: a belt in, a working head,
+  // a belt out. Only the head and the materials change per stage.
+  var MILL_LEN = 7.6;          // full length of the unit along X
+  var MILL_W = 2.6;            // belt width along Z
+  var MILL_HEAD_HALF = 1.5;    // half-length of the housing in the middle
+  var MILL_BELT_Y = 0.92;
+  var MILL_BELT_SPEED = 1.9;   // slat travel per second while running
+  // Rolling Papers items — geometry pre-rotated so it reads correctly no
+  // matter how the stack mesh spins each frame (syncStack drives rotation.y).
+  // Sized against budGeo (a 0.34-radius cone) rather than to real-world
+  // scale: at the mill's camera distance the first pass read as specks on
+  // your back, so a log is now comfortably chunkier than a bud.
+  var woodGeo = new THREE.CylinderGeometry(0.28, 0.31, 0.95, 8);       // a cut log, lying down
+  woodGeo.rotateZ(Math.PI / 2);
+  var cutwoodGeo = new THREE.CylinderGeometry(0.24, 0.26, 0.74, 8);    // a sawn section, lying down
+  cutwoodGeo.rotateZ(Math.PI / 2);
+  var lumberGeo = new THREE.BoxGeometry(0.98, 0.17, 0.38);             // a planed plank
+  var papersGeo = new THREE.BoxGeometry(0.5, 0.36, 0.14);              // a packaged pad of papers
+
+  var MILL_CUTTER_REST_Y = 2.35;
+  // Orientation baked in so each head's own rotation.z is a clean spin.
+  var millBladeGeo = new THREE.CylinderGeometry(1.05, 1.05, 0.08, 24);
+  millBladeGeo.rotateX(Math.PI / 2);
+  var millHubGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.14, 12);
+  millHubGeo.rotateX(Math.PI / 2);
+  var millDrumGeo = new THREE.CylinderGeometry(0.62, 0.62, MILL_W + 0.2, 14);
+  millDrumGeo.rotateX(Math.PI / 2);
+
   // A small stack of blocks that grows/shrinks with a live count — the same
   // idea as makeTill's cash-brick pile, generalized so any machine's hopper
   // can read as a physical pile instead of just a status bar. Blocks are
@@ -5387,7 +5593,13 @@
   // whenever the machine's own group visibility toggles.
   function makeResourcePile(parentGroup, offsetX, offsetZ, geo, mat, maxBlocks, cols, rows, baseY) {
     cols = cols || 2; rows = rows || 2; baseY = baseY || 0;
-    var blockH = 0.22, spacing = 0.32;
+    // Spacing comes off the geometry rather than a fixed constant, so a pile of
+    // logs and a pile of paper packs each stack at their own size instead of
+    // one of them interpenetrating and the other floating apart.
+    geo.computeBoundingBox();
+    var bb = geo.boundingBox;
+    var sx = bb.max.x - bb.min.x, sy = bb.max.y - bb.min.y, sz = bb.max.z - bb.min.z;
+    var stepX = sx * 1.1, stepZ = sz * 1.15, blockH = sy * 0.94;
     var blocks = [];
     function spot(i) {
       var perLayer = cols * rows;
@@ -5395,8 +5607,8 @@
       var within = i % perLayer;
       var col = within % cols, row = Math.floor(within / cols);
       return {
-        x: offsetX - (cols - 1) * spacing / 2 + col * spacing,
-        z: offsetZ - (rows - 1) * spacing / 2 + row * spacing,
+        x: offsetX - (cols - 1) * stepX / 2 + col * stepX,
+        z: offsetZ - (rows - 1) * stepZ / 2 + row * stepZ,
         y: baseY + blockH / 2 + layer * blockH,
       };
     }
@@ -5420,14 +5632,13 @@
     }
     return { setCount: setCount };
   }
-  var pileBlockGeo = new THREE.BoxGeometry(0.34, 0.22, 0.34);
 
   (function buildPapersSite() {
     var g = papersGroup;
     var y = PAPERS_GROUND_TOP;
 
     papersGround = new THREE.Mesh(
-      new THREE.BoxGeometry(PAPERS_HALF_X * 2 + 10, 0.3, PAPERS_HALF_Z * 2 + 10), M.grassDk);
+      new THREE.BoxGeometry(PAPERS_HALF_X * 2 + 60, 0.3, PAPERS_HALF_Z * 2 + 60), M.grassDk);
     papersGround.position.set(0, y - 0.15, PAPERS_CZ);
     papersGround.receiveShadow = true;
     g.add(papersGround);
@@ -5467,28 +5678,125 @@
     }
     for (var ti = 0; ti < papersTreeDefs.length; ti++) papersTreeObjects.push(buildTree(papersTreeDefs[ti]));
 
+    // ---- one shared mill machine: a long unit that reads left to right,
+    // infeed belt -> working head -> outfeed belt, with the input pile sitting
+    // where you actually drop material and the output pile where it comes out.
+    // The three stages differ by their head and their materials, so a saw no
+    // longer looks like the rosin press with a different tint. ----
+    function buildMillBelt(parent, x0, x1) {
+      var len = x1 - x0, cx = (x0 + x1) / 2;
+      var bed = new THREE.Mesh(new THREE.BoxGeometry(len, 0.18, MILL_W), M.belt);
+      bed.position.set(cx, MILL_BELT_Y, 0);
+      bed.castShadow = true; bed.receiveShadow = true;
+      parent.add(bed);
+      [-1, 1].forEach(function (s) {
+        var rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.16), M.beltFrame);
+        rail.position.set(cx, MILL_BELT_Y + 0.14, s * (MILL_W / 2 + 0.02));
+        parent.add(rail);
+      });
+      [-1, 1].forEach(function (s) {
+        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, MILL_BELT_Y, 0.22), M.beltFrame);
+        leg.position.set(cx + s * (len / 2 - 0.4), MILL_BELT_Y / 2, MILL_W / 2 - 0.3);
+        parent.add(leg);
+        var leg2 = leg.clone();
+        leg2.position.z = -(MILL_W / 2 - 0.3);
+        parent.add(leg2);
+      });
+      var slats = [];
+      var n = Math.max(4, Math.round(len / 0.5));
+      for (var i = 0; i < n; i++) {
+        var sl = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.09, MILL_W - 0.34), M.beltFrame);
+        sl.position.set(x0 + (i + 0.5) * (len / n), MILL_BELT_Y + 0.13, 0);
+        parent.add(sl);
+        slats.push(sl);
+      }
+      return { slats: slats, x0: x0, x1: x1 };
+    }
+
+    function buildMillMachine(d, o) {
+      var mg = new THREE.Group();
+      var hx = MILL_HEAD_HALF;
+
+      var beltIn = buildMillBelt(mg, -MILL_LEN / 2, -hx);
+      var beltOut = buildMillBelt(mg, hx, MILL_LEN / 2);
+
+      // the working housing, straddling the middle of the line
+      var body = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, 2.3, MILL_W + 0.5), o.bodyMat);
+      body.position.y = 1.15; body.castShadow = true; body.receiveShadow = true;
+      mg.add(body);
+      var cap = new THREE.Mesh(new THREE.BoxGeometry(hx * 2 + 0.4, 0.24, MILL_W + 0.9), o.capMat);
+      cap.position.y = 2.42; cap.castShadow = true;
+      mg.add(cap);
+      // a mouth on each side so material visibly enters and leaves the housing
+      [-1, 1].forEach(function (s) {
+        var mouth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, MILL_W - 0.4), M.dark);
+        mouth.position.set(s * (hx + 0.02), MILL_BELT_Y + 0.42, 0);
+        mg.add(mouth);
+      });
+
+      // ---- the head: what actually makes this machine that machine ----
+      // Saw and planer heads spin about their own axis, so the rotation that
+      // orients them is baked into the geometry (same trick as woodGeo) and
+      // head.rotation.z is left free as a pure spin.
+      var head = null, headKind = o.head;
+      if (o.head === "saw") {
+        // a big rip blade standing proud of the housing, cutting across the line
+        head = new THREE.Mesh(millBladeGeo, M.steel);
+        head.position.set(0, 2.5, 0);
+        head.castShadow = true;
+        mg.add(head);
+        var hub = new THREE.Mesh(millHubGeo, M.machine);
+        hub.position.set(0, 2.5, 0);
+        mg.add(hub);
+      } else if (o.head === "planer") {
+        // a drum across the belt, chewing the width of the board
+        head = new THREE.Mesh(millDrumGeo, M.machine);
+        head.position.set(0, 2.62, 0);
+        head.castShadow = true;
+        mg.add(head);
+        [-1, 1].forEach(function (s) {
+          var post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.0, 0.22), M.beltFrame);
+          post.position.set(s * 0.9, 2.1, 0);
+          mg.add(post);
+        });
+      } else {
+        // cutter: a guillotine head on posts that stamps down on each pack
+        head = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.34, MILL_W - 0.2), M.pressPlate);
+        head.position.set(0, 2.35, 0);
+        head.castShadow = true;
+        mg.add(head);
+        [-1, 1].forEach(function (s) {
+          var post2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 0.2), M.beltFrame);
+          post2.position.set(s * 1.0, 2.35, 0);
+          mg.add(post2);
+        });
+      }
+
+      var glow = addGlow(mg, 0, 1.6, 0, 2.0, 0xffe066, 0);
+      var barIn = makeStatusBar(1.7, o.barInColor); barIn.position.set(-MILL_LEN / 4, 3.2, 0); mg.add(barIn); statusBars.push(barIn);
+      var barOut = makeStatusBar(1.7, o.barOutColor); barOut.position.set(MILL_LEN / 4, 3.2, 0); mg.add(barOut); statusBars.push(barOut);
+
+      // Piles sit on the ground at each end of the line, which is also exactly
+      // where you walk up to drop material in and take product out.
+      var pileIn = makeResourcePile(mg, -(MILL_LEN / 2 + 1.3), 0, o.inGeo, o.inMat, o.pileMax, 2, 2);
+      var pileOut = makeResourcePile(mg, MILL_LEN / 2 + 1.3, 0, o.outGeo, o.outMat, o.pileMax, 2, 2);
+
+      mg.position.set(d.x, y, d.z);
+      mg.visible = false;
+      g.add(mg);
+      return {
+        group: mg, head: head, headKind: headKind, glow: glow,
+        beltIn: beltIn, beltOut: beltOut, beltPhase: 0,
+        barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut,
+      };
+    }
+
     function buildSaw(d) {
-      var sg = new THREE.Group();
-      var shed = new THREE.Mesh(new THREE.BoxGeometry(SAW_SIZE, 1.9, SAW_SIZE), M.woodDark);
-      shed.position.y = 0.95; shed.castShadow = true; shed.receiveShadow = true;
-      sg.add(shed);
-      var roof = new THREE.Mesh(new THREE.BoxGeometry(SAW_SIZE + 0.5, 0.22, SAW_SIZE + 0.5), M.barnRoof);
-      roof.position.y = 2.02; roof.castShadow = true;
-      sg.add(roof);
-      var blade = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.48, 0.06, 20), M.metal);
-      blade.rotation.z = Math.PI / 2;
-      blade.position.set(0, 1.1, 0);
-      blade.castShadow = true;
-      sg.add(blade);
-      var glow = addGlow(sg, 0, 1.1, 0, 1.4, 0xffe066, 0);
-      var barIn = makeStatusBar(1.8, 0xa8f57a); barIn.position.set(0, 2.75, 0); sg.add(barIn); statusBars.push(barIn);
-      var barOut = makeStatusBar(1.8, 0xc9a875); barOut.position.set(0, 2.4, 0); sg.add(barOut); statusBars.push(barOut);
-      var pileIn = makeResourcePile(sg, -(SAW_SIZE / 2 + 1.0), 0, pileBlockGeo, M.woodDark, 16);
-      var pileOut = makeResourcePile(sg, SAW_SIZE / 2 + 1.0, 0, pileBlockGeo, M.wood, 16);
-      sg.position.set(d.x, y, d.z);
-      sg.visible = false;
-      g.add(sg);
-      return { group: sg, blade: blade, glow: glow, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
+      return buildMillMachine(d, {
+        head: "saw", bodyMat: M.woodDark, capMat: M.barnRoof,
+        inGeo: woodGeo, inMat: M.woodDark, outGeo: cutwoodGeo, outMat: M.wood,
+        barInColor: 0xa8f57a, barOutColor: 0xc9a875, pileMax: 16,
+      });
     }
     for (var swi = 0; swi < sawDefs.length; swi++) sawObjects.push(buildSaw(sawDefs[swi]));
 
@@ -5504,27 +5812,11 @@
     for (var swpi = 0; swpi < MAX_SAWS; swpi++) sawPads.push(makeSawPad(swpi));
 
     function buildPlaner(d) {
-      var pg = new THREE.Group();
-      var shed = new THREE.Mesh(new THREE.BoxGeometry(PLANER_SIZE, 2.0, PLANER_SIZE), M.plank);
-      shed.position.y = 1.0; shed.castShadow = true; shed.receiveShadow = true;
-      pg.add(shed);
-      var roof = new THREE.Mesh(new THREE.BoxGeometry(PLANER_SIZE + 0.5, 0.25, PLANER_SIZE + 0.5), M.woodDark);
-      roof.position.y = 2.12; roof.castShadow = true;
-      pg.add(roof);
-      var roller = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, PLANER_SIZE - 0.6, 10), M.pressBody);
-      roller.rotation.z = Math.PI / 2;
-      roller.position.y = 1.1;
-      roller.castShadow = true;
-      pg.add(roller);
-      var glow = addGlow(pg, 0, 1.1, 0, 1.6, 0xffe066, 0);
-      var barIn = makeStatusBar(1.8, 0x9ad06a); barIn.position.set(0, 2.9, 0); pg.add(barIn); statusBars.push(barIn);
-      var barOut = makeStatusBar(1.8, 0xd7a869); barOut.position.set(0, 2.55, 0); pg.add(barOut); statusBars.push(barOut);
-      var pileIn = makeResourcePile(pg, -(PLANER_SIZE / 2 + 1.0), 0, pileBlockGeo, M.wood, 16);
-      var pileOut = makeResourcePile(pg, PLANER_SIZE / 2 + 1.0, 0, pileBlockGeo, M.plank, 16);
-      pg.position.set(d.x, y, d.z);
-      pg.visible = false;
-      g.add(pg);
-      return { group: pg, roller: roller, glow: glow, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
+      return buildMillMachine(d, {
+        head: "planer", bodyMat: M.plank, capMat: M.woodDark,
+        inGeo: cutwoodGeo, inMat: M.wood, outGeo: lumberGeo, outMat: M.plank,
+        barInColor: 0x9ad06a, barOutColor: 0xd7a869, pileMax: 16,
+      });
     }
     for (var pli = 0; pli < planerDefs.length; pli++) planerObjects.push(buildPlaner(planerDefs[pli]));
 
@@ -5540,24 +5832,11 @@
     for (var ppi2 = 0; ppi2 < MAX_PLANERS; ppi2++) planerPads.push(makePlanerPad(ppi2));
 
     function buildCutter(d) {
-      var cg = new THREE.Group();
-      var shed = new THREE.Mesh(new THREE.BoxGeometry(CUTTER_SIZE, 2.1, CUTTER_SIZE), M.metal);
-      shed.position.y = 1.05; shed.castShadow = true; shed.receiveShadow = true;
-      cg.add(shed);
-      var roof = new THREE.Mesh(new THREE.BoxGeometry(CUTTER_SIZE + 0.5, 0.2, CUTTER_SIZE + 0.5), M.barnRoof);
-      roof.position.y = 2.2; roof.castShadow = true;
-      cg.add(roof);
-      var blade = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.08, 16), M.pressPlate);
-      blade.position.y = 1.5; blade.castShadow = true;
-      cg.add(blade);
-      var barIn = makeStatusBar(1.8, 0xd7a869); barIn.position.set(0, 3.0, 0); cg.add(barIn); statusBars.push(barIn);
-      var barOut = makeStatusBar(1.8, 0xe8dcc0); barOut.position.set(0, 2.65, 0); cg.add(barOut); statusBars.push(barOut);
-      var pileIn = makeResourcePile(cg, -(CUTTER_SIZE / 2 + 1.0), 0, pileBlockGeo, M.plank, 16);
-      var pileOut = makeResourcePile(cg, CUTTER_SIZE / 2 + 1.0, 0, pileBlockGeo, M.preroll, 16);
-      cg.position.set(d.x, y, d.z);
-      cg.visible = false;
-      g.add(cg);
-      return { group: cg, blade: blade, barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut };
+      return buildMillMachine(d, {
+        head: "cutter", bodyMat: M.machine, capMat: M.steelDk,
+        inGeo: lumberGeo, inMat: M.plank, outGeo: papersGeo, outMat: M.preroll,
+        barInColor: 0xd7a869, barOutColor: 0xe8dcc0, pileMax: 16,
+      });
     }
     for (var cli = 0; cli < cutterDefs.length; cli++) cutterObjects.push(buildCutter(cutterDefs[cli]));
 
@@ -5582,7 +5861,7 @@
     // the "about to become cash" pile — the stock waiting on the stand top
     // for the next truck, the clearest read of "the mill is working"
     papersStockPile = makeResourcePile(g, PAPERS_TILL_PAD.x, PAPERS_TILL_PAD.z - 2.4,
-      pileBlockGeo, M.preroll, 40, 3, 3, y + 1.42);
+      papersGeo, M.preroll, 45, 3, 3, y + 1.42);
     var signPost = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), M.woodDark);
     signPost.position.set(PAPERS_TILL_PAD.x, y + 2.0, PAPERS_TILL_PAD.z - 2.9);
     g.add(signPost);
@@ -5591,10 +5870,37 @@
     signLbl.position.set(PAPERS_TILL_PAD.x, y + 2.8, PAPERS_TILL_PAD.z - 2.9);
     g.add(signLbl);
 
-    var dropSign = textSprite("DROP HERE", "#a8f57a");
-    dropSign.scale.set(2.2, 0.5, 1);
-    dropSign.position.set(PAPERS_DROP_ZONE.x, y + 2.2, PAPERS_DROP_ZONE.z);
-    g.add(dropSign);
+    // The drop-off used to be a floating label over bare grass, so there was
+    // nothing to aim at. Give it the same marked square language every other
+    // "stand here" spot in the game uses — halo, tint, dashed edge.
+    (function buildPapersDropPad() {
+      var dg = new THREE.Group();
+      var h = PAPERS_DROP_ZONE.half;
+      var halo = new THREE.Mesh(
+        new THREE.PlaneGeometry(h * 3.6, h * 3.6),
+        new THREE.MeshBasicMaterial({
+          map: glowTex, color: 0x8ef0a4, transparent: true,
+          opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      halo.rotation.x = -Math.PI / 2; halo.position.y = y + 0.005; dg.add(halo);
+      var tint = new THREE.Mesh(
+        new THREE.PlaneGeometry(h * 2, h * 2),
+        new THREE.MeshBasicMaterial({ color: 0x8ef0a4, transparent: true, opacity: 0.72, depthWrite: false })
+      );
+      tint.rotation.x = -Math.PI / 2; tint.position.y = y + 0.012; dg.add(tint);
+      var dash = new THREE.Mesh(
+        new THREE.PlaneGeometry(h * 2 + 0.5, h * 2 + 0.5),
+        new THREE.MeshBasicMaterial({ map: dashedTex, transparent: true, opacity: 1, depthWrite: false })
+      );
+      dash.rotation.x = -Math.PI / 2; dash.position.y = y + 0.022; dg.add(dash);
+      var dropSign = textSprite("DROP PAPERS", "#c9f7d4");
+      dropSign.scale.set(3.0, 0.68, 1);
+      dropSign.position.set(0, y + 2.2, 0);
+      dg.add(dropSign);
+      dg.position.set(PAPERS_DROP_ZONE.x, 0, PAPERS_DROP_ZONE.z);
+      g.add(dg);
+    })();
 
     var desk = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.0, 1.0), M.wood);
     desk.position.set(PAPERS_HR_ZONE.x, y + 0.5, PAPERS_HR_ZONE.z);
@@ -5752,7 +6058,37 @@
       while (sObj.acc >= need && sObj.wood > 0) { sObj.acc -= need; sObj.wood--; sObj.cutwood++; }
     }
   }
-  function updateSawVisuals(now) {
+  // Belts, head motion and the two piles are identical across the three
+  // stages — only which numbers feed them differs, so they share this.
+  function runMillBelt(belt, phase) {
+    var len = belt.x1 - belt.x0;
+    var step = len / belt.slats.length;
+    for (var i = 0; i < belt.slats.length; i++) {
+      belt.slats[i].position.x = belt.x0 + ((i * step + phase) % len);
+    }
+  }
+  function updateMillMachineVisual(mo, running, inN, outN, now, dt) {
+    mo.beltPhase = running ? (mo.beltPhase + MILL_BELT_SPEED * dt) % 1000 : mo.beltPhase;
+    runMillBelt(mo.beltIn, mo.beltPhase);
+    runMillBelt(mo.beltOut, mo.beltPhase);
+    if (mo.head) {
+      if (mo.headKind === "cutter") {
+        // stamps down on a beat rather than spinning
+        mo.head.position.y = MILL_CUTTER_REST_Y -
+          (running ? Math.max(0, Math.sin(now * 0.009)) * 0.42 : 0);
+      } else if (running) {
+        mo.head.rotation.z = now * (mo.headKind === "saw" ? 0.026 : 0.009);
+      }
+    }
+    mo.glow.material.opacity = outN > 0 ? 0.34 + Math.sin(now * 0.006) * 0.18 : 0;
+    var cap = papersHopperCap();
+    setBar(mo.barIn, inN / cap);
+    setBar(mo.barOut, outN / cap);
+    mo.pileIn.setCount(inN);
+    mo.pileOut.setCount(outN);
+  }
+
+  function updateSawVisuals(now, dt) {
     var owned = sawOwned();
     for (var i = 0; i < sawObjects.length; i++) {
       var so = sawObjects[i];
@@ -5760,12 +6096,7 @@
       so.group.visible = live;
       if (!live) continue;
       var sObj = state.papers.saws[i];
-      if (sObj.wood > 0) so.blade.rotation.x = now * 0.03;
-      so.glow.material.opacity = sObj.cutwood > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
-      setBar(so.barIn, sObj.wood / papersHopperCap());
-      setBar(so.barOut, sObj.cutwood / papersHopperCap());
-      so.pileIn.setCount(sObj.wood);
-      so.pileOut.setCount(sObj.cutwood);
+      updateMillMachineVisual(so, sObj.wood > 0, sObj.wood, sObj.cutwood, now, dt);
     }
   }
   function updateSawPads(now) {
@@ -5819,7 +6150,7 @@
       while (p.acc >= need && p.cutwood > 0) { p.acc -= need; p.cutwood--; p.lumber++; }
     }
   }
-  function updatePlanerVisuals(now) {
+  function updatePlanerVisuals(now, dt) {
     var owned = planerOwned();
     for (var i = 0; i < planerObjects.length; i++) {
       var po = planerObjects[i];
@@ -5827,12 +6158,7 @@
       po.group.visible = live;
       if (!live) continue;
       var p = state.papers.planers[i];
-      if (p.cutwood > 0) po.roller.rotation.x = now * 0.01;
-      po.glow.material.opacity = p.lumber > 0 ? 0.4 + Math.sin(now * 0.006 + i) * 0.2 : 0;
-      setBar(po.barIn, p.cutwood / papersHopperCap());
-      setBar(po.barOut, p.lumber / papersHopperCap());
-      po.pileIn.setCount(p.cutwood);
-      po.pileOut.setCount(p.lumber);
+      updateMillMachineVisual(po, p.cutwood > 0, p.cutwood, p.lumber, now, dt);
     }
   }
   function updatePlanerPads(now) {
@@ -5886,7 +6212,7 @@
       while (c.acc >= need && c.lumber > 0) { c.acc -= need; c.lumber--; c.papers++; }
     }
   }
-  function updateCutterVisuals(now) {
+  function updateCutterVisuals(now, dt) {
     var owned = cutterOwned();
     for (var i = 0; i < cutterObjects.length; i++) {
       var co = cutterObjects[i];
@@ -5894,11 +6220,7 @@
       co.group.visible = live;
       if (!live) continue;
       var c = state.papers.cutters[i];
-      if (c.lumber > 0) co.blade.rotation.y = now * 0.02;
-      setBar(co.barIn, c.lumber / papersHopperCap());
-      setBar(co.barOut, c.papers / papersHopperCap());
-      co.pileIn.setCount(c.lumber);
-      co.pileOut.setCount(c.papers);
+      updateMillMachineVisual(co, c.lumber > 0, c.lumber, c.papers, now, dt);
     }
   }
   function updateCutterPads(now) {
@@ -7123,14 +7445,8 @@
   var prerollGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.66, 7);  // a joint
   var vapeGeo = new THREE.BoxGeometry(0.16, 0.62, 0.16);               // a cartridge
   var drinkGeo = new THREE.CylinderGeometry(0.19, 0.16, 0.56, 10);     // a can
-  // Rolling Papers items — geometry pre-rotated so it reads correctly no
-  // matter how the stack mesh spins each frame (syncStack drives rotation.y).
-  var woodGeo = new THREE.CylinderGeometry(0.16, 0.18, 0.58, 8);       // a cut log, lying down
-  woodGeo.rotateZ(Math.PI / 2);
-  var cutwoodGeo = new THREE.CylinderGeometry(0.13, 0.14, 0.5, 8);     // a sawn section, lying down
-  cutwoodGeo.rotateZ(Math.PI / 2);
-  var lumberGeo = new THREE.BoxGeometry(0.62, 0.08, 0.2);              // a planed plank
-  var papersGeo = new THREE.BoxGeometry(0.3, 0.2, 0.05);               // a packaged pad of papers
+  // (Rolling Papers item geometry is declared up with the mill machines,
+  // which build long before this point and need it for their piles.)
   var counterPile = new THREE.Group();   // buds dropped off, stacked on the counter
   var dabPile = new THREE.Group();       // dabs, on the other half of the same top
   (function dispensaryCounter() {
@@ -10135,7 +10451,11 @@
   // door. Drivers get first claim — loading trucks is their actual job; the
   // barback is only here because the bar could not take what it was holding.
   function barbackFreeBay() {
+    var loungeBay = loungeSupplyBayIdx();
     for (var i = 0; i < bayCount(); i++) {
+      // diverting means "the bar is full" — putting it on the bar's own truck
+      // would only bounce straight back, so that bay is not a valid dump
+      if (i === loungeBay) continue;
       var t = trucks[i];
       if (t.phase !== "loading" || truckSpace(t) <= 0) continue;
       var taken = false;
@@ -10210,8 +10530,41 @@
         }
 
       } else if (b.phase === "toBar") {
-        walking = !barbackStepTo(b, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z, dt);
-        if (!walking) { b.phase = "drop"; b.timer = actBarback(); }
+        // Once the supply bay is bought, the yellow truck is the real route:
+        // the crew loads it and it drives the stock over, which is visible
+        // work instead of stock teleporting off a pad. The pad stays as the
+        // fallback for every stage before the fourth bay exists, for whenever
+        // the truck is away or full — and as your own express lane.
+        var lbay = loungeSupplyBayIdx();
+        if (lbay >= 0 && loungeTruckAccepting()) {
+          b.bayIdx = lbay;
+          walking = !barbackStepTo(b, BAY_X[lbay], DOCK_WALL_Z + 2.4, dt);
+          if (!walking) { b.phase = "loadLounge"; b.timer = actBarback(); }
+        } else {
+          b.bayIdx = -1;
+          walking = !barbackStepTo(b, LOUNGE_RUN_ZONE.x, LOUNGE_RUN_ZONE.z, dt);
+          if (!walking) { b.phase = "drop"; b.timer = actBarback(); }
+        }
+
+      // ---- loading the Lounge's own truck at the supply bay ----
+      } else if (b.phase === "loadLounge") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var lt = trucks[b.bayIdx];
+          if (lt && lt.phase === "loading" && b.carrying > 0 && truckLoadOne(lt, b.carryKind)) {
+            b.carrying--;
+            b.timer = actBarback();
+            if (b.carrying <= 0) {
+              addFloater(BAY_X[b.bayIdx], 3.4, DOCK_WALL_Z + 2.5, "→ LOUNGE RUN", "#c76ee0");
+              b.phase = "toPallet";
+              b.bayIdx = -1;
+            }
+          } else {
+            // truck pulled away or filled mid-load: toBar re-routes to the pad
+            b.phase = b.carrying > 0 ? "toBar" : "toPallet";
+            b.bayIdx = -1;
+          }
+        }
 
       } else if (b.phase === "drop") {
         b.timer -= dt;
@@ -10599,6 +10952,19 @@
   // Lounge is owned — same loading mechanics (drivers/manual loading fill
   // it exactly like any other bay), only the dispatch destination differs.
   function isLoungeSupplyBay(t) { return t.bay === MAX_BAYS - 1 && loungeUnlocked(); }
+  // The supply bay is the last one, so it only exists once every bay is
+  // bought. Everything that routes to it has to cope with it not being there
+  // yet — see updateBarbacks, which falls back to the run pad.
+  function loungeSupplyBayIdx() {
+    var i = MAX_BAYS - 1;
+    return (loungeUnlocked() && i < bayCount()) ? i : -1;
+  }
+  function loungeTruckAccepting() {
+    var i = loungeSupplyBayIdx();
+    if (i < 0) return false;
+    var t = trucks[i];
+    return !!(t && t.phase === "loading" && truckSpace(t) > 0);
+  }
 
   function dispatchTruck(t) {
     var units = t.load;
@@ -10608,11 +10974,13 @@
         if (!t.manifest[k2]) continue;
         var room = loungeIntakeCap() - (state.loungeIntake[k2] || 0);
         var add = Math.min(t.manifest[k2], Math.max(0, room));
-        state.loungeIntake[k2] = (state.loungeIntake[k2] || 0) + add;
-        delivered += add;
-        t.manifest[k2] = 0;
+        if (add > 0) {
+          state.loungeIntake[k2] = (state.loungeIntake[k2] || 0) + add;
+          t.manifest[k2] -= add;
+          delivered += add;
+        }
       }
-      t.load = 0;
+      t.load = Math.max(0, t.load - delivered);
       if (delivered > 0) {
         addFloater(BAY_X[t.bay], 6.0, DOCK_WALL_Z - 4, "→ LOUNGE", "#c76ee0");
         toast("🍸 Supply run — " + delivered + " units delivered to the Lounge");
@@ -10620,7 +10988,11 @@
         renderHud();
         saveState();
       }
-      return;
+      // Anything the bar had no room for is still perfectly saleable, so it
+      // falls through and goes out wholesale. It used to be zeroed here, which
+      // quietly destroyed a part-rejected load — barely noticeable when only
+      // the player loaded this truck, but the barbacks feed it now.
+      if (t.load <= 0) { t.load = 0; return; }
     }
     var gross = 0;
     for (var k in t.manifest) {
@@ -11354,6 +11726,7 @@
   // while still standing there.
   var mysteryNear = false;
   function updateMysteryBox(now) {
+    tickMysteryWindow();
     var live = mysteryReady();
     mysteryBox.visible = live;
     if (!live) {
@@ -11361,7 +11734,10 @@
       return;
     }
     var spot = mysterySpot();
-    var baseY = (state.site === "farm" ? FARM_GROUND_TOP : state.site === "lounge" ? LOUNGE_GROUND_TOP : 0) + 1.15;
+    // floorTopAt() already resolves every remote site to the back-room slab,
+    // so one call covers all five and drops the per-site chain this used to
+    // carry (which also had the shop crate sunk 0.23 into the retail floor).
+    var baseY = floorTopAt(spot.z) + 1.15;
     mysteryBox.position.set(spot.x, baseY + Math.sin(now * 0.0026) * 0.16, spot.z);
     mysteryBox.rotation.y = now * 0.0007;
 
@@ -12374,6 +12750,88 @@
         toast("\ud83e\udea2 Mill hand hired \u2014 the relay runs itself!");
       },
     },
+    // ---- the mill's machine upgrades. These costs and levels already existed
+    // and were already read by sawTimeFor/planeTimeFor/cutTimeFor/papersValue/
+    // papersHopperCap, but nothing ever incremented them and there were no
+    // pads, so the whole line was stuck at base speed forever. Each speed pad
+    // stands at the head of the column it speeds up.
+    {
+      id: "sawlv", label: "SAW SPEED", icon: "\ud83e\ude9a",
+      x: PAPERS_SAW_COL_X, z: PAPERS_UPGRADE_Z,
+      site: "papers", color: 0xa8875a, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Sharper Saw Blades"; },
+      desc: function () {
+        return "Lv." + (state.papers.sawLv || 0) + " \u00b7 every saw cuts logs faster";
+      },
+      cost: function () { return sawLvCost(state.papers.sawLv || 0); },
+      buy: function () {
+        state.papers.sawLv = (state.papers.sawLv || 0) + 1;
+        toast("\ud83e\ude9a Saw blades sharpened \u2014 Lv." + state.papers.sawLv + "!");
+      },
+    },
+    {
+      id: "planelv", label: "PLANE SPEED", icon: "\ud83e\udeb5",
+      x: PAPERS_PLANER_COL_X, z: PAPERS_UPGRADE_Z,
+      site: "papers", color: 0xb98f52, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Faster Planer Drums"; },
+      desc: function () {
+        return "Lv." + (state.papers.planeLv || 0) + " \u00b7 every planer works cut wood faster";
+      },
+      cost: function () { return planeLvCost(state.papers.planeLv || 0); },
+      buy: function () {
+        state.papers.planeLv = (state.papers.planeLv || 0) + 1;
+        toast("\ud83e\udeb5 Planer drums tuned \u2014 Lv." + state.papers.planeLv + "!");
+      },
+    },
+    {
+      id: "cutlv", label: "CUT SPEED", icon: "\u2702\ufe0f",
+      x: PAPERS_CUTTER_COL_X, z: PAPERS_UPGRADE_Z,
+      site: "papers", color: 0x8a95a1, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Quicker Cutters"; },
+      desc: function () {
+        return "Lv." + (state.papers.cutLv || 0) + " \u00b7 every cutter packs papers faster";
+      },
+      cost: function () { return cutLvCost(state.papers.cutLv || 0); },
+      buy: function () {
+        state.papers.cutLv = (state.papers.cutLv || 0) + 1;
+        toast("\u2702\ufe0f Cutters sped up \u2014 Lv." + state.papers.cutLv + "!");
+      },
+    },
+    {
+      // Applies to every stage, so it sits between the planer and cutter
+      // columns rather than at the head of any one of them.
+      id: "papershopper", label: "HOPPERS", icon: "\ud83d\udce6",
+      x: (PAPERS_PLANER_COL_X + PAPERS_CUTTER_COL_X) / 2, z: PAPERS_UPGRADE_Z,
+      site: "papers", color: 0x8ef0a4, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Bigger Mill Hoppers"; },
+      desc: function () {
+        return "Holds " + papersHopperCap() + " \u00b7 every machine stores more before it backs up";
+      },
+      cost: function () { return papersHopperCost(state.papers.hopperLv || 0); },
+      buy: function () {
+        state.papers.hopperLv = (state.papers.hopperLv || 0) + 1;
+        toast("\ud83d\udce6 Hoppers enlarged \u2014 " + papersHopperCap() + " per machine!");
+      },
+    },
+    {
+      id: "papersvalue", label: "PAPER VALUE", icon: "\ud83d\udcb0",
+      x: PAPERS_REGISTER_X, z: PAPERS_REGISTER_Z - 7,
+      site: "papers", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Premium Rolling Papers"; },
+      desc: function () {
+        return "$" + fmt(Math.round(papersValue())) + " a roll \u00b7 the trucks pay more";
+      },
+      cost: costPapersValueLv,
+      buy: function () {
+        state.papers.valueLv = (state.papers.valueLv || 0) + 1;
+        toast("\ud83d\udcb0 Premium stock \u2014 $" + fmt(Math.round(papersValue())) + " a roll!");
+      },
+    },
     {
       // One-time purchase, unlike everything else here \u2014 there's only ever
       // one manager. This is what turns the field hands and hauler from
@@ -13380,11 +13838,11 @@
     updatePapersTreeGrowth(dt);
     updatePapersTreeVisuals();
     updateSawStates(dt);
-    updateSawVisuals(now);
+    updateSawVisuals(now, dt);
     updatePlanerStates(dt);
-    updatePlanerVisuals(now);
+    updatePlanerVisuals(now, dt);
     updateCutterStates(dt);
-    updateCutterVisuals(now);
+    updateCutterVisuals(now, dt);
     updateWoodcutters(now, dt);
     updateMillhands(now, dt);
     updatePapersTruck(dt);
@@ -13760,6 +14218,7 @@
     // cost clears with the crate so the next one is priced at that day's rates
     state.mystery.cost = 0;
     state.mystery.nextAt = Date.now() + MYSTERY_COOLDOWN_MS;
+    state.mystery.expiresAt = 0;   // closes the window; the next tick opens a fresh one
     var spot = mysterySpot();
     addFloater(spot.x, 2.8, spot.z, perk.icon + " " + perk.name.toUpperCase(), "#ffe066");
     toast(perk.icon + " " + perk.name + " — " + perk.blurb.toLowerCase() + ", 10 min!");
