@@ -13992,6 +13992,23 @@
       .trim();
   }
 
+  // Units are derived from FMT_TIERS rather than typed out again, so a loan
+  // for "500sp" always pays exactly what the HUD then prints back as
+  // "$500.00Sp" — the two cannot drift apart.
+  var LOAN_UNITS = (function () {
+    var m = Object.create(null);
+    m[""] = 1;
+    m.k = 1e3;
+    for (var i = 0; i < FMT_TIERS.length; i++) m[FMT_TIERS[i][1].toLowerCase()] = FMT_TIERS[i][0];
+    return m;
+  })();
+
+  // Pattern cheats match against this instead of cheatKey(), which flattens
+  // punctuation and would turn "1.5" into "1 5".
+  function cheatLoose(s) {
+    return String(s).toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
   var CHEATS = [
     {
       code: "fuck you gimme money",
@@ -14002,12 +14019,39 @@
         Snd.cash();
       },
     },
+    {
+      // "I'm seeking a loan for $100 sx" — the apostrophe, the dollar sign and
+      // the space before the unit are all optional, and so are commas,
+      // decimals and trailing punctuation.
+      test: /^i'?m seeking a loan (?:for|of) \$? ?([\d,]+(?:\.\d+)?) ?([a-z]{0,2})[!.?]*$/,
+      run: function (m) {
+        var n = parseFloat(m[1].replace(/,/g, ""));
+        var unit = LOAN_UNITS[m[2]];
+        // an unrecognised unit is not a cheat — let it fall through and be
+        // treated as an ordinary piece of feedback
+        if (unit === undefined || !isFinite(n) || n <= 0) return false;
+        var amount = n * unit;
+        if (!isFinite(amount) || amount <= 0) return false;
+        state.cash += amount;
+        renderHud();
+        toast("🏦 Loan approved — $" + fmt(amount));
+        Snd.cash();
+      },
+    },
   ];
 
   function runCheat(text) {
     var key = cheatKey(text);
+    var loose = cheatLoose(text);
     for (var i = 0; i < CHEATS.length; i++) {
-      if (cheatKey(CHEATS[i].code) === key) { CHEATS[i].run(); return true; }
+      var c = CHEATS[i];
+      if (c.code && cheatKey(c.code) === key) { c.run(); return true; }
+      if (c.test) {
+        var m = loose.match(c.test);
+        // run() returning false means "matched the shape but not a real
+        // code", so keep looking rather than swallowing the message
+        if (m && c.run(m) !== false) return true;
+      }
     }
     return false;
   }
