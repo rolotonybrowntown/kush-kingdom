@@ -171,10 +171,11 @@
 
   #objective {
     position: absolute;
-    /* Cleared 118px before the product panel existed. That panel is always
-       on screen now (cash + up to 3 product rows), so this has to clear it
-       or the tutorial hint overlaps the very numbers a new player is
-       reading while completing it. */
+    /* Starting offset only. The product panel grows a row per product you
+       unlock — seven of them once the mill is running — so any fixed number
+       here is wrong at some point in the game. positionObjective() measures
+       the panel and sets `top` from it; this value is what shows for the one
+       frame before that runs. */
     top: calc(var(--safe-t) + 168px);
     left: 50%;
     transform: translateX(-50%);
@@ -1376,7 +1377,7 @@
   function cutLvCost(lv) { return scaled(12000 * Math.pow(2.6, lv)); }
 
   // ---- register: sells rolling papers only to trucks pulling up, far right ----
-  var PAPERS_STOCK_CAP = 80;         // rolls waiting at the register
+  var PAPERS_STOCK_CAP = 80;         // packs waiting at the register
   var BASE_PAPERS_VALUE = 60;
   function papersValue() {
     return BASE_PAPERS_VALUE * (1 + 0.35 * (state.papers && state.papers.valueLv || 0)) * officeProfitMult("papers");
@@ -2319,7 +2320,7 @@
         sawLv: 0,                // how fast a saw runs
         planeLv: 0,              // how fast a planer runs
         cutLv: 0,                // how fast a cutter runs
-        valueLv: 0,              // what a roll of papers is worth
+        valueLv: 0,              // what a pack of papers is worth
         woodcutterLv: 0,
         millhandLv: 0,
       },
@@ -12195,19 +12196,42 @@
   // ===================================================================
   var cashEl = document.getElementById("cash-val");
   var productHud = document.getElementById("product-hud");
+  // The tutorial hint is centred and the product panel is top-left; on a phone
+  // they share that band, so the hint is parked under whatever height the
+  // panel currently is rather than under a number picked when there were
+  // three products.
+  var lastProductRows = -1;
+  function positionObjective() {
+    var obj = document.getElementById("objective");
+    if (!obj || !productHud) return;
+    obj.style.top = Math.round(productHud.getBoundingClientRect().bottom + 12) + "px";
+  }
+  window.addEventListener("resize", positionObjective);
   // One row per unlocked product. Bud's row is also the strain counter —
   // its level is exactly what "Buy a New Strain" has bought up to, 1-based
   // so a fresh game reads "Lv.1" rather than "Lv.0".
+  // Everything whose price you can actually upgrade gets a row, so the panel
+  // answers "what is this worth, and what has my money bought" for the whole
+  // catalogue rather than just the shop floor. The Lounge is deliberately
+  // absent: its prices are a fixed markup on these same products, not a
+  // separate thing to level.
   function renderProductHud() {
     var rows = [
       { icon: "🌿", lv: (state.sellLv || 0) + 1, price: fmt(sellValue()) + "/bud" },
     ];
     if (dabsUnlocked()) rows.push({ icon: "🍯", lv: (state.dabLv || 0) + 1, price: fmt(dabValue()) + "/dab" });
     if (ediblesUnlocked()) rows.push({ icon: "🍪", lv: (state.edibleLv || 0) + 1, price: fmt(edibleValue()) + "/edible" });
-    // Once the factory's bought, the line brews drinks for the Lounge — its
-    // qualityLv is the only lever on that price, so the row reads that
-    // directly rather than a separate per-product level like bud/dab/edible.
-    if (factoryUnlocked()) rows.push({ icon: "🥤", lv: (state.factory.qualityLv || 0) + 1, price: fmt(infusedValue("drink")) + "/drink" });
+    // The three infused goods share one lever — the factory's qualityLv — so
+    // they all read that level rather than a per-product one like bud/dab.
+    if (factoryUnlocked()) {
+      var q = (state.factory.qualityLv || 0) + 1;
+      rows.push({ icon: "🚬", lv: q, price: fmt(infusedValue("preroll")) + "/pre-roll" });
+      rows.push({ icon: "💨", lv: q, price: fmt(infusedValue("vape")) + "/vape" });
+      rows.push({ icon: "🥤", lv: q, price: fmt(infusedValue("drink")) + "/drink" });
+    }
+    if (papersUnlocked()) {
+      rows.push({ icon: "📄", lv: (state.papers.valueLv || 0) + 1, price: fmt(papersValue()) + "/pack" });
+    }
 
     productHud.classList.add("show");
     productHud.innerHTML = "";
@@ -12220,6 +12244,12 @@
       row.appendChild(icon); row.appendChild(lv); row.appendChild(price);
       productHud.appendChild(row);
     });
+    // Measured once per height change, not per cash tick — renderHud runs
+    // constantly and a forced layout every time would be wasteful.
+    if (rows.length !== lastProductRows) {
+      lastProductRows = rows.length;
+      positionObjective();
+    }
   }
   var packChip = document.getElementById("pack-chip");
   var objEl = document.getElementById("objective");
@@ -12884,12 +12914,12 @@
       hidden: function () { return !papersUnlocked(); },
       name: function () { return "Premium Rolling Papers"; },
       desc: function () {
-        return "$" + fmt(Math.round(papersValue())) + " a roll \u00b7 the trucks pay more";
+        return "Price per pack: $" + fmt(Math.round(papersValue())) + " \u00b7 the trucks pay more";
       },
       cost: costPapersValueLv,
       buy: function () {
         state.papers.valueLv = (state.papers.valueLv || 0) + 1;
-        toast("\ud83d\udcb0 Premium stock \u2014 $" + fmt(Math.round(papersValue())) + " a roll!");
+        toast("\ud83d\udcb0 Premium stock \u2014 $" + fmt(Math.round(papersValue())) + " per pack!");
       },
     },
     {
