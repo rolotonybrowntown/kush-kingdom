@@ -1256,7 +1256,7 @@
   // = -1364) leaves just under 100 units of slack. Re-measure this in-browser
   // if either room's camDist or footprint changes, same discipline as above.
   var PAPERS_CZ = -1400;
-  var PAPERS_HALF_X = 46, PAPERS_HALF_Z = 30;   // mill yard: forest left, trucks right
+  var PAPERS_HALF_X = 51, PAPERS_HALF_Z = 30;   // mill yard: forest left, trucks right
   var PAPERS_GROUND_TOP = FLOOR_TOP_BACK;
   var PAPERS_DEED_COST = 3e13;   // priciest deed yet — five locations deep
   function papersUnlocked() { return !!(state.papers && state.papers.unlocked); }
@@ -1298,7 +1298,7 @@
   var PAPERS_TREE_REGROW = 16;   // seconds for a stump to grow back
 
   // ---- saw: wood -> cut wood, first machine stage after the forest ----
-  var PAPERS_SAW_COL_X = -PAPERS_HALF_X + 30;
+  var PAPERS_SAW_COL_X = -PAPERS_HALF_X + 30;   // 19 to the planer, 19 on to the cutter
   var SAW_SIZE = 3.2;
   var sawDefs = [];
   (function () {
@@ -1323,7 +1323,7 @@
   function sawLvCost(lv) { return scaled(10000 * Math.pow(2.6, lv)); }
 
   // ---- planer: cut wood -> lumber, same shape as the rosin press ----
-  var PAPERS_PLANER_COL_X = -PAPERS_HALF_X + 44;
+  var PAPERS_PLANER_COL_X = -PAPERS_HALF_X + 49;
   var PLANER_SIZE = 3.4;
   var planerDefs = [];
   (function () {
@@ -1351,7 +1351,7 @@
   function papersHopperCost(lv) { return scaled(6000 * Math.pow(2.5, lv)); }
 
   // ---- cutter/packager: lumber -> rolling papers, same shape as the oven ----
-  var PAPERS_CUTTER_COL_X = -PAPERS_HALF_X + 58;
+  var PAPERS_CUTTER_COL_X = -PAPERS_HALF_X + 68;
   var CUTTER_SIZE = 3.4;
   var cutterDefs = [];
   (function () {
@@ -1593,7 +1593,7 @@
       spawn: { x: 0, z: PAPERS_CZ + 4 },
       // pulled in with the yard: at 60 over a narrower site everything read
       // as distant specks, which was half of "this level looks bad"
-      camDist: function () { return 50; },
+      camDist: function () { return 53; },
       groundOf: function () { return papersGround; },
       unlocked: papersUnlocked,
       bounds: function () {
@@ -5610,12 +5610,12 @@
   // Sized against budGeo (a 0.34-radius cone) rather than to real-world
   // scale: at the mill's camera distance the first pass read as specks on
   // your back, so a log is now comfortably chunkier than a bud.
-  var woodGeo = new THREE.CylinderGeometry(0.28, 0.31, 0.95, 8);       // a cut log, lying down
+  var woodGeo = new THREE.CylinderGeometry(0.56, 0.62, 1.9, 8);        // a cut log, lying down
   woodGeo.rotateZ(Math.PI / 2);
-  var cutwoodGeo = new THREE.CylinderGeometry(0.24, 0.26, 0.74, 8);    // a sawn section, lying down
+  var cutwoodGeo = new THREE.CylinderGeometry(0.48, 0.52, 1.48, 8);    // a sawn section, lying down
   cutwoodGeo.rotateZ(Math.PI / 2);
-  var lumberGeo = new THREE.BoxGeometry(0.98, 0.17, 0.38);             // a planed plank
-  var papersGeo = new THREE.BoxGeometry(0.5, 0.36, 0.14);              // a packaged pad of papers
+  var lumberGeo = new THREE.BoxGeometry(1.96, 0.34, 0.76);             // a planed plank
+  var papersGeo = new THREE.BoxGeometry(1.0, 0.72, 0.28);              // a packaged pad of papers
 
   var MILL_CUTTER_REST_Y = 2.35;
   // Orientation baked in so each head's own rotation.z is a clean spin.
@@ -5818,8 +5818,8 @@
 
       // Piles sit on the ground at each end of the line, which is also exactly
       // where you walk up to drop material in and take product out.
-      var pileIn = makeResourcePile(mg, -(MILL_LEN / 2 + 1.3), 0, o.inGeo, o.inMat, o.pileMax, 2, 2);
-      var pileOut = makeResourcePile(mg, MILL_LEN / 2 + 1.3, 0, o.outGeo, o.outMat, o.pileMax, 2, 2);
+      var pileIn = makeResourcePile(mg, -(MILL_LEN / 2 + 2.2), 0, o.inGeo, o.inMat, o.pileMax, 2, 3);
+      var pileOut = makeResourcePile(mg, MILL_LEN / 2 + 2.2, 0, o.outGeo, o.outMat, o.pileMax, 2, 3);
 
       mg.position.set(d.x, y, d.z);
       mg.visible = false;
@@ -5835,7 +5835,7 @@
       return buildMillMachine(d, {
         head: "saw", bodyMat: M.woodDark, capMat: M.barnRoof,
         inGeo: woodGeo, inMat: M.woodDark, outGeo: cutwoodGeo, outMat: M.wood,
-        barInColor: 0xa8f57a, barOutColor: 0xc9a875, pileMax: 16,
+        barInColor: 0xa8f57a, barOutColor: 0xc9a875, pileMax: 18,
       });
     }
     for (var swi = 0; swi < sawDefs.length; swi++) sawObjects.push(buildSaw(sawDefs[swi]));
@@ -5855,7 +5855,7 @@
       return buildMillMachine(d, {
         head: "planer", bodyMat: M.plank, capMat: M.woodDark,
         inGeo: cutwoodGeo, inMat: M.wood, outGeo: lumberGeo, outMat: M.plank,
-        barInColor: 0x9ad06a, barOutColor: 0xd7a869, pileMax: 16,
+        barInColor: 0x9ad06a, barOutColor: 0xd7a869, pileMax: 18,
       });
     }
     for (var pli = 0; pli < planerDefs.length; pli++) planerObjects.push(buildPlaner(planerDefs[pli]));
@@ -5875,7 +5875,7 @@
       return buildMillMachine(d, {
         head: "cutter", bodyMat: M.machine, capMat: M.steelDk,
         inGeo: lumberGeo, inMat: M.plank, outGeo: papersGeo, outMat: M.preroll,
-        barInColor: 0xd7a869, barOutColor: 0xe8dcc0, pileMax: 16,
+        barInColor: 0xd7a869, barOutColor: 0xe8dcc0, pileMax: 18,
       });
     }
     for (var cli = 0; cli < cutterDefs.length; cli++) cutterObjects.push(buildCutter(cutterDefs[cli]));
@@ -5891,17 +5891,17 @@
     }
     for (var cpi2 = 0; cpi2 < MAX_CUTTERS; cpi2++) cutterPads.push(makeCutterPad(cpi2));
 
-    var stand = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.3, 1.0), M.plank);
+    var stand = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.3, 1.4), M.plank);
     stand.position.set(PAPERS_TILL_PAD.x, y + 0.65, PAPERS_TILL_PAD.z - 2.4);
     stand.castShadow = true;
     g.add(stand);
-    var standTop = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 1.2), M.woodDark);
+    var standTop = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 1.6), M.woodDark);
     standTop.position.set(PAPERS_TILL_PAD.x, y + 1.36, PAPERS_TILL_PAD.z - 2.4);
     g.add(standTop);
     // the "about to become cash" pile — the stock waiting on the stand top
     // for the next truck, the clearest read of "the mill is working"
     papersStockPile = makeResourcePile(g, PAPERS_TILL_PAD.x, PAPERS_TILL_PAD.z - 2.4,
-      papersGeo, M.preroll, 45, 3, 3, y + 1.42);
+      papersGeo, M.preroll, 27, 3, 3, y + 1.42);
     var signPost = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), M.woodDark);
     signPost.position.set(PAPERS_TILL_PAD.x, y + 2.0, PAPERS_TILL_PAD.z - 2.9);
     g.add(signPost);
@@ -8972,15 +8972,25 @@
           : M.bud;
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
+        // How much vertical room this item needs on your back. It used to be
+        // a flat 0.58 for everything, which was fine while every product was
+        // roughly bud-sized; a mill log is twice that and would have sunk
+        // halfway into the one below it.
+        mm.geometry.computeBoundingBox();
+        var bb = mm.geometry.boundingBox;
+        mm.userData.stackH = Math.max(0.34, (bb.max.y - bb.min.y) * 0.92);
       }
     }
   }
   function updateStack(now) {
+    var y = 0;
     for (var i4 = 0; i4 < stackMeshes.length; i4++) {
       var m = stackMeshes[i4];
       var age = (now - (m.userData.spawnAt || now)) / 210;
       var e = 1 - Math.pow(1 - Math.min(1, age), 3);
-      m.position.set(Math.sin(i4 * 1.7) * 0.08, i4 * 0.58, Math.cos(i4 * 2.3) * 0.06);
+      var h = m.userData.stackH || 0.58;
+      m.position.set(Math.sin(i4 * 1.7) * 0.08, y + h / 2, Math.cos(i4 * 2.3) * 0.06);
+      y += h;
       m.scale.setScalar(0.35 + 0.65 * e);
       m.rotation.y = i4 * 0.7 + now * 0.0006;
       m.rotation.z = Math.sin(now * 0.004 + i4 * 0.5) * 0.033 * (i4 * 0.35);
