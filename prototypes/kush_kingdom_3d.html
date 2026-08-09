@@ -1387,9 +1387,19 @@
 
   // ---- register: sells rolling papers only to trucks pulling up, far right ----
   var PAPERS_STOCK_CAP = 80;         // packs waiting at the register
-  var BASE_PAPERS_VALUE = 60;
+  // The mill is the fifth and priciest deed (PAPERS_DEED_COST is 6x the
+  // factory's, itself once "the last location, priced like it") and the
+  // deepest production chain in the game — forest, saw, planer, cutter,
+  // register. It reads wrong for a pack to sell for less than a single dab.
+  // 7000 clears vape, the previous top seller (base 4200), and — unlike the
+  // old flat number — this now scales with strain progress the same way
+  // infusedValue() already does, so it does not fall back behind the other
+  // products again as a save's bud level climbs.
+  var BASE_PAPERS_VALUE = 7000;
   function papersValue() {
-    return BASE_PAPERS_VALUE * (1 + 0.35 * (state.papers && state.papers.valueLv || 0)) * officeProfitMult("papers");
+    return BASE_PAPERS_VALUE * (sellValueBase() / BASE_SELL_VALUE) *
+           (1 + 0.35 * (state.papers && state.papers.valueLv || 0)) *
+           officeProfitMult("papers");
   }
   function costPapersValueLv() { return scaled(9000 * Math.pow(1.85, (state.papers && state.papers.valueLv) || 0)); }
   var PAPERS_TRUCK_CAP = 40;
@@ -5718,6 +5728,11 @@
   var MILL_HEAD_HALF = 1.5;    // half-length of the housing in the middle
   var MILL_BELT_Y = 0.92;
   var MILL_BELT_SPEED = 1.9;   // slat travel per second while running
+  // Where the piles actually sit, local to the machine's own group — shared
+  // by the pile geometry, the walk-up pad markers, and the pickup/feed
+  // interaction zones, so all three always agree with each other.
+  var MILL_PILE_OFFSET = MILL_LEN / 2 + 2.2;
+  var MILL_PILE_HALF = 1.5;
   // Rolling Papers items — geometry pre-rotated so it reads correctly no
   // matter how the stack mesh spins each frame (syncStack drives rotation.y).
   // Sized against budGeo (a 0.34-radius cone) rather than to real-world
@@ -5866,6 +5881,48 @@
       return { slats: slats, x0: x0, x1: x1 };
     }
 
+    // A walk-up marker over a pile, deliberately unlike the BUY pads
+    // (makePaySquare): solid ring instead of a dashed border, an icon and a
+    // plain label instead of a pulsing price. The intent is that you can
+    // tell at a glance which kind of square you're looking at without
+    // reading it. Local to the machine's own group, so it inherits the
+    // group's position and its visible toggle for free — no separate
+    // show/hide bookkeeping the way the BUY pads need.
+    function buildMillWalkPad(parent, offsetX, color, label, icon) {
+      var pg = new THREE.Group();
+      var half = MILL_PILE_HALF, w = half * 2;
+      var halo = new THREE.Mesh(
+        new THREE.PlaneGeometry(w * 1.5, w * 1.5),
+        new THREE.MeshBasicMaterial({
+          map: glowTex, color: color, transparent: true,
+          opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      halo.rotation.x = -Math.PI / 2; halo.position.y = 0.006; pg.add(halo);
+      var tint = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, w),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5, depthWrite: false })
+      );
+      tint.rotation.x = -Math.PI / 2; tint.position.y = 0.012; pg.add(tint);
+      // solid ring in place of the BUY pads' dashed edge
+      var ring = new THREE.Mesh(
+        new THREE.RingGeometry(half * 0.92, half, 28),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.85, depthWrite: false })
+      );
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; pg.add(ring);
+      var iconSpr = textSprite(icon, "#ffffff");
+      iconSpr.scale.set(1.2, 1.2, 1);
+      iconSpr.position.y = 1.5;
+      pg.add(iconSpr);
+      var lbl = textSprite(label, "#eafff2");
+      lbl.scale.set(2.4, 0.56, 1);
+      lbl.position.y = 0.75;
+      pg.add(lbl);
+      pg.position.set(offsetX, 0, 0);
+      parent.add(pg);
+      return pg;
+    }
+
     function buildMillMachine(d, o) {
       var mg = new THREE.Group();
       var hx = MILL_HEAD_HALF;
@@ -5931,8 +5988,16 @@
 
       // Piles sit on the ground at each end of the line, which is also exactly
       // where you walk up to drop material in and take product out.
-      var pileIn = makeResourcePile(mg, -(MILL_LEN / 2 + 2.2), 0, o.inGeo, o.inMat, o.pileMax, 2, 3);
-      var pileOut = makeResourcePile(mg, MILL_LEN / 2 + 2.2, 0, o.outGeo, o.outMat, o.pileMax, 2, 3);
+      var pileIn = makeResourcePile(mg, -MILL_PILE_OFFSET, 0, o.inGeo, o.inMat, o.pileMax, 2, 3);
+      var pileOut = makeResourcePile(mg, MILL_PILE_OFFSET, 0, o.outGeo, o.outMat, o.pileMax, 2, 3);
+
+      // Marked squares over the piles themselves — solid ring, no dashed
+      // border, no price — so they read as "walk here" rather than "buy
+      // here" at a glance, and so the interaction zone (handleSaws etc.)
+      // lines up with where the pile actually is instead of the machine's
+      // own body, which used to sit between the two belts.
+      buildMillWalkPad(mg, -MILL_PILE_OFFSET, o.barInColor, "DROP OFF", "⬇");
+      buildMillWalkPad(mg, MILL_PILE_OFFSET, o.barOutColor, "COLLECT", "⬆");
 
       mg.position.set(d.x, y, d.z);
       mg.visible = false;
@@ -6186,18 +6251,28 @@
     var owned = sawOwned();
     for (var i = 0; i < owned; i++) {
       var d = sawDefs[i], sObj = state.papers.saws[i];
-      if (d2(player.pos.x, player.pos.z, d.x, d.z) > SAW_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      // Zones sit over the piles themselves (see buildMillWalkPad), not the
+      // machine body between them — you used to have to walk through the
+      // belts and the blade to reach either one.
+      var inX = d.x - MILL_PILE_OFFSET, outX = d.x + MILL_PILE_OFFSET;
+      var nearIn = d2(player.pos.x, player.pos.z, inX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      var nearOut = d2(player.pos.x, player.pos.z, outX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      if (!nearIn && !nearOut) continue;
       var fed = 0, cap = papersHopperCap();
-      for (var b = player.backpack.length - 1; b >= 0; b--) {
-        if (sObj.wood + fed >= cap) break;
-        if (player.backpack[b].type === "wood") { player.backpack.splice(b, 1); fed++; }
+      if (nearIn) {
+        for (var b = player.backpack.length - 1; b >= 0; b--) {
+          if (sObj.wood + fed >= cap) break;
+          if (player.backpack[b].type === "wood") { player.backpack.splice(b, 1); fed++; }
+        }
+        if (fed) { sObj.wood += fed; addFloater(inX, 3.0, d.z, "+" + fed + " WOOD", "#a8f57a"); }
       }
-      if (fed) { sObj.wood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " WOOD", "#a8f57a"); }
       var took = 0;
-      while (sObj.cutwood > 0 && player.backpack.length < backpackCap()) {
-        sObj.cutwood--; player.backpack.push({ type: "cutwood" }); took++;
+      if (nearOut) {
+        while (sObj.cutwood > 0 && player.backpack.length < backpackCap()) {
+          sObj.cutwood--; player.backpack.push({ type: "cutwood" }); took++;
+        }
+        if (took) addFloater(outX, 3.4, d.z, "+" + took + " CUT WOOD", "#c9a875");
       }
-      if (took) addFloater(d.x, 3.4, d.z, "+" + took + " CUT WOOD", "#c9a875");
       if (fed || took) { syncStack(); renderUpgrades(); }
     }
   }
@@ -6278,18 +6353,25 @@
     var owned = planerOwned();
     for (var i = 0; i < owned; i++) {
       var d = planerDefs[i], p = state.papers.planers[i];
-      if (d2(player.pos.x, player.pos.z, d.x, d.z) > PLANER_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      var inX = d.x - MILL_PILE_OFFSET, outX = d.x + MILL_PILE_OFFSET;
+      var nearIn = d2(player.pos.x, player.pos.z, inX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      var nearOut = d2(player.pos.x, player.pos.z, outX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      if (!nearIn && !nearOut) continue;
       var fed = 0, cap = papersHopperCap();
-      for (var b = player.backpack.length - 1; b >= 0; b--) {
-        if (p.cutwood + fed >= cap) break;
-        if (player.backpack[b].type === "cutwood") { player.backpack.splice(b, 1); fed++; }
+      if (nearIn) {
+        for (var b = player.backpack.length - 1; b >= 0; b--) {
+          if (p.cutwood + fed >= cap) break;
+          if (player.backpack[b].type === "cutwood") { player.backpack.splice(b, 1); fed++; }
+        }
+        if (fed) { p.cutwood += fed; addFloater(inX, 3.0, d.z, "+" + fed + " CUT WOOD", "#c9a875"); }
       }
-      if (fed) { p.cutwood += fed; addFloater(d.x, 3.0, d.z, "+" + fed + " CUT WOOD", "#c9a875"); }
       var took = 0;
-      while (p.lumber > 0 && player.backpack.length < backpackCap()) {
-        p.lumber--; player.backpack.push({ type: "lumber" }); took++;
+      if (nearOut) {
+        while (p.lumber > 0 && player.backpack.length < backpackCap()) {
+          p.lumber--; player.backpack.push({ type: "lumber" }); took++;
+        }
+        if (took) addFloater(outX, 3.4, d.z, "+" + took + " LUMBER", "#d7a869");
       }
-      if (took) addFloater(d.x, 3.4, d.z, "+" + took + " LUMBER", "#d7a869");
       if (fed || took) { syncStack(); renderUpgrades(); }
     }
   }
@@ -6340,18 +6422,25 @@
     var owned = cutterOwned();
     for (var i = 0; i < owned; i++) {
       var d = cutterDefs[i], c = state.papers.cutters[i];
-      if (d2(player.pos.x, player.pos.z, d.x, d.z) > CUTTER_SIZE * 0.7 + PLAYER_RADIUS) continue;
+      var inX = d.x - MILL_PILE_OFFSET, outX = d.x + MILL_PILE_OFFSET;
+      var nearIn = d2(player.pos.x, player.pos.z, inX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      var nearOut = d2(player.pos.x, player.pos.z, outX, d.z) <= MILL_PILE_HALF + PLAYER_RADIUS;
+      if (!nearIn && !nearOut) continue;
       var fed = 0, cap = papersHopperCap();
-      for (var b = player.backpack.length - 1; b >= 0; b--) {
-        if (c.lumber + fed >= cap) break;
-        if (player.backpack[b].type === "lumber") { player.backpack.splice(b, 1); fed++; }
+      if (nearIn) {
+        for (var b = player.backpack.length - 1; b >= 0; b--) {
+          if (c.lumber + fed >= cap) break;
+          if (player.backpack[b].type === "lumber") { player.backpack.splice(b, 1); fed++; }
+        }
+        if (fed) { c.lumber += fed; addFloater(inX, 3.6, d.z, "+" + fed + " LUMBER", "#d7a869"); }
       }
-      if (fed) { c.lumber += fed; addFloater(d.x, 3.6, d.z, "+" + fed + " LUMBER", "#d7a869"); }
       var took = 0;
-      while (c.papers > 0 && player.backpack.length < backpackCap()) {
-        c.papers--; player.backpack.push({ type: "papers" }); took++;
+      if (nearOut) {
+        while (c.papers > 0 && player.backpack.length < backpackCap()) {
+          c.papers--; player.backpack.push({ type: "papers" }); took++;
+        }
+        if (took) addFloater(outX, 4.0, d.z, "+" + took + " PAPERS", "#e8dcc0");
       }
-      if (took) addFloater(d.x, 4.0, d.z, "+" + took + " PAPERS", "#e8dcc0");
       if (fed || took) { syncStack(); renderUpgrades(); }
     }
   }
@@ -12410,6 +12499,26 @@
   //  HUD / SHOP
   // ===================================================================
   var cashEl = document.getElementById("cash-val");
+  // The HUD number itself eases toward state.cash rather than snapping to it
+  // — the actual "idle game feel" ask. state.cash stays the authoritative,
+  // instant value every purchase/cost check reads; this is purely a display
+  // layer on top of it, driven every frame (see updateCashDisplay below) so
+  // a payout counts up rather than jumping, the same way the $/sec readout
+  // eases instead of stepping.
+  var displayCash = state.cash;
+  function updateCashDisplay(dt) {
+    var diff = state.cash - displayCash;
+    if (diff === 0) return;
+    // Snap once the gap is imperceptible, rather than easing toward it
+    // forever — floating point never quite reaches an asymptotic target.
+    if (Math.abs(diff) < Math.max(1, Math.abs(state.cash) * 1e-6)) {
+      displayCash = state.cash;
+    } else {
+      // Framerate-independent: the same catch-up speed at 30fps or 144fps.
+      displayCash += diff * (1 - Math.exp(-5 * dt));
+    }
+    cashEl.textContent = fmt(displayCash);
+  }
   var productHud = document.getElementById("product-hud");
   // The tutorial hint is centred and the product panel is top-left; on a phone
   // they share that band, so the hint is parked under whatever height the
@@ -12630,27 +12739,38 @@
   // Only meaningful once the accountant is hired: before that, every till
   // piles cash on the ground until you walk over it, so an instantaneous
   // delta on state.cash would read as bursty rather than a real rate. Once
-  // every till pays straight into the bankroll the moment it's earned, a
-  // rolling average of state.cash itself becomes an accurate live number —
-  // no need to separately track each production line.
-  var cashRateSamples = [];
-  var CASH_RATE_WINDOW = 8;   // seconds averaged over, smooths out single big sales
-  function pushCashRateSample(nowMs) {
+  // every till pays straight into the bankroll the moment it's earned, this
+  // becomes an accurate live number — no need to separately track each
+  // production line.
+  //
+  // A plain trailing average (gain over the last N seconds, divided by N)
+  // was tried first and reads as a flat "$0/sec" any time the window has no
+  // payout in it — and several sources here pay out in real lumps (a papers
+  // truck loads over ~20s then departs; the dock truck is similar), so an
+  // 8-30s window still spends much of its time empty. An attack/decay
+  // envelope instead: a payout snaps the number up immediately (attack is
+  // fast), then it eases back down over a few seconds rather than dropping
+  // straight to zero (decay is slow) — the same shape a VU meter uses, and
+  // it reads as "alive" the way a hard binary 0-or-a-number never does.
+  var cashRate = 0;
+  var lastRateT = null, lastRateCash = null;
+  function updateCashRate(nowMs) {
     var t = nowMs / 1000;
-    cashRateSamples.push({ t: t, cash: state.cash });
-    var cutoff = t - CASH_RATE_WINDOW;
-    while (cashRateSamples.length > 1 && cashRateSamples[0].t < cutoff) cashRateSamples.shift();
+    if (lastRateT === null) { lastRateT = t; lastRateCash = state.cash; return; }
+    var dt = t - lastRateT;
+    if (dt <= 0) return;
+    var inst = (state.cash - lastRateCash) / dt;
+    // Rising: jump most of the way there in one tick, so a payout is felt
+    // right away. Falling: ease down slowly, over roughly 4-5 seconds, so
+    // the number between payouts drains rather than cutting out.
+    var k = inst > cashRate ? 0.6 : 0.05;
+    cashRate += (inst - cashRate) * k;
+    // Floored at 0 — a purchase reads as "not currently gaining", not as
+    // the negative dip the raw instantaneous delta would otherwise show.
+    if (cashRate < 0) cashRate = 0;
+    lastRateT = t; lastRateCash = state.cash;
   }
-  function cashPerSecond() {
-    if (cashRateSamples.length < 2) return 0;
-    var oldest = cashRateSamples[0], newest = cashRateSamples[cashRateSamples.length - 1];
-    var span = newest.t - oldest.t;
-    if (span <= 0) return 0;
-    // Floored at 0 for display — a purchase mid-window would otherwise show
-    // as a dip into negative, which reads as "losing money" rather than
-    // what it actually is (you spent some of what you'd made).
-    return Math.max(0, (newest.cash - oldest.cash) / span);
-  }
+  function cashPerSecond() { return cashRate; }
 
   // Collections come in bursts, so batch anything landing within the same
   // second into one number rather than restarting the animation each time.
@@ -12672,7 +12792,8 @@
   // tutorial hint repositioned exactly like a product row count change does.
   var lastRateOn = false;
   function renderHud() {
-    cashEl.textContent = fmt(state.cash);
+    // cashEl's text is owned by updateCashDisplay(), called every frame, so
+    // the number can ease toward state.cash instead of snapping to it here.
     var rateOn = accountantHired();
     if (rateOn) {
       rateChip.classList.add("on");
@@ -14127,6 +14248,7 @@
     var dt = Math.min((now - last) / 1000, 0.08);
     last = now;
 
+    updateCashDisplay(dt);
     updatePlayer(dt, now);
     updateCamera(dt);
     updatePlotStates();
@@ -14220,7 +14342,7 @@
     sellRing.material.opacity = 0.35 + Math.sin(now * 0.003 + 1.2) * 0.18;
 
     hudAcc += dt;
-    if (hudAcc > 0.1) { pushCashRateSample(now); renderHud(); renderPrompt(); hudAcc = 0; }
+    if (hudAcc > 0.1) { updateCashRate(now); renderHud(); renderPrompt(); hudAcc = 0; }
 
     faceBarsAtCamera();
     renderer.render(scene, camera);
