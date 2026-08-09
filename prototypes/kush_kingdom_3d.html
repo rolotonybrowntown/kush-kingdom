@@ -129,6 +129,14 @@
   .chip.perk .icon { background: linear-gradient(180deg, #ffe066, #b8860b); }
   .chip.perk span { color: #ffe9a8; }
 
+  /* net cash/sec, averaged over a rolling window — only meaningful once the
+     accountant is hired, since before that income sits in piles until you
+     walk over them and would read as bursty rather than a real rate */
+  .chip.rate { display: none; }
+  .chip.rate.on { display: flex; }
+  .chip.rate .icon { background: linear-gradient(180deg, #6fd68a, #23834f); }
+  .chip.rate span { color: #b7f5c9; }
+
   /* shop level, riding on the corner of the cash chip */
   .chip.cash { position: relative; overflow: visible; }
   #level-star {
@@ -742,6 +750,7 @@
         <div id="level-star"><span id="level-val">1</span></div>
         <div id="cash-gain"></div>
       </div>
+      <div class="chip rate" id="rate-chip"><div class="icon">📈</div><span id="rate-val">$0/sec</span></div>
       <div id="product-hud"></div>
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
@@ -12614,6 +12623,34 @@
   var weatherVal = document.getElementById("weather-val");
   var promoVal = document.getElementById("promo-val");
   var levelVal = document.getElementById("level-val");
+  var rateChip = document.getElementById("rate-chip");
+  var rateVal = document.getElementById("rate-val");
+
+  // ---- cash/sec readout ----
+  // Only meaningful once the accountant is hired: before that, every till
+  // piles cash on the ground until you walk over it, so an instantaneous
+  // delta on state.cash would read as bursty rather than a real rate. Once
+  // every till pays straight into the bankroll the moment it's earned, a
+  // rolling average of state.cash itself becomes an accurate live number —
+  // no need to separately track each production line.
+  var cashRateSamples = [];
+  var CASH_RATE_WINDOW = 8;   // seconds averaged over, smooths out single big sales
+  function pushCashRateSample(nowMs) {
+    var t = nowMs / 1000;
+    cashRateSamples.push({ t: t, cash: state.cash });
+    var cutoff = t - CASH_RATE_WINDOW;
+    while (cashRateSamples.length > 1 && cashRateSamples[0].t < cutoff) cashRateSamples.shift();
+  }
+  function cashPerSecond() {
+    if (cashRateSamples.length < 2) return 0;
+    var oldest = cashRateSamples[0], newest = cashRateSamples[cashRateSamples.length - 1];
+    var span = newest.t - oldest.t;
+    if (span <= 0) return 0;
+    // Floored at 0 for display — a purchase mid-window would otherwise show
+    // as a dip into negative, which reads as "losing money" rather than
+    // what it actually is (you spent some of what you'd made).
+    return Math.max(0, (newest.cash - oldest.cash) / span);
+  }
 
   // Collections come in bursts, so batch anything landing within the same
   // second into one number rather than restarting the animation each time.
@@ -12630,8 +12667,23 @@
     cashGainTimer = setTimeout(function () { cashGainTotal = 0; }, 1150);
   }
 
+  // Tracked separately from lastProductRows (below) — this chip appearing
+  // shifts product-hud down in the same flex column, and that needs the
+  // tutorial hint repositioned exactly like a product row count change does.
+  var lastRateOn = false;
   function renderHud() {
     cashEl.textContent = fmt(state.cash);
+    var rateOn = accountantHired();
+    if (rateOn) {
+      rateChip.classList.add("on");
+      rateVal.textContent = "$" + fmt(cashPerSecond()) + "/sec";
+    } else {
+      rateChip.classList.remove("on");
+    }
+    if (rateOn !== lastRateOn) {
+      lastRateOn = rateOn;
+      positionObjective();
+    }
     renderProductHud();
     // the bag only speaks up when it's full and blocking you
     packChip.classList.toggle("on", player.backpack.length >= backpackCap());
@@ -14168,7 +14220,7 @@
     sellRing.material.opacity = 0.35 + Math.sin(now * 0.003 + 1.2) * 0.18;
 
     hudAcc += dt;
-    if (hudAcc > 0.1) { renderHud(); renderPrompt(); hudAcc = 0; }
+    if (hudAcc > 0.1) { pushCashRateSample(now); renderHud(); renderPrompt(); hudAcc = 0; }
 
     faceBarsAtCamera();
     renderer.render(scene, camera);
