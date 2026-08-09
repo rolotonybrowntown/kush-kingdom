@@ -1483,7 +1483,9 @@
       unlock: function () { return !!state.foundCheat; },
       req: "Find something you weren't meant to",
       mysteryMult: 0.5,
-      effect: "Mystery crates come round twice as often.",
+      // keeps the flavour line as well as the effect — the row shows one
+      // description, and this hat's whole character is that question
+      effect: "Who do you know? Mystery crates come round twice as often.",
     },
     bucket: {
       name: "Bucket Hat", desc: "Shade for the grow room.",
@@ -9013,11 +9015,15 @@
       seam.scale.set(1.06, 1.12, 1);
     });
 
-    // "Bucket Hat" — straight olive crown under a wide brim that flares down.
+    // "Bucket Hat" — a bucket needs a tall crown and a short brim that
+    // slopes down; the first pass had a squat crown and a wide flat brim,
+    // which just reads as a sun hat. Crown is half again as tall, brim is
+    // narrower and given real height so the downward angle actually shows.
     makeHat("bucket", function (g) {
-      hatPart(g, new THREE.CylinderGeometry(0.37, 0.39, 0.36, 20), M.plantDeep, 2.5);
-      hatPart(g, new THREE.CylinderGeometry(0.39, 0.66, 0.09, 24), M.plantDeep, 2.31);
-      hatPart(g, new THREE.CylinderGeometry(0.395, 0.395, 0.07, 20), M.plant, 2.36);
+      hatPart(g, new THREE.CylinderGeometry(0.355, 0.395, 0.52, 20), M.plantDeep, 2.60);
+      hatPart(g, new THREE.CylinderGeometry(0.40, 0.575, 0.20, 24), M.plantDeep, 2.30);
+      var stitch = hatPart(g, new THREE.TorusGeometry(0.375, 0.022, 8, 22), M.plant, 2.50);
+      stitch.rotation.x = Math.PI / 2;
     });
 
     // "Black Beanie" — Ole Reliable's silhouette in black, no bobble.
@@ -14478,9 +14484,11 @@
       var have = hatUnlocked(id);
       var equipped = wornHat === id;
       var buyable = !!h.cost && !have;
-      // effect line when you have it, requirement line when you don't
-      var desc = have ? (h.effect || h.desc)
-               : (h.cost ? h.desc : "🔒 " + (h.req || "Locked"));
+      // What it does, always — you can't decide whether a hat is worth
+      // chasing if the locked row only tells you the price of entry. The
+      // requirement rides alongside it rather than replacing it.
+      var desc = h.effect || h.desc;
+      if (!have && !h.cost) desc += " · 🔒 " + (h.req || "Locked");
       officeHatRows.appendChild(buildOfficeRow({
         name: h.name,
         desc: desc,
