@@ -1411,7 +1411,12 @@
   var MAX_WOODCUTTERS = 4, MAX_MILLHANDS = 3;
   function costWoodcutter() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.woodcutterLv) || 0)); }
   function costMillhand() { return scaled(9000000 * Math.pow(2.7, (state.papers && state.papers.millhandLv) || 0)); }
+  // Without a foreman, woodcutters and mill hands only work while you're
+  // physically standing at the mill (see siteActive) — same rule the farm
+  // has before its Manager is hired.
+  var PAPERS_FOREMAN_COST = 40000000;
   var PAPERS_HR_ZONE = { x: PAPERS_HALF_X - 10, z: PAPERS_LANE_Z + 7 };
+  var PAPERS_FOREMAN_ZONE = { x: PAPERS_HALF_X - 19, z: PAPERS_LANE_Z + 7 };
   var WOODCUTTER_ZONE = { x: PAPERS_FOREST_COL_X, z: PAPERS_HIRE_Z };
   var MILLHAND_ZONE = { x: PAPERS_PLANER_COL_X, z: PAPERS_HIRE_Z };
 
@@ -13217,6 +13222,26 @@
       buy: function () {
         state.papers.millhandLv = (state.papers.millhandLv || 0) + 1;
         toast("\ud83e\udea2 Mill hand hired \u2014 the relay runs itself!");
+      },
+    },
+    {
+      // Same role as the Farm Manager: without one, woodcutters and mill
+      // hands only work while you're standing at the mill.
+      id: "millforeman", label: "FOREMAN", icon: "\ud83d\udcbc",
+      x: PAPERS_FOREMAN_ZONE.x, z: PAPERS_FOREMAN_ZONE.z,
+      site: "papers", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !papersUnlocked(); },
+      name: function () { return "Hire a Mill Foreman"; },
+      desc: function () {
+        return state.managers.papers
+          ? "The mill runs itself, whether you're here or at the shop"
+          : "Keeps the woodcutters and mill hands working while you're away";
+      },
+      cost: function () { return scaled(PAPERS_FOREMAN_COST); },
+      maxed: function () { return !!state.managers.papers; },
+      buy: function () {
+        state.managers.papers = true;
+        toast("\ud83d\udcbc Mill Foreman hired \u2014 the mill runs itself now!");
       },
     },
     // ---- the mill's machine upgrades. These costs and levels already existed
