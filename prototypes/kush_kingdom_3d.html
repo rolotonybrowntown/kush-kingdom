@@ -1457,14 +1457,100 @@
   }
 
   // ---- hats ----
-  var HATS = {
-    reliable:  { name: "Ole Reliable", desc: "A stylish hat.", bonus: 0, cost: 0 },
-    executive: { name: "The Executive", desc: "+10% production in this city.", bonus: 0.10, cost: 8e13 },
-  };
-  function hatProdMult() {
-    var h = HATS[state.equippedHat] || HATS.reliable;
-    return 1 + h.bonus;
+  // Two kinds live here. A hat with a `cost` is bought from the locker; a hat
+  // with an `unlock` is earned by playing and can never be lost, so it needs
+  // no bookkeeping in hatsOwned — the condition IS the record.
+  //
+  // Levels are quoted the way the HUD prints them (1-based), so "Lv.50" in the
+  // panel is exactly what these read.
+  function budLevel()    { return (state.sellLv || 0) + 1; }
+  function dabLevel()    { return (state.dabLv || 0) + 1; }
+  function edibleLevel() { return (state.edibleLv || 0) + 1; }
+  function storeLinesAt(n) {
+    return budLevel() >= n && dabLevel() >= n && edibleLevel() >= n;
   }
+
+  var HATS = {
+    reliable: {
+      name: "Ole Reliable", desc: "A stylish hat.", bonus: 0, cost: 0,
+    },
+    executive: {
+      name: "The Executive", desc: "+10% production in this city.",
+      bonus: 0.10, cost: 8e13,
+    },
+    sneaky: {
+      name: "Sneaky Pete", desc: "Who do you know?",
+      unlock: function () { return !!state.foundCheat; },
+      req: "Find something you weren't meant to",
+      mysteryMult: 0.5,
+      effect: "Mystery crates come round twice as often.",
+    },
+    bucket: {
+      name: "Bucket Hat", desc: "Shade for the grow room.",
+      unlock: function () { return budLevel() >= 50; },
+      req: "Bud at Lv.50",
+      lines: { bud: 2 },
+      effect: "Bud grows twice as fast.",
+    },
+    blackbeanie: {
+      name: "Black Beanie", desc: "Low profile, high pressure.",
+      unlock: function () { return dabLevel() >= 50; },
+      req: "Dabs at Lv.50",
+      lines: { dab: 2 },
+      effect: "Presses run twice as fast.",
+    },
+    chef: {
+      name: "Chef's Hat", desc: "Back of house, front of mind.",
+      unlock: function () { return edibleLevel() >= 50; },
+      req: "Edibles at Lv.50",
+      lines: { edible: 2 },
+      effect: "Ovens bake twice as fast.",
+    },
+    party: {
+      name: "Party Hat", desc: "Every line hit fifty. Worth a cone.",
+      unlock: function () { return storeLinesAt(50); },
+      req: "Bud, dabs and edibles all at Lv.50",
+      lines: { all: 1.5 },
+      effect: "Everything in the store runs 50% faster.",
+    },
+    topper: {
+      name: "White Top Hat", desc: "You own the block now.",
+      unlock: function () { return storeLinesAt(100); },
+      req: "Bud, dabs and edibles all at Lv.100",
+      valueMult: 2,
+      effect: "Everything the store sells is worth double.",
+    },
+  };
+  // Locker order — also the order they're meant to be earned in.
+  var HAT_ORDER = ["reliable", "executive", "sneaky", "bucket", "blackbeanie", "chef", "party", "topper"];
+
+  function hatDef(id) { return HATS[id] || HATS.reliable; }
+  function hatUnlocked(id) {
+    var h = HATS[id];
+    if (!h) return false;
+    if (h.cost) return !!(state.hatsOwned && state.hatsOwned[id]);
+    if (h.unlock) return !!h.unlock();
+    return true;                                  // Ole Reliable, always yours
+  }
+  // The hat you are actually wearing. Guards against a save that has an
+  // earned hat equipped whose condition no longer holds (a reset, an edit).
+  function equippedHatId() {
+    var id = state.equippedHat || "reliable";
+    return hatUnlocked(id) ? id : "reliable";
+  }
+  // Executive's flat bonus — still global, still folded into perkProdMult.
+  function hatProdMult() {
+    return 1 + (hatDef(equippedHatId()).bonus || 0);
+  }
+  // Per-line speed. `all` covers the store as a whole (the Party Hat);
+  // a named line wins over it if both are somehow present.
+  function hatLineMult(line) {
+    var h = hatDef(equippedHatId());
+    if (!h.lines) return 1;
+    return h.lines[line] || h.lines.all || 1;
+  }
+  function hatValueMult()   { return hatDef(equippedHatId()).valueMult || 1; }
+  function hatMysteryMult() { return hatDef(equippedHatId()).mysteryMult || 1; }
 
   // ---- cities: today there is only Hometown, but the map and the
   // terminal both read through this so a second city is a data change,
@@ -1686,6 +1772,9 @@
   // What is inside stays unknown until you pay — rolling at purchase rather
   // than at spawn is what makes it a mystery box rather than a shop.
   var MYSTERY_COOLDOWN_MS = 3600 * 1000;           // "once an hour", literally
+  // Sneaky Pete halves it. Everything that schedules the next crate reads
+  // this rather than the constant, so the hat applies wherever you are.
+  function mysteryCooldownMs() { return Math.round(MYSTERY_COOLDOWN_MS * hatMysteryMult()); }
   var MYSTERY_PERK_MS = 600 * 1000;                // every perk runs 10 minutes
   var MYSTERY_PERKS = [
     { kind: "prod", icon: "⚙️", name: "Overtime",
@@ -1878,7 +1967,7 @@
   function pressTimeFor() {
     var t = BASE_PRESS_TIME * Math.pow(0.78, state.ramLv || 0);
     if (boostActive()) t *= 0.5;
-    t /= perkProdMult();
+    t /= perkProdMult() * hatLineMult("dab");
     return Math.max(t, 0.8);
   }
   function ramCost(lv) { return Math.round(12000 * Math.pow(2.6, lv)); }
@@ -1923,7 +2012,7 @@
   function bakeTimeFor() {
     var t = BASE_BAKE_TIME * Math.pow(0.78, state.fanLv || 0);
     if (boostActive()) t *= 0.5;
-    t /= perkProdMult();
+    t /= perkProdMult() * hatLineMult("edible");
     return Math.max(1, t);
   }
   function fanCost(lv) { return Math.round(80000 * Math.pow(2.6, lv)); }
@@ -2231,6 +2320,7 @@
       couchDay: null,         // "YYYY-M-D" of the last day the couch paid out
       barnSecs: 0,            // how long you have stood in the farm's barn
       barnClaimed: false,     // the barn pays out once
+      foundCheat: false,      // ever tripped a hidden payout — unlocks Sneaky Pete
       // nextAt 0 means "one is waiting right now" — the very first crate is
       // free to find, so the mechanic gets discovered instead of missed
       mystery: { nextAt: 0, cost: 0, perkKind: null, perkUntil: 0, spot: 0, expiresAt: 0 },
@@ -2239,6 +2329,8 @@
       officeTier: 0,
       profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0 },
       equippedHat: "reliable",
+      // Only bought hats live here; earned ones are recomputed from their
+      // own condition every time, so they can never be lost or forged.
       hatsOwned: { reliable: true, executive: false },
       cityId: "home",
       plotsUnlocked: STARTING_PLOTS,
@@ -2482,7 +2574,12 @@
       if (!merged.hatsOwned || typeof merged.hatsOwned !== "object") merged.hatsOwned = {};
       merged.hatsOwned.reliable = true;   // always in the locker
       merged.hatsOwned.executive = !!merged.hatsOwned.executive;
-      merged.equippedHat = (merged.equippedHat === "executive" && merged.hatsOwned.executive) ? "executive" : "reliable";
+      // An unknown id (a hand-edited save, a hat removed in a later build)
+      // falls back rather than leaving you in a hat that does not exist.
+      // Whether an earned hat is actually yours is settled by equippedHatId()
+      // at read time, which cannot run this early — HATS is not built yet.
+      if (HAT_ORDER.indexOf(merged.equippedHat) < 0) merged.equippedHat = "reliable";
+      merged.foundCheat = !!merged.foundCheat;
       merged.cityId = (typeof merged.cityId === "string" && merged.cityId) ? merged.cityId : "home";
 
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
@@ -2619,6 +2716,7 @@
       if (!MYSTERY_PERKS.some(function (p) { return p.kind === my.perkKind; })) my.perkKind = null;
       // A clock that jumped forward (timezone change, a save edited by hand)
       // must not push the next crate hours out — cap the wait at one cooldown.
+      // raw constant, not mysteryCooldownMs(): this runs before state exists
       my.nextAt = Math.min(my.nextAt, Date.now() + MYSTERY_COOLDOWN_MS);
       if (typeof my.spot !== "number" || !isFinite(my.spot) || my.spot < 0) my.spot = 0;
       // Saves from before the window existed have no expiry; treat them as a
@@ -2665,7 +2763,7 @@
   // anchor for factory goods, which must NOT inherit the shop's own
   // profit-tier bonus just because they share a formula shape.
   function sellValueBase() { return sellValueAt(state.sellLv || 0); }
-  function sellValue() { return sellValueBase() * officeProfitMult("shop"); }
+  function sellValue() { return sellValueBase() * officeProfitMult("shop") * hatValueMult(); }
   var STRAIN_NAMES = [
     "Bag Seed", "Green Crack", "Sour Diesel", "Blue Dream", "Gelato",
     "Wedding Cake", "Purple Punch", "Zkittlez", "Runtz", "Gorilla Glue",
@@ -2722,7 +2820,7 @@
     if (now < (m.nextAt || 0)) return;        // still on cooldown
     if (now < (m.expiresAt || 0)) return;     // window open and running
     if (m.expiresAt) {                        // window just closed unclaimed
-      m.nextAt = now + MYSTERY_COOLDOWN_MS;
+      m.nextAt = now + mysteryCooldownMs();
       m.expiresAt = 0;
       m.cost = 0;
       saveState();
@@ -2742,7 +2840,7 @@
   function growTimeFor(idx) {
     var t = BASE_GROW_TIME * Math.pow(0.72, lightLvOf(idx));
     if (boostActive()) t *= 0.5;
-    t /= perkProdMult();
+    t /= perkProdMult() * hatLineMult("bud");
     return Math.max(t, 0.8);
   }
 
@@ -8812,7 +8910,8 @@
   })();
   var stackAnchor = new THREE.Group();
   var legL, legR, armL, armR, bodyGroup;
-  var hatGroup, hatReliableGroup, hatExecutiveGroup;
+  var hatGroup;
+  var hatMeshes = {};        // hat id -> its THREE.Group
 
   (function buildPlayer() {
     bodyGroup = new THREE.Group();
@@ -8862,35 +8961,97 @@
       bodyGroup.add(tip);
     });
 
-    // ---- hats: one toggleable group per hat, only one visible at a time,
-    // swapped by refreshHat() based on state.equippedHat ----
+    // ---- hats: one group per hat, keyed by the same id HATS uses, only one
+    // visible at a time. refreshHat() does the swapping; adding a hat is an
+    // entry here and an entry in HATS, nothing else. ----
     hatGroup = new THREE.Group();
     bodyGroup.add(hatGroup);
 
+    function makeHat(id, build) {
+      var g = new THREE.Group();
+      build(g);
+      g.visible = false;
+      hatGroup.add(g);
+      hatMeshes[id] = g;
+      return g;
+    }
+    function hatPart(g, geo, mat, y, z) {
+      var m = new THREE.Mesh(geo, mat);
+      m.position.set(0, y, z || 0);
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    }
+
     // "Ole Reliable" — the beanie every save starts with: rounded dome
     // with a rolled brim.
-    hatReliableGroup = new THREE.Group();
-    var beanie = new THREE.Mesh(new THREE.SphereGeometry(0.405, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), M.beanie);
-    beanie.position.y = 2.34; beanie.scale.set(1, 1.15, 1);
-    beanie.castShadow = true; hatReliableGroup.add(beanie);
-    var brim = new THREE.Mesh(new THREE.TorusGeometry(0.375, 0.095, 10, 24), M.beanieDk);
-    brim.position.y = 2.36; brim.rotation.x = Math.PI / 2;
-    brim.castShadow = true; hatReliableGroup.add(brim);
-    var nub = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), M.beanieDk);
-    nub.position.y = 2.79; hatReliableGroup.add(nub);
-    hatGroup.add(hatReliableGroup);
+    makeHat("reliable", function (g) {
+      var beanie = hatPart(g, new THREE.SphereGeometry(0.405, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), M.beanie, 2.34);
+      beanie.scale.set(1, 1.15, 1);
+      var brim = hatPart(g, new THREE.TorusGeometry(0.375, 0.095, 10, 24), M.beanieDk, 2.36);
+      brim.rotation.x = Math.PI / 2;
+      hatPart(g, new THREE.SphereGeometry(0.075, 10, 8), M.beanieDk, 2.79);
+    });
 
-    // "The Executive" — a flat-topped fedora, dark with a gold band, bought
-    // from the office's hat locker.
-    hatExecutiveGroup = new THREE.Group();
-    var fedoraCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.28, 18), M.dark);
-    fedoraCrown.position.y = 2.5; fedoraCrown.castShadow = true; hatExecutiveGroup.add(fedoraCrown);
-    var fedoraBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.05, 22), M.dark);
-    fedoraBrim.position.y = 2.37; fedoraBrim.castShadow = true; hatExecutiveGroup.add(fedoraBrim);
-    var fedoraBand = new THREE.Mesh(new THREE.CylinderGeometry(0.285, 0.285, 0.07, 18), M.gold);
-    fedoraBand.position.y = 2.4; hatExecutiveGroup.add(fedoraBand);
-    hatExecutiveGroup.visible = false;
-    hatGroup.add(hatExecutiveGroup);
+    // "The Executive" — a flat-topped fedora, dark with a gold band.
+    makeHat("executive", function (g) {
+      hatPart(g, new THREE.CylinderGeometry(0.28, 0.32, 0.28, 18), M.dark, 2.5);
+      hatPart(g, new THREE.CylinderGeometry(0.46, 0.46, 0.05, 22), M.dark, 2.37);
+      hatPart(g, new THREE.CylinderGeometry(0.285, 0.285, 0.07, 18), M.gold, 2.4);
+    });
+
+    // "Sneaky Pete" — a Kangol-ish flat cap: low squashed crown pulled
+    // forward over a short stitched peak.
+    makeHat("sneaky", function (g) {
+      var crown = hatPart(g, new THREE.SphereGeometry(0.41, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), M.suit, 2.33, -0.03);
+      crown.scale.set(1.06, 0.62, 1.12);
+      var peak = hatPart(g, new THREE.CylinderGeometry(0.40, 0.40, 0.05, 20, 1, false, 0, Math.PI), M.suitShirt, 2.28, 0.10);
+      peak.rotation.y = Math.PI;      // half-disc pointing forward
+      peak.rotation.x = -0.12;        // tipped down like a real peak
+      var seam = hatPart(g, new THREE.TorusGeometry(0.30, 0.035, 8, 20), M.suitShirt, 2.40, -0.03);
+      seam.rotation.x = Math.PI / 2;
+      seam.scale.set(1.06, 1.12, 1);
+    });
+
+    // "Bucket Hat" — straight olive crown under a wide brim that flares down.
+    makeHat("bucket", function (g) {
+      hatPart(g, new THREE.CylinderGeometry(0.37, 0.39, 0.36, 20), M.plantDeep, 2.5);
+      hatPart(g, new THREE.CylinderGeometry(0.39, 0.66, 0.09, 24), M.plantDeep, 2.31);
+      hatPart(g, new THREE.CylinderGeometry(0.395, 0.395, 0.07, 20), M.plant, 2.36);
+    });
+
+    // "Black Beanie" — Ole Reliable's silhouette in black, no bobble.
+    makeHat("blackbeanie", function (g) {
+      var dome = hatPart(g, new THREE.SphereGeometry(0.405, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), M.suit, 2.34);
+      dome.scale.set(1, 1.08, 1);
+      var roll = hatPart(g, new THREE.TorusGeometry(0.375, 0.10, 10, 24), M.dark, 2.35);
+      roll.rotation.x = Math.PI / 2;
+    });
+
+    // "Chef's Hat" — banded toque with a puffed crown.
+    makeHat("chef", function (g) {
+      hatPart(g, new THREE.CylinderGeometry(0.37, 0.37, 0.20, 20), M.white2, 2.42);
+      hatPart(g, new THREE.CylinderGeometry(0.34, 0.35, 0.30, 20), M.white2, 2.66);
+      var puff = hatPart(g, new THREE.SphereGeometry(0.42, 18, 14), M.white2, 2.92);
+      puff.scale.set(1, 0.78, 1);
+    });
+
+    // "Party Hat" — striped cone and a bobble, because you earned it.
+    makeHat("party", function (g) {
+      hatPart(g, new THREE.ConeGeometry(0.36, 0.82, 14), M.neonPink, 2.74);
+      [[2.50, 0.30, M.gold], [2.68, 0.22, M.neonGreen], [2.86, 0.13, M.gold]].forEach(function (b) {
+        var ring = hatPart(g, new THREE.TorusGeometry(b[1], 0.035, 8, 18), b[2], b[0]);
+        ring.rotation.x = Math.PI / 2;
+      });
+      hatPart(g, new THREE.SphereGeometry(0.11, 12, 10), M.gold, 3.18);
+    });
+
+    // "White Top Hat" — tall, white, gold band. The end of the ladder.
+    makeHat("topper", function (g) {
+      hatPart(g, new THREE.CylinderGeometry(0.58, 0.58, 0.06, 24), M.white2, 2.33);
+      hatPart(g, new THREE.CylinderGeometry(0.36, 0.34, 0.66, 22), M.white2, 2.68);
+      hatPart(g, new THREE.CylinderGeometry(0.365, 0.365, 0.11, 22), M.gold, 2.43);
+    });
 
     // ---- arms: pivot at the shoulder so the swing looks natural ----
     function makeArm(side) {
@@ -8936,9 +9097,11 @@
   })();
 
   function refreshHat() {
-    var executive = state.equippedHat === "executive";
-    hatReliableGroup.visible = !executive;
-    hatExecutiveGroup.visible = executive;
+    // equippedHatId() rather than state.equippedHat: an earned hat whose
+    // condition no longer holds falls back to Ole Reliable instead of
+    // leaving you bare-headed.
+    var worn = equippedHatId();
+    for (var id in hatMeshes) hatMeshes[id].visible = (id === worn);
   }
   refreshHat();
 
@@ -14105,6 +14268,7 @@
     if (!text.trim()) { feedbackText.focus(); return; }
     if (runCheat(text)) {
       // a code closes the whole menu so you land straight back in the game
+      markCheatFound();
       closeFeedback();
       closeMenu();
       saveState();
@@ -14304,20 +14468,29 @@
     });
 
     // ---- hat locker ----
+    // Every hat is listed, earned or not. A locked one shows what earns it
+    // rather than hiding — the requirement is the point of the collection.
     officeHatRows.innerHTML = "";
-    ["reliable", "executive"].forEach(function (id) {
+    var wornHat = equippedHatId();
+    HAT_ORDER.forEach(function (id) {
       var h = HATS[id];
-      var owned = !!(state.hatsOwned && state.hatsOwned[id]);
-      var equipped = state.equippedHat === id;
+      if (!h) return;
+      var have = hatUnlocked(id);
+      var equipped = wornHat === id;
+      var buyable = !!h.cost && !have;
+      // effect line when you have it, requirement line when you don't
+      var desc = have ? (h.effect || h.desc)
+               : (h.cost ? h.desc : "🔒 " + (h.req || "Locked"));
       officeHatRows.appendChild(buildOfficeRow({
         name: h.name,
-        desc: h.desc,
-        btnText: equipped ? "Equipped" : owned ? "Equip" : "$" + fmt(h.cost),
-        disabled: equipped || (!owned && state.cash < h.cost),
+        desc: desc,
+        btnText: equipped ? "Equipped" : have ? "Equip" : buyable ? "$" + fmt(h.cost) : "Locked",
+        disabled: equipped || (!have && !buyable) || (buyable && state.cash < h.cost),
+        locked: !have && !buyable,
         onClick: function () {
           if (equipped) return;
-          if (!owned) {
-            if (state.cash < h.cost) return;
+          if (!have) {
+            if (!buyable || state.cash < h.cost) return;
             state.cash -= h.cost;
             state.hatsOwned[id] = true;
             toast("🎩 " + h.name + " unlocked!");
@@ -14429,7 +14602,7 @@
     state.mystery.perkUntil = Date.now() + MYSTERY_PERK_MS;
     // cost clears with the crate so the next one is priced at that day's rates
     state.mystery.cost = 0;
-    state.mystery.nextAt = Date.now() + MYSTERY_COOLDOWN_MS;
+    state.mystery.nextAt = Date.now() + mysteryCooldownMs();
     state.mystery.expiresAt = 0;   // closes the window; the next tick opens a fresh one
     var spot = mysterySpot();
     addFloater(spot.x, 2.8, spot.z, perk.icon + " " + perk.name.toUpperCase(), "#ffe066");
@@ -14560,6 +14733,16 @@
   // minute nine does not throw the whole wait away. Pays out once per
   // calendar day (dayKey(), the same boundary the login streak uses) rather
   // than once ever.
+  // Sneaky Pete is the reward for finding any of the hidden payouts — the
+  // couch, the barn, or a code in the feedback box. One flag covers all three
+  // so the hat is "you found something", not "you found this specific thing".
+  function markCheatFound() {
+    if (state.foundCheat) return;
+    state.foundCheat = true;
+    toast("🧢 Word gets around. A new hat turned up in your locker.");
+    saveState();
+  }
+
   function updateCouch(dt) {
     var today = dayKey(Date.now());
     if (state.couchDay === today) return;
@@ -14579,6 +14762,7 @@
     showCashGain(COUCH_REWARD);
     Snd.upgrade();
     toast("🛋️ Nice sit. Somebody left $" + fmt(COUCH_REWARD) + " down the back.");
+    markCheatFound();
     renderHud();
     saveState();
   }
@@ -14606,6 +14790,7 @@
     showCashGain(BARN_REWARD);
     Snd.upgrade();
     toast("🏠 Found something in the hayloft. +$" + fmt(BARN_REWARD));
+    markCheatFound();
     renderHud();
     saveState();
   }
