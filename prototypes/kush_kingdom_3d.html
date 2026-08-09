@@ -3511,6 +3511,9 @@
     beanie:    mat(0x8e2f1e, { map: fabricTex, roughness: 0.95 }),
     beanieDk:  mat(0x6d2214, { map: fabricTex, roughness: 0.95 }),
     jeans:     mat(0x24384f, { map: fabricTex, roughness: 0.95 }),
+    // black cloth for the bucket hat — the weave keeps it reading as fabric
+    // rather than the flat plastic black M.dark would give it
+    hatBlack:  mat(0x191b1f, { map: fabricTex, roughness: 0.96 }),
     shoe:      mat(0x22252b, { roughness: 0.6 }),
     drawstring:mat(0xf2ece0, { roughness: 0.8 }),
     shirt:     mat(0x3fae54, { map: fabricTex, roughness: 0.9 }),
@@ -8985,6 +8988,26 @@
       return m;
     }
 
+    // A stylised five-blade leaf: each blade is a squashed cone on its own
+    // pivot so it fans from a single stem point. Flattened on Z so it reads
+    // as a leaf against the hat rather than a cluster of spikes.
+    var LEAF_ANGLES = [-1.05, -0.55, 0, 0.55, 1.05];
+    var LEAF_LENGTHS = [0.10, 0.15, 0.19, 0.15, 0.10];
+    function buildWeedLeaf(mat) {
+      var leaf = new THREE.Group();
+      for (var i = 0; i < LEAF_ANGLES.length; i++) {
+        var pivot = new THREE.Group();
+        pivot.rotation.z = -LEAF_ANGLES[i];
+        var blade = new THREE.Mesh(new THREE.ConeGeometry(0.034, LEAF_LENGTHS[i], 5), mat);
+        blade.position.y = LEAF_LENGTHS[i] / 2;
+        blade.scale.z = 0.32;
+        blade.castShadow = true;
+        pivot.add(blade);
+        leaf.add(pivot);
+      }
+      return leaf;
+    }
+
     // "Ole Reliable" — the beanie every save starts with: rounded dome
     // with a rolled brim.
     makeHat("reliable", function (g) {
@@ -9020,10 +9043,24 @@
     // which just reads as a sun hat. Crown is half again as tall, brim is
     // narrower and given real height so the downward angle actually shows.
     makeHat("bucket", function (g) {
-      hatPart(g, new THREE.CylinderGeometry(0.355, 0.395, 0.52, 20), M.plantDeep, 2.60);
-      hatPart(g, new THREE.CylinderGeometry(0.40, 0.575, 0.20, 24), M.plantDeep, 2.30);
+      hatPart(g, new THREE.CylinderGeometry(0.355, 0.395, 0.52, 20), M.hatBlack, 2.60);
+      hatPart(g, new THREE.CylinderGeometry(0.40, 0.575, 0.20, 24), M.hatBlack, 2.30);
       var stitch = hatPart(g, new THREE.TorusGeometry(0.375, 0.022, 8, 22), M.plant, 2.50);
       stitch.rotation.x = Math.PI / 2;
+      // Laid flat on the crown top, radiating from the centre. The camera in
+      // this game always looks down, so leaves on the sides of the crown were
+      // hidden behind the brim — the top is the face you actually see. A
+      // wrapper group does the spin so the flat-lay rotation stays unambiguous
+      // instead of depending on Euler order.
+      [0, 2.094, 4.189].forEach(function (a) {
+        var mount = new THREE.Group();
+        mount.rotation.y = a;
+        var leaf = buildWeedLeaf(M.plant);
+        leaf.rotation.x = Math.PI / 2;
+        leaf.position.set(0, 2.875, 0.05);
+        mount.add(leaf);
+        g.add(mount);
+      });
     });
 
     // "Black Beanie" — Ole Reliable's silhouette in black, no bobble.
