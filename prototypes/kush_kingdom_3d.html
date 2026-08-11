@@ -92,6 +92,22 @@
     box-shadow: 0 5px 16px rgba(0,0,0,0.4);
   }
   #product-hud.show { display: flex; }
+  .hud-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    font-weight: 800; font-size: 10.5px; letter-spacing: 0.6px;
+    color: #b7c9bd; opacity: 0.85;
+    cursor: pointer;
+    user-select: none;
+    pointer-events: auto;
+  }
+  .hud-header .hud-chevron {
+    transition: transform 0.18s ease;
+    font-size: 10px;
+  }
+  #product-hud.collapsed .hud-chevron { transform: rotate(-90deg); }
+  #product-hud.collapsed .hud-rows { display: none; }
+  .hud-rows { display: flex; flex-direction: column; gap: 4px; }
   .product-row {
     display: flex; align-items: center; gap: 7px;
     font-weight: 700; font-size: 12.5px; color: #eafff2;
@@ -751,7 +767,10 @@
         <div id="cash-gain"></div>
       </div>
       <div class="chip rate" id="rate-chip"><div class="icon">📈</div><span id="rate-val">$0/sec</span></div>
-      <div id="product-hud"></div>
+      <div id="product-hud">
+        <div class="hud-header" id="hud-toggle"><span>PRICES</span><span class="hud-chevron">▾</span></div>
+        <div class="hud-rows" id="hud-rows"></div>
+      </div>
       <div class="chip pack" id="pack-chip"><div class="icon">🎒</div><span>FULL!</span></div>
       <div class="chip boost" id="boost-chip"><div class="icon">💧</div><span id="boost-val">0s</span></div>
       <div class="chip promo" id="promo-chip"><div class="icon">📣</div><span id="promo-val">0s</span></div>
@@ -12525,6 +12544,7 @@
     cashEl.textContent = fmt(displayCash);
   }
   var productHud = document.getElementById("product-hud");
+  var hudRows = document.getElementById("hud-rows");
   // The tutorial hint is centred and the product panel is top-left; on a phone
   // they share that band, so the hint is parked under whatever height the
   // panel currently is rather than under a number picked when there were
@@ -12536,6 +12556,16 @@
     obj.style.top = Math.round(productHud.getBoundingClientRect().bottom + 12) + "px";
   }
   window.addEventListener("resize", positionObjective);
+  // Collapsed state is a screen preference, not save data — it lives beside
+  // the save key rather than inside it, so it survives reload without
+  // touching state or bumping the save format.
+  var PRICE_HUD_KEY = "kushKingdom3D_priceHudCollapsed";
+  if (localStorage.getItem(PRICE_HUD_KEY) === "1") productHud.classList.add("collapsed");
+  document.getElementById("hud-toggle").addEventListener("click", function () {
+    var collapsed = productHud.classList.toggle("collapsed");
+    localStorage.setItem(PRICE_HUD_KEY, collapsed ? "1" : "0");
+    positionObjective();
+  });
   // One row per unlocked product. Bud's row is also the strain counter —
   // its level is exactly what "Buy a New Strain" has bought up to, 1-based
   // so a fresh game reads "Lv.1" rather than "Lv.0".
@@ -12563,7 +12593,7 @@
     }
 
     productHud.classList.add("show");
-    productHud.innerHTML = "";
+    hudRows.innerHTML = "";
     rows.forEach(function (r) {
       var row = document.createElement("div");
       row.className = "product-row";
@@ -12571,7 +12601,7 @@
       var lv = document.createElement("span"); lv.className = "p-lv"; lv.textContent = "Lv." + r.lv;
       var price = document.createElement("span"); price.className = "p-price"; price.textContent = "$" + r.price;
       row.appendChild(icon); row.appendChild(lv); row.appendChild(price);
-      productHud.appendChild(row);
+      hudRows.appendChild(row);
     });
     // Measured once per height change, not per cash tick — renderHud runs
     // constantly and a forced layout every time would be wasteful.
