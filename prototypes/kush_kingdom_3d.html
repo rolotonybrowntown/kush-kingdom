@@ -1855,10 +1855,14 @@
       { x: -26.0, z: FACTORY_CZ + 18.0 }, { x: 26.0, z: FACTORY_CZ + 18.0 },
       { x: -26.0, z: FACTORY_CZ - 16.0 }, { x: 26.0, z: FACTORY_CZ - 16.0 },
     ],
+    // Bounds are +/-(PAPERS_HALF_X - 1.5) and PAPERS_CZ +/-(PAPERS_HALF_Z -
+    // 1.5) — these sat outside that box after the yard got compressed
+    // (task #164), so a couple of these spawned the box past where the
+    // player can actually walk. Inset well clear of the edge this time.
     papers: [
-      { x: -50.0, z: PAPERS_CZ - 28.0 }, { x: 0.0, z: PAPERS_CZ - 30.0 },
-      { x: 40.0,  z: PAPERS_CZ - 24.0 }, { x: -50.0, z: PAPERS_CZ + 30.0 },
-      { x: 20.0,  z: PAPERS_CZ + 32.0 },
+      { x: -42.0, z: PAPERS_CZ - 20.0 }, { x: 0.0, z: PAPERS_CZ - 22.0 },
+      { x: 42.0,  z: PAPERS_CZ - 18.0 }, { x: -42.0, z: PAPERS_CZ + 20.0 },
+      { x: 20.0,  z: PAPERS_CZ + 22.0 },
     ],
   };
   // Anything you stand on to spend money is off limits — a crate parked on the
@@ -14172,9 +14176,21 @@
   // ===================================================================
   //  OFFLINE CATCH-UP
   // ===================================================================
-  (function () {
+  // A function, not a run-once IIFE: mobile browsers (and installed PWAs)
+  // fully suspend JS while backgrounded rather than just throttling it, so
+  // the in-memory frame loop never sees the elapsed time on its own. Without
+  // re-running this on return, idle earnings only ever appeared after a full
+  // quit-and-relaunch, since that's the only thing that re-executed this
+  // script from the top. Re-running on visibilitychange below covers the
+  // "just switched apps and came back" case the same way a reload always did.
+  function runOfflineCatchUp() {
     var lastMs = state.lastSaveTime || Date.now();
     var el = Date.now() - lastMs;
+    // Always rebase the clock here, even when there's nothing to catch up on
+    // — otherwise a short flash to another app followed by a real idle
+    // stretch would credit the whole combined gap as one payout, and a real
+    // payout followed by a quick re-check would credit it a second time.
+    state.lastSaveTime = Date.now();
     if (el < 8000) return;
     var found = false;
     for (var i10 = 0; i10 < plotDefs.length; i10++) {
@@ -14246,7 +14262,13 @@
         }
       }
     }
-  })();
+    renderHud();
+    saveState();
+  }
+  runOfflineCatchUp();
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") runOfflineCatchUp();
+  });
 
   // ===================================================================
   //  DAILY LOGIN REWARD
