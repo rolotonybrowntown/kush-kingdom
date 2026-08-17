@@ -3034,42 +3034,62 @@
       o.start(t); o.stop(t + dur + 0.02);
     }
 
-    // ---- the ambient loop ----
-    // Four chords, eight seconds each. Voiced low and quiet, with the filter
-    // rolling off anything bright, so it reads as atmosphere not melody.
-    var CHORDS = [
-      [146.83, 220.00, 261.63],   // Dm
-      [174.61, 261.63, 349.23],   // F
-      [130.81, 196.00, 261.63],   // C
-      [196.00, 246.94, 293.66],   // G
+    // ---- the loop ----
+    // A bouncy 4-bar "oom-pah" bass under a bright 8-note riff, all diatonic
+    // to C major (I-V-vi-IV — the same progression under a thousand pop and
+    // game themes) so one riff sits happily over every bar without needing
+    // a different melody per chord. Scheduled with a lookahead clock rather
+    // than one setInterval per note: notes are queued a little ahead of when
+    // they play using the audio context's own clock, so the tempo can't
+    // drift the way chaining setTimeouts would.
+    var TEMPO = 132;
+    var EIGHTH = 60 / TEMPO / 2, BEAT = 60 / TEMPO;
+    var STEPS_PER_BAR = 8, BARS = 4, TOTAL_STEPS = STEPS_PER_BAR * BARS;
+    var MELODY = [659.25, 783.99, 880.00, 783.99, 659.25, 587.33, 523.25, 587.33]; // E5 G5 A5 G5 E5 D5 C5 D5
+    var BASS_BARS = [
+      [130.81, 261.63, 196.00, 392.00],   // C:  C3 C4 G3 G4
+      [98.00,  196.00, 146.83, 293.66],   // G:  G2 G3 D3 D4
+      [110.00, 220.00, 164.81, 329.63],   // Am: A2 A3 E3 E4
+      [87.31,  174.61, 130.81, 261.63],   // F:  F2 F3 C3 C4
     ];
-    var chordIdx = 0;
-    function playChord() {
-      if (!ctx || state.muted) return;
-      var t = ctx.currentTime, hold = 8.0;
-      var notes = CHORDS[chordIdx % CHORDS.length];
-      chordIdx++;
-      var filt = ctx.createBiquadFilter();
-      filt.type = "lowpass";
-      filt.frequency.value = 900;
-      filt.connect(musicGain);
-      for (var i = 0; i < notes.length; i++) {
-        var o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = "triangle";
-        // a few cents of detune per voice stops it sounding like a synth chord
-        o.frequency.value = notes[i] * (1 + (i - 1) * 0.0015);
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(0.22, t + 2.2);   // slow swell
-        g.gain.setValueAtTime(0.22, t + hold - 2.4);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + hold);
-        o.connect(g); g.connect(filt);
-        o.start(t); o.stop(t + hold + 0.1);
+    var musicFilt = null, musicStep = 0, nextNoteTime = 0;
+    var LOOKAHEAD = 0.12, SCHED_MS = 25;
+    function scheduleNote(freq, time, dur, type, vol) {
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime(vol, time + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+      o.connect(g); g.connect(musicFilt);
+      o.start(time); o.stop(time + dur + 0.02);
+    }
+    function scheduler() {
+      while (nextNoteTime < ctx.currentTime + LOOKAHEAD) {
+        if (!state.muted) {
+          var stepInBar = musicStep % STEPS_PER_BAR;
+          var bar = BASS_BARS[Math.floor(musicStep / STEPS_PER_BAR) % BARS];
+          scheduleNote(MELODY[stepInBar], nextNoteTime, EIGHTH * 0.85, "triangle", 0.15);
+          if (stepInBar % 2 === 0) {
+            scheduleNote(bar[stepInBar / 2], nextNoteTime, BEAT * 0.85, "square", 0.13);
+          }
+        }
+        nextNoteTime += EIGHTH;
+        musicStep = (musicStep + 1) % TOTAL_STEPS;
       }
     }
     function startMusic() {
       if (!ensure() || musicTimer) return;
-      playChord();
-      musicTimer = setInterval(playChord, 7600);   // slight overlap between chords
+      // Bright but rounded — a bare square wave bass gets buzzy on loop for
+      // hours, this just takes the top edge off without muffling the riff.
+      musicFilt = ctx.createBiquadFilter();
+      musicFilt.type = "lowpass";
+      musicFilt.frequency.value = 3400;
+      musicFilt.connect(musicGain);
+      musicStep = 0;
+      nextNoteTime = ctx.currentTime + 0.05;
+      scheduler();
+      musicTimer = setInterval(scheduler, SCHED_MS);
     }
 
     // Browsers refuse to start audio until the user has interacted, so the
