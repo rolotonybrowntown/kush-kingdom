@@ -1306,6 +1306,11 @@
   var SMOKESHOP_GROUND_TOP = FLOOR_TOP_BACK;
   var SMOKESHOP_DEED_COST = 8e13;   // Uptown's asking price — priciest yet
   function smokeshopUnlocked() { return !!(state.smokeshop && state.smokeshop.unlocked); }
+  // The accountant is hired per city, not once for the whole empire — a
+  // fresh city means walking the till again until you buy back out of it,
+  // the same "starting the loop over" feeling a new game gives you.
+  var SMOKESHOP_ACCOUNTANT_COST = 1e14;
+  function smokeshopAccountantHired() { return !!(state.smokeshop && state.smokeshop.accountantHired); }
   // One tier number drives both the storefront look and which products are
   // sellable, same as the original shop's roomTier already gates both its
   // visuals and its dab/edible lines together — no reason to split them.
@@ -2564,6 +2569,8 @@
         unlocked: false,
         tier: 0,
         restockerLv: 0,
+        cashierLv: 0,
+        accountantHired: false,   // Uptown's own accountant, separate from state.accountantHired
         stock: { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 },   // warehouse (back-of-house)
         // What's physically on the shelf right now is a runtime mesh pile,
         // not saved state — same as the dispensary's own counter pile,
@@ -2724,6 +2731,8 @@
       // the lounge's tier gets clamped just above
       sms.tier = Math.max(0, Math.min(MAX_SMOKESHOP_TIER, Math.floor(sms.tier) || 0));
       sms.restockerLv = Math.max(0, Math.floor(sms.restockerLv) || 0);
+      sms.cashierLv = Math.max(0, Math.floor(sms.cashierLv) || 0);
+      sms.accountantHired = !!sms.accountantHired;
       if (!sms.stock || typeof sms.stock !== "object") sms.stock = {};
       SMOKESHOP_KINDS.forEach(function (k) {
         var stk = sms.stock[k];
@@ -7448,6 +7457,22 @@
   var SMOKESHOP_TIER_PAD = { x: SMOKESHOP_HALF_X - 3, z: SMOKESHOP_CZ + 13 };
   var SMOKESHOP_FRIDGE_ZONE = { x: SMOKESHOP_HALF_X - 1.4, z: SMOKESHOP_CZ + 4 };
   var SMOKESHOP_COUNTER_ZONE = { x: 0, z: SMOKESHOP_CZ - 1.5 };
+  // Beside each of the two gondola aisles built below (x=-3/+3,
+  // z=SMOKESHOP_CZ+5.5, length 8) — restockers and customers both use
+  // these as "the shelf", not the abstract pile the register used to hold.
+  var SMOKESHOP_SHELF_SPOTS = [
+    { x: -3.9, z: SMOKESHOP_CZ + 5.5, half: 3.4 },
+    { x: 3.9,  z: SMOKESHOP_CZ + 5.5, half: 3.4 },
+  ];
+  var SMOKESHOP_CASHIER_SPOT = { x: SMOKESHOP_REGISTER.x - 0.9, z: SMOKESHOP_REGISTER.z };
+  // Hired in the warehouse alongside the restocker/HR pads, not on the
+  // retail floor — same "hiring happens in the back" convention.
+  var SMOKESHOP_CASHIER_PAD = { x: 0, z: SMOKESHOP_WAREHOUSE_Z };
+  var SMOKESHOP_REGISTER_SLOTS = [
+    { x: SMOKESHOP_REGISTER.x + 1.8, z: SMOKESHOP_REGISTER.z - 1.2 },
+    { x: SMOKESHOP_REGISTER.x + 1.8, z: SMOKESHOP_REGISTER.z },
+    { x: SMOKESHOP_REGISTER.x + 1.8, z: SMOKESHOP_REGISTER.z + 1.2 },
+  ];
 
   function buildFridge(parent, x, z) {
     var g = new THREE.Group();
@@ -7694,29 +7719,37 @@
     hrLbl.position.set(SMOKESHOP_HR_ZONE.x, y + 2.1, SMOKESHOP_HR_ZONE.z);
     g.add(hrLbl);
 
-    // ---- two piles, same makeResourcePile() helper the mill uses: one
-    // shared stack of assorted stock on the shelf by the register (what's
-    // sellable right now), one in the warehouse strip (what's waiting on a
-    // restocker) — one bar each, not per-product, per the shared-warehouse
-    // call ----
-    smokeshopShelfPile = makeResourcePile(
-      g, SMOKESHOP_REGISTER.x + 2.6, SMOKESHOP_REGISTER.z, smokeshopBoxGeo, trimMat, 24, 4, 3, y);
+    // ---- warehouse pile, same makeResourcePile() helper the mill uses —
+    // what's waiting on a restocker. The shelves themselves (built above)
+    // are the front-of-house equivalent now; no separate abstract pile ----
     smokeshopWarehousePile = makeResourcePile(
       g, 0, SMOKESHOP_WAREHOUSE_Z, smokeshopBoxGeo, M.pallet, 40, 6, 4, y);
+
+    // ---- cashier, stationary behind the register ----
+    smokeshopCashierMesh.visible = smokeshopUnlocked() && (state.smokeshop.cashierLv || 0) > 0;
+    g.add(smokeshopCashierMesh);
   }
   var smokeshopBoxGeo = new THREE.BoxGeometry(0.55, 0.4, 0.4);
-  var smokeshopShelfPile = null, smokeshopWarehousePile = null;
+  var smokeshopWarehousePile = null;
+  var smokeshopCashierMesh = (function buildCashierMesh() {
+    var g = new THREE.Group();
+    var t = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.95, 0.58), M.apron);
+    t.position.y = 1.1; t.castShadow = true; g.add(t);
+    var h = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.64, 0.62), M.skin);
+    h.position.y = 1.9; h.castShadow = true; g.add(h);
+    g.position.set(SMOKESHOP_CASHIER_SPOT.x, 0, SMOKESHOP_CASHIER_SPOT.z);
+    return g;
+  })();
   rebuildSmokeshop();
 
   // ===================================================================
-  //  SMOKE SHOP ECONOMY — warehouse trickle, restockers, checkout
+  //  SMOKE SHOP ECONOMY — warehouse trickle, restockers, customers,
+  //  cashier
   // ===================================================================
-  // Phase 1 keeps this deliberately simpler than the dispensary's own
-  // customer simulation: instead of walking NPC customers threading a
-  // queue, stock sells itself off the shelf on a timer once it's stocked,
-  // the same "abstracted customer" idea the papers mill's truck already
-  // uses. Restockers are the one part of the loop that gets a real walking
-  // body, since that's the piece the player actually asked to watch happen.
+  // Full loop: shipments trickle into the warehouse -> a Restocker carries
+  // them out to one of the two shelf aisles -> a customer walks in, grabs
+  // an item off a stocked shelf, and queues at the register -> the cashier
+  // (or a slower self-checkout default if none is hired) rings them up.
   var SMOKESHOP_INTAKE_CAPS = [60, 120, 220, 400];
   function smokeshopIntakeCapFor(tier) { return SMOKESHOP_INTAKE_CAPS[tier] || SMOKESHOP_INTAKE_CAPS[0]; }
   function smokeshopIntakeCap() { return smokeshopIntakeCapFor(smokeshopTier()); }
@@ -7726,15 +7759,13 @@
     return t;
   }
   var SMOKESHOP_RESTOCK_RATE = 1.4;   // units/sec trickling into the warehouse, split across unlocked kinds
-  var SMOKESHOP_SHELF_CAP = 24;       // matches the shelf pile's maxBlocks above
-  var SMOKESHOP_SELL_EVERY = 1.5;     // seconds between automatic sales off the shelf, before speed upgrades
+  var SMOKESHOP_SHELF_CAP = 24;       // total units the two shelves hold between them
   var smokeshopShelf = { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 };   // runtime only
   function smokeshopShelfTotal() {
     var t = 0;
     SMOKESHOP_KINDS.forEach(function (k) { t += smokeshopShelf[k] || 0; });
     return t;
   }
-  var smokeshopSellAcc = 0;
 
   var MAX_RESTOCKERS = 3;
   function costRestocker() { return scaled(40000000 * Math.pow(2.7, (state.smokeshop && state.smokeshop.restockerLv) || 0)); }
@@ -7758,6 +7789,7 @@
         obj: g, l1: l1, l2: l2, box: box,
         pos: { x: SMOKESHOP_RESTOCK_ZONE.x, z: SMOKESHOP_RESTOCK_ZONE.z },
         phase: "toWarehouse", timer: 0, carrying: 0, walkPhase: i * 1.3,
+        shelfIdx: i % SMOKESHOP_SHELF_SPOTS.length,
       });
     }
   })();
@@ -7771,9 +7803,59 @@
   }
   var RUNNER_SPEED_BASE = 5.8;
 
+  var MAX_CASHIERS = 1;
+  function costCashier() { return scaled(70000000); }
+
   var smokeshopTillPad = { x: SMOKESHOP_REGISTER.x, z: SMOKESHOP_REGISTER.z, half: 1.4 };
-  var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER");
-  MYSTERY_TILLS.smokeshop = [smokeshopTillPad, SMOKESHOP_RESTOCK_ZONE];
+  var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER", smokeshopAccountantHired);
+  MYSTERY_TILLS.smokeshop = [smokeshopTillPad, SMOKESHOP_RESTOCK_ZONE, SMOKESHOP_CASHIER_PAD];
+
+  // ---- customers: walk in, grab a stocked item off a shelf, queue at the
+  // register, leave once rung up. Mirrors the dispensary's own npc pool
+  // shape (a fixed-size group, gated visible by a "how many are active
+  // right now" count) but with its own linear FSM instead of the
+  // dispensary's time-derived phase cycle, since these have to react to
+  // real shelf stock and a real register queue. ----
+  var MAX_SMOKESHOP_CUSTOMERS = 5;
+  var SMOKESHOP_CUSTOMER_SPEED = 5.4;
+  var smokeshopCustomers = [];
+  var smokeshopQueue = [];       // customer indices waiting at the register, arrival order
+  var smokeshopCheckoutAcc = 0;
+  (function buildSmokeshopCustomers() {
+    var colors = [M.npc1, M.npc2, M.npc3];
+    for (var n = 0; n < MAX_SMOKESHOP_CUSTOMERS; n++) {
+      var g = new THREE.Group();
+      var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), colors[n % colors.length]);
+      t.position.y = 1.1; t.castShadow = true; g.add(t);
+      var h = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.64, 0.62), n % 2 ? M.skin2 : M.skin);
+      h.position.y = 1.9; h.castShadow = true; g.add(h);
+      var lgeo = new THREE.BoxGeometry(0.27, 0.7, 0.27);
+      var l1 = new THREE.Mesh(lgeo, M.pants); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.pants); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      var item = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.2, 0.25), M.packA);
+      item.position.set(0.42, 1.2, 0); item.visible = false;
+      g.add(item);
+      scene.add(g);
+      smokeshopCustomers.push({
+        obj: g, l1: l1, l2: l2, item: item,
+        pos: { x: 0, z: SMOKESHOP_DOOR_Z - 1 },
+        targetX: 0, targetZ: SMOKESHOP_DOOR_Z - 1,
+        phase: "idle", timer: Math.random() * 3, kind: null, walkPhase: n * 1.2,
+      });
+    }
+  })();
+  function cuStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z, d = Math.hypot(dx, dz);
+    if (d < 0.1) return true;
+    var step = Math.min(SMOKESHOP_CUSTOMER_SPEED * dt, d);
+    b.pos.x += (dx / d) * step; b.pos.z += (dz / d) * step;
+    b.walkPhase += dt * 9;
+    return false;
+  }
+  function smokeshopActiveCustomers() {
+    return Math.max(2, Math.min(MAX_SMOKESHOP_CUSTOMERS, 2 + smokeshopTier()));
+  }
 
   function updateSmokeshop(now, dt) {
     var hired = smokeshopUnlocked();
@@ -7787,13 +7869,14 @@
       }
     }
 
-    // ---- restockers: warehouse -> shelf ----
+    // ---- restockers: warehouse -> whichever shelf they're assigned ----
     for (var i = 0; i < restockers.length; i++) {
       var b = restockers[i];
       var on = hired && i < (state.smokeshop.restockerLv || 0);
       b.obj.visible = on;
       if (!on) continue;
       var walking = false;
+      var shelf = SMOKESHOP_SHELF_SPOTS[b.shelfIdx];
       if (b.phase === "toWarehouse") {
         walking = !rsStepTo(b, SMOKESHOP_RESTOCK_ZONE.x, SMOKESHOP_RESTOCK_ZONE.z, dt);
         if (!walking) { b.phase = "pick"; b.timer = 0.5 * staffActMult("smokeshop"); }
@@ -7815,7 +7898,7 @@
           b.timer = 0.6;
         }
       } else if (b.phase === "toShelf") {
-        walking = !rsStepTo(b, SMOKESHOP_REGISTER.x + 2.6, SMOKESHOP_REGISTER.z, dt);
+        walking = !rsStepTo(b, shelf.x, shelf.z, dt);
         if (!walking) { b.phase = "drop"; b.timer = 0.5 * staffActMult("smokeshop"); }
       } else if (b.phase === "drop") {
         b.timer -= dt;
@@ -7831,6 +7914,7 @@
           b.box.visible = false;
           b.phase = "toWarehouse";
           b.timer = 0.6;
+          b.shelfIdx = (b.shelfIdx + 1) % SMOKESHOP_SHELF_SPOTS.length;   // spread stock across both aisles
         }
       }
       b.obj.position.set(b.pos.x, 0, b.pos.z);
@@ -7838,28 +7922,99 @@
       b.l1.rotation.x = sw; b.l2.rotation.x = -sw;
     }
 
-    // ---- checkout: shelf stock sells itself on a timer, faster with more
-    // staff speed at the smoke shop's HR desk (that upgrade covers both
-    // restocking legs and checkout here) ----
-    if (hired && smokeshopShelfTotal() > 0) {
-      smokeshopSellAcc += dt;
-      var every = SMOKESHOP_SELL_EVERY / staffSpeedMult("smokeshop");
-      if (smokeshopSellAcc >= every) {
-        smokeshopSellAcc = 0;
-        var stocked = SMOKESHOP_KINDS.filter(function (k) { return (smokeshopShelf[k] || 0) > 0; });
-        if (stocked.length) {
-          var pick = stocked[Math.floor(Math.random() * stocked.length)];
-          smokeshopShelf[pick]--;
-          var amount = smokeshopProductValue(pick);
-          smokeshopTill.payOut(amount);
-          addFloater(SMOKESHOP_REGISTER.x, 2.4, SMOKESHOP_REGISTER.z, "+$" + fmt(Math.round(amount)), "#ffd75e");
+    // ---- customers: door -> shelf -> register queue -> door ----
+    var activeN = hired ? smokeshopActiveCustomers() : 0;
+    for (var ci = 0; ci < smokeshopCustomers.length; ci++) {
+      var c = smokeshopCustomers[ci];
+      var conActive = ci < activeN;
+      c.obj.visible = conActive;
+      if (!conActive) { continue; }
+      var cwalking = false;
+      if (c.phase === "idle") {
+        c.timer -= dt;
+        if (c.timer <= 0) {
+          var wantKinds = SMOKESHOP_KINDS.filter(function (k) {
+            return smokeshopProductUnlocked(k) && (smokeshopShelf[k] || 0) > 0;
+          });
+          if (wantKinds.length) {
+            c.kind = wantKinds[Math.floor(Math.random() * wantKinds.length)];
+            c.pos.x = 0; c.pos.z = SMOKESHOP_DOOR_Z - 1;
+            var spot = SMOKESHOP_SHELF_SPOTS[Math.floor(Math.random() * SMOKESHOP_SHELF_SPOTS.length)];
+            c.targetX = spot.x;
+            c.targetZ = spot.z + (Math.random() - 0.5) * spot.half * 1.6;
+            c.phase = "toShelf";
+          } else {
+            c.timer = 1.2 + Math.random();
+          }
+        }
+      } else if (c.phase === "toShelf") {
+        cwalking = !cuStepTo(c, c.targetX, c.targetZ, dt);
+        if (!cwalking) { c.phase = "grab"; c.timer = 0.6; }
+      } else if (c.phase === "grab") {
+        c.timer -= dt;
+        if (c.timer <= 0) {
+          if ((smokeshopShelf[c.kind] || 0) > 0) {
+            smokeshopShelf[c.kind]--;
+            c.item.visible = true;
+            var qi = smokeshopQueue.length % SMOKESHOP_REGISTER_SLOTS.length;
+            var rslot = SMOKESHOP_REGISTER_SLOTS[qi];
+            c.targetX = rslot.x; c.targetZ = rslot.z;
+            smokeshopQueue.push(ci);
+            c.phase = "toRegister";
+          } else {
+            // someone beat them to the last one on the shelf
+            c.targetX = 0; c.targetZ = SMOKESHOP_DOOR_Z - 1;
+            c.phase = "leave";
+          }
+        }
+      } else if (c.phase === "toRegister") {
+        cwalking = !cuStepTo(c, c.targetX, c.targetZ, dt);
+        if (!cwalking) c.phase = "wait";
+      } else if (c.phase === "wait") {
+        // checkout timer below drives the transition out of this phase
+      } else if (c.phase === "leave") {
+        cwalking = !cuStepTo(c, 0, SMOKESHOP_DOOR_Z - 1, dt);
+        if (!cwalking) {
+          c.item.visible = false;
+          c.kind = null;
+          c.phase = "idle"; c.timer = 0.6 + Math.random() * 2.5;
         }
       }
-    } else {
-      smokeshopSellAcc = 0;
+      c.obj.position.set(c.pos.x, 0, c.pos.z);
+      var csw = cwalking ? Math.sin(c.walkPhase) * 0.5 : 0;
+      c.l1.rotation.x = csw; c.l2.rotation.x = -csw;
     }
 
-    if (smokeshopShelfPile) smokeshopShelfPile.setCount(smokeshopShelfTotal());
+    // ---- checkout: cashier serves the front of the queue; without one, a
+    // slower self-checkout default keeps the loop from fully stalling.
+    // Only accumulates once the front customer has actually reached the
+    // register — peeking rather than shifting until they're served, so a
+    // still-walking customer never gets skipped past and stranded in
+    // "wait" with no one left to ring them up. ----
+    var frontIdx = smokeshopQueue.length ? smokeshopQueue[0] : -1;
+    var frontCust = frontIdx >= 0 ? smokeshopCustomers[frontIdx] : null;
+    if (frontCust && frontCust.phase === "wait") {
+      smokeshopCheckoutAcc += dt;
+      var hasCashier = (state.smokeshop.cashierLv || 0) > 0;
+      var every = hasCashier ? 1.1 / staffSpeedMult("smokeshop") : 3.2;
+      if (smokeshopCheckoutAcc >= every) {
+        smokeshopCheckoutAcc = 0;
+        smokeshopQueue.shift();
+        var amount = smokeshopProductValue(frontCust.kind);
+        smokeshopTill.payOut(amount);
+        addFloater(SMOKESHOP_REGISTER.x, 2.4, SMOKESHOP_REGISTER.z, "+$" + fmt(Math.round(amount)), "#ffd75e");
+        frontCust.targetX = 0; frontCust.targetZ = SMOKESHOP_DOOR_Z - 1;
+        frontCust.phase = "leave";
+      }
+    } else {
+      smokeshopCheckoutAcc = 0;
+      // defensively drop a stale head (shouldn't normally happen) rather
+      // than let it block the queue forever
+      if (frontIdx >= 0 && (!frontCust || (frontCust.phase !== "toRegister" && frontCust.phase !== "wait"))) {
+        smokeshopQueue.shift();
+      }
+    }
+
     if (smokeshopWarehousePile) smokeshopWarehousePile.setCount(smokeshopStockTotal());
     smokeshopTill.update(now, function () {});
   }
@@ -12427,7 +12582,12 @@
   // lounge) gets its own pad/pile without copy-pasting the geometry and
   // animation code — every call site keeps calling the same functions it
   // always did (payOutCash === shopTill.payOut).
-  function makeTill(pad, padColor, label) {
+  function makeTill(pad, padColor, label, accountantCheck) {
+    // Defaults to the Hometown accountant — the one flag basically every
+    // till in the game already checked. A city with its own accountant
+    // (Uptown's) passes its own check fn instead, so hiring one only ever
+    // covers that city's own tills, not the whole empire's.
+    accountantCheck = accountantCheck || accountantHired;
     var pendingCash = 0;
     var cashBricks = [];
     var BRICK_VALUE = 8;
@@ -12516,10 +12676,10 @@
 
     function payOut(amount) {
       if (amount <= 0) return;
-      // The accountant is the whole point of the office: once hired, every
-      // till in the game (this one included) skips the physical pile and
-      // drops straight into the bankroll.
-      if (accountantHired()) {
+      // The accountant is the whole point of the office: once hired for
+      // this till's city, it skips the physical pile and drops straight
+      // into the bankroll.
+      if (accountantCheck()) {
         state.cash += amount;
         renderHud();
         saveState();
@@ -13557,6 +13717,25 @@
       buy: function () {
         state.smokeshop.restockerLv = (state.smokeshop.restockerLv || 0) + 1;
         toast("\ud83d\udce6 Restocker hired \u2014 the shelf stays full now!");
+      },
+    },
+    {
+      id: "cashier", label: "CASHIER", icon: "\ud83e\uddd1\u200d\ud83d\udcbc",
+      x: SMOKESHOP_CASHIER_PAD.x, z: SMOKESHOP_CASHIER_PAD.z,
+      site: "smokeshop", color: 0xffd75e, kiosk: false,
+      hidden: function () { return !smokeshopUnlocked(); },
+      name: function () { return "Hire a Cashier"; },
+      desc: function () {
+        return (state.smokeshop.cashierLv || 0) > 0
+          ? "Rings up the register fast \u2014 customers barely wait in line"
+          : "Without one, customers ring themselves up \u2014 slowly";
+      },
+      cost: costCashier,
+      maxed: function () { return (state.smokeshop.cashierLv || 0) >= MAX_CASHIERS; },
+      buy: function () {
+        state.smokeshop.cashierLv = (state.smokeshop.cashierLv || 0) + 1;
+        rebuildSmokeshop();
+        toast("\ud83e\uddd1\u200d\ud83d\udcbc Cashier hired \u2014 checkout is fast now!");
       },
     },
     {
@@ -15350,24 +15529,40 @@
     return row;
   }
 
+  // One accountant per city, not one for the whole empire — a fresh city's
+  // tills still pile cash on the floor until you hire its own, same as
+  // Hometown did on your very first save.
+  var ACCOUNTANTS = {
+    home:   { cost: ACCOUNTANT_COST,          hired: accountantHired,
+              hire: function () { state.accountantHired = true; } },
+    uptown: { cost: SMOKESHOP_ACCOUNTANT_COST, hired: smokeshopAccountantHired,
+              hire: function () { state.smokeshop.accountantHired = true; } },
+  };
   function renderOfficePanel() {
     // ---- accountant ----
     officeAccountantRows.innerHTML = "";
-    officeAccountantRows.appendChild(buildOfficeRow({
-      name: "Hire an Accountant",
-      desc: accountantHired()
-        ? "Every till in the empire pays straight into your bankroll."
-        : "Skip the walk — every sale drops straight into your cash, everywhere.",
-      btnText: accountantHired() ? "Hired" : "$" + fmt(ACCOUNTANT_COST),
-      disabled: accountantHired() || state.cash < ACCOUNTANT_COST,
-      onClick: function () {
-        if (accountantHired() || state.cash < ACCOUNTANT_COST) return;
-        state.cash -= ACCOUNTANT_COST;
-        state.accountantHired = true;
-        toast("🧾 Accountant hired — every till pays straight in from now on.");
-        renderHud(); renderOfficePanel(); saveState();
-      },
-    }));
+    CITIES.forEach(function (c) {
+      var acct = ACCOUNTANTS[c.id];
+      if (!acct) return;
+      var access = c.siteIds.some(function (id) { return SITES[id].unlocked(); });
+      var hired = acct.hired();
+      officeAccountantRows.appendChild(buildOfficeRow({
+        name: "Hire an Accountant — " + c.name,
+        desc: !access ? "Not open for business yet"
+            : hired ? "Every till in " + c.name + " pays straight into your bankroll."
+            : "Skip the walk — every sale in " + c.name + " drops straight into your cash.",
+        btnText: !access ? "Locked" : hired ? "Hired" : "$" + fmt(acct.cost),
+        disabled: !access || hired || state.cash < acct.cost,
+        locked: !access,
+        onClick: function () {
+          if (!access || hired || state.cash < acct.cost) return;
+          state.cash -= acct.cost;
+          acct.hire();
+          toast("🧾 Accountant hired — " + c.name + "'s tills pay straight in from now on.");
+          renderHud(); renderOfficePanel(); saveState();
+        },
+      }));
+    });
 
     // ---- profit boosters ----
     officeProfitRows.innerHTML = "";
