@@ -431,10 +431,11 @@
     margin: 0 0 2px; font-size: 20px; text-align: center;
     color: var(--green-light);
   }
-  .office-section-title {
+  .office-section-title, .map-section-title {
     margin: 14px 0 0; text-align: left; text-transform: uppercase;
     letter-spacing: 0.6px; font-size: 10.5px; opacity: 0.55;
   }
+  .map-section-title:first-child { margin-top: 0; }
   .office-row.locked .hr-info b { opacity: 0.62; }
   /* Only one prop's section shows at a time — walking up to the desk
      shows the accountant row, the locker shows hats, etc. */
@@ -1290,6 +1291,66 @@
   var PAPERS_DEED_COST = 3e13;   // priciest deed yet — five locations deep
   function papersUnlocked() { return !!(state.papers && state.papers.unlocked); }
 
+  // ===================================================================
+  //  SMOKE SHOP — first stop in Uptown, the second city
+  // ===================================================================
+  // Sits a full 400 units past the mill's deepest edge (matching the
+  // largest gap already used anywhere, shop->farm) rather than the tighter
+  // ~300-360 gaps between the closer-together sites, since this is also a
+  // city boundary, not just a site boundary. Re-measure fog reach in-browser
+  // once the site's camDist is final, same discipline noted at PAPERS_CZ.
+  var SMOKESHOP_CZ = -1800;
+  var SMOKESHOP_HALF_X = 20, SMOKESHOP_HALF_Z = 20;
+  var SMOKESHOP_GROUND_TOP = FLOOR_TOP_BACK;
+  var SMOKESHOP_DEED_COST = 8e13;   // Uptown's asking price — priciest yet
+  function smokeshopUnlocked() { return !!(state.smokeshop && state.smokeshop.unlocked); }
+  // One tier number drives both the storefront look and which products are
+  // sellable, same as the original shop's roomTier already gates both its
+  // visuals and its dab/edible lines together — no reason to split them.
+  var SMOKESHOP_TIERS = [
+    { name: "Corner Store", cost: 0,
+      adds: "Bare shelves — papers, pipes, and lighters, that's it for now" },
+    { name: "Quick Mart", cost: 6e13,
+      adds: "Brighter lighting, fuller shelves, a real convenience-store feel" },
+    { name: "Smoke & Vape", cost: 3e14,
+      adds: "A proper smoke shop — glass pipes and bongs now on the shelf" },
+    { name: "The Glass House", cost: 1.5e15,
+      adds: "Glass display cases, neon signage, grinders in stock" },
+  ];
+  var MAX_SMOKESHOP_TIER = SMOKESHOP_TIERS.length - 1;
+  function smokeshopTier()    { return (state.smokeshop && state.smokeshop.tier) || 0; }
+  function smokeshopTierDef() { return SMOKESHOP_TIERS[smokeshopTier()]; }
+
+  // Own little economy, same as the Lounge's shelves duplicate bud/dab/
+  // edible under a completely separate stock system — these values scale
+  // with sellValueBase() the same way papersValue()/infusedValue() do, so
+  // Uptown doesn't fall behind as strain progress climbs, but the SKUs
+  // themselves are unrelated to anything sold at the dispensary.
+  var SMOKESHOP_PRODUCTS = [
+    { kind: "papers",   tierGate: 0, icon: "📄", label: "papers",   baseValue: 9000 },
+    { kind: "lighters", tierGate: 0, icon: "🔥", label: "lighter",  baseValue: 12000 },
+    { kind: "pipes",    tierGate: 0, icon: "🪈", label: "pipe",     baseValue: 25000 },
+    { kind: "grinders", tierGate: 2, icon: "⚙️", label: "grinder",  baseValue: 40000 },
+    { kind: "bongs",    tierGate: 3, icon: "🌬️", label: "bong",     baseValue: 60000 },
+  ];
+  var SMOKESHOP_KINDS = SMOKESHOP_PRODUCTS.map(function (p) { return p.kind; });
+  function smokeshopProductDef(kind) {
+    for (var i = 0; i < SMOKESHOP_PRODUCTS.length; i++) if (SMOKESHOP_PRODUCTS[i].kind === kind) return SMOKESHOP_PRODUCTS[i];
+    return null;
+  }
+  function smokeshopProductUnlocked(kind) {
+    var p = smokeshopProductDef(kind);
+    return !!p && smokeshopTier() >= p.tierGate;
+  }
+  function smokeshopUnlockedProducts() {
+    return SMOKESHOP_PRODUCTS.filter(function (p) { return smokeshopTier() >= p.tierGate; });
+  }
+  function smokeshopProductValue(kind) {
+    var p = smokeshopProductDef(kind);
+    if (!p) return 0;
+    return p.baseValue * (sellValueBase() / BASE_SELL_VALUE) * officeProfitMult("smokeshop");
+  }
+
   // ---- the mill reads strictly left to right: forest, saw, planer, cutter,
   // register/trucks. Each machine stage is its own fixed X column; buying
   // more machines in that stage adds new rows going down (+Z) rather than
@@ -1597,12 +1658,11 @@
   function hatValueMult()   { return hatDef(equippedHatId()).valueMult || 1; }
   function hatMysteryMult() { return hatDef(equippedHatId()).mysteryMult || 1; }
 
-  // ---- cities: today there is only Hometown, but the map and the
-  // terminal both read through this so a second city is a data change,
-  // not a rewrite. ----
+  // ---- cities: the map and the terminal both read through this, so a new
+  // city is a data change, not a rewrite. ----
   var CITIES = [
     { id: "home", name: "Hometown", siteIds: ["shop", "farm", "lounge", "factory", "papers"] },
-    { id: "next", name: "???", comingSoon: true },
+    { id: "uptown", name: "Uptown", siteIds: ["smokeshop"] },
   ];
   function currentCityId() { return state.cityId || "home"; }
   function currentCityDef() {
@@ -1740,8 +1800,31 @@
         toast("🪵 Deed signed — the Rolling Mill is yours!");
       },
     },
+    smokeshop: {
+      id: "smokeshop", name: "Corner Store", icon: "🚬",
+      skyColor: new THREE.Color(0x6f7a8c),   // overcast city block, not the dispensary's blue sky
+      sub: function () {
+        if (!smokeshopUnlocked()) return "Buy the deed to open Uptown";
+        return smokeshopTierDef().name + " · " + (state.smokeshop.restockerLv || 0) + " restockers";
+      },
+      spawn: { x: 0, z: SMOKESHOP_CZ + SMOKESHOP_HALF_Z - 5 },
+      camDist: function () { return 40; },
+      groundOf: function () { return smokeshopGround; },
+      unlocked: smokeshopUnlocked,
+      bounds: function () {
+        return {
+          minX: -SMOKESHOP_HALF_X + 1.5, maxX: SMOKESHOP_HALF_X - 1.5,
+          minZ: SMOKESHOP_CZ - SMOKESHOP_HALF_Z + 1.5, maxZ: SMOKESHOP_CZ + SMOKESHOP_HALF_Z - 1.5,
+        };
+      },
+      deedCost: SMOKESHOP_DEED_COST,
+      onUnlock: function () {
+        state.smokeshop.unlocked = true;
+        toast("🚬 Deed signed — Uptown is open for business!");
+      },
+    },
   };
-  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory, SITES.papers];
+  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory, SITES.papers, SITES.smokeshop];
   // Deeds are quoted through here rather than read off the site directly, so
   // the late-game scaling cannot be applied at one call site and missed at
   // another — the price on the map row, the affordability check, the "you can
@@ -1864,6 +1947,13 @@
       { x: 42.0,  z: PAPERS_CZ - 18.0 }, { x: -42.0, z: PAPERS_CZ + 20.0 },
       { x: 20.0,  z: PAPERS_CZ + 22.0 },
     ],
+    // Bounds are +/-(SMOKESHOP_HALF_X - 1.5) and SMOKESHOP_CZ +/-
+    // (SMOKESHOP_HALF_Z - 1.5) — a small room, so these sit well clear of
+    // the register/warehouse pads rather than trying to spread out.
+    smokeshop: [
+      { x: -12.0, z: SMOKESHOP_CZ + 12.0 }, { x: 12.0, z: SMOKESHOP_CZ + 12.0 },
+      { x: 12.0,  z: SMOKESHOP_CZ - 4.0 },
+    ],
   };
   // Anything you stand on to spend money is off limits — a crate parked on the
   // silo pad hides the pad and steals its proximity prompt. stationDefs is read
@@ -1953,8 +2043,10 @@
               who: "Trains barbacks and servers" },
     papers: { base: 6000, title: "Mill HR",   crew: "the mill crew",
               who: "Trains woodcutters and mill hands" },
+    smokeshop: { base: 16000, title: "Smoke Shop HR", crew: "the shop crew",
+              who: "Trains restockers and speeds up checkout" },
   };
-  var HR_SITES = ["shop", "farm", "lounge", "papers"];
+  var HR_SITES = ["shop", "farm", "lounge", "papers", "smokeshop"];
   // The factory has no hired hands — the line IS the labour — so it gets no
   // desk of its own and hrZoneFor parks its zone somewhere unreachable rather
   // than silently handing the player the shop's books at another site.
@@ -1962,6 +2054,7 @@
     if (site === "farm") return FARM_HR_ZONE;
     if (site === "lounge") return LOUNGE_HR_ZONE;
     if (site === "papers") return PAPERS_HR_ZONE;
+    if (site === "smokeshop") return SMOKESHOP_HR_ZONE;
     if (site === "factory") return { x: 1e6, z: 1e6 };
     return HR_ZONE;
   }
@@ -2376,7 +2469,7 @@
       // ---- executive office ----
       accountantHired: false,
       officeTier: 0,
-      profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0 },
+      profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0, smokeshop: 0 },
       equippedHat: "reliable",
       // Only bought hats live here; earned ones are recomputed from their
       // own condition every time, so they can never be lost or forged.
@@ -2416,7 +2509,7 @@
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       // ---- empire ----
       site: "shop",                     // which location you are standing in
-      sitePos: { shop: null, farm: null, lounge: null, factory: null, papers: null },  // where you left off at each one
+      sitePos: { shop: null, farm: null, lounge: null, factory: null, papers: null, smokeshop: null },  // where you left off at each one
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
       loungeIntake: { bud: 0, dab: 0, edible: 0, drink: 0 },   // stock delivered to the lounge, also its sellable stock
@@ -2464,6 +2557,15 @@
         valueLv: 0,              // what a pack of papers is worth
         woodcutterLv: 0,
         millhandLv: 0,
+      },
+      smokeshop: {
+        unlocked: false,
+        tier: 0,
+        restockerLv: 0,
+        stock: { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 },   // warehouse (back-of-house)
+        // What's physically on the shelf right now is a runtime mesh pile,
+        // not saved state — same as the dispensary's own counter pile,
+        // which starts empty on every load rather than being restored.
       },
       dailyStreak: 0,                   // consecutive calendar days played
       lastLoginDate: null,              // "YYYY-M-D" of the last day a reward was granted
@@ -2612,11 +2714,25 @@
       pap.woodcutterLv = Math.max(0, Math.min(MAX_WOODCUTTERS, Math.floor(pap.woodcutterLv) || 0));
       pap.millhandLv = Math.max(0, Math.min(MAX_MILLHANDS, Math.floor(pap.millhandLv) || 0));
 
+      // ---- smoke shop (uptown) ----
+      if (!merged.smokeshop || typeof merged.smokeshop !== "object") merged.smokeshop = defaultState().smokeshop;
+      var sms = merged.smokeshop;
+      sms.unlocked = !!sms.unlocked;
+      // rebuildSmokeshop() indexes SMOKESHOP_TIERS with this, same reason
+      // the lounge's tier gets clamped just above
+      sms.tier = Math.max(0, Math.min(MAX_SMOKESHOP_TIER, Math.floor(sms.tier) || 0));
+      sms.restockerLv = Math.max(0, Math.floor(sms.restockerLv) || 0);
+      if (!sms.stock || typeof sms.stock !== "object") sms.stock = {};
+      SMOKESHOP_KINDS.forEach(function (k) {
+        var stk = sms.stock[k];
+        sms.stock[k] = (typeof stk === "number" && isFinite(stk)) ? Math.max(0, stk) : 0;
+      });
+
       // ---- executive office ----
       merged.accountantHired = !!merged.accountantHired;
       merged.officeTier = Math.max(0, Math.min(MAX_OFFICE_TIER, Math.floor(merged.officeTier) || 0));
       if (!merged.profitTier || typeof merged.profitTier !== "object") merged.profitTier = {};
-      ["shop", "farm", "lounge", "factory", "papers"].forEach(function (k) {
+      ["shop", "farm", "lounge", "factory", "papers", "smokeshop"].forEach(function (k) {
         var t = merged.profitTier[k];
         merged.profitTier[k] = (typeof t === "number" && isFinite(t)) ? Math.max(0, Math.min(3, Math.floor(t))) : 0;
       });
@@ -2632,7 +2748,7 @@
       merged.cityId = (typeof merged.cityId === "string" && merged.cityId) ? merged.cityId : "home";
 
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
-      ["shop", "farm", "lounge", "factory", "papers"].forEach(function (k) {
+      ["shop", "farm", "lounge", "factory", "papers", "smokeshop"].forEach(function (k) {
         var p = merged.sitePos[k];
         if (!p || typeof p.x !== "number" || typeof p.z !== "number") merged.sitePos[k] = null;
       });
@@ -2644,7 +2760,8 @@
           !(merged.site === "farm" && merged.farm.unlocked) &&
           !(merged.site === "lounge" && merged.lounge.unlocked) &&
           !(merged.site === "factory" && fac.unlocked) &&
-          !(merged.site === "papers" && pap.unlocked)) {
+          !(merged.site === "papers" && pap.unlocked) &&
+          !(merged.site === "smokeshop" && sms.unlocked)) {
         merged.site = "shop";
       }
       // Beds unlock a whole row at a time now — round an older save's count up
@@ -7304,6 +7421,336 @@
       b.l2.rotation.x = -sw;
       b.obj.position.y = walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0;
     }
+  }
+
+  // ===================================================================
+  //  SMOKE SHOP — Uptown's storefront, rebuilt from scratch on every tier
+  //  upgrade the same way rebuildLounge() works, but this shop reads
+  //  nothing like the dispensary: register on the left wall, shelves
+  //  along the back, and a warehouse strip behind the counter that never
+  //  moves even though what's stacked in it grows with the tier.
+  // ===================================================================
+  var smokeshopGroup = new THREE.Group();
+  scene.add(smokeshopGroup);
+  var smokeshopGround;
+
+  // Front (retail) runs from the door back to z=SMOKESHOP_CZ; everything
+  // behind that, away from the door, is the warehouse strip.
+  var SMOKESHOP_DOOR_Z = SMOKESHOP_CZ + SMOKESHOP_HALF_Z;
+  var SMOKESHOP_REGISTER = { x: -SMOKESHOP_HALF_X + 3, z: SMOKESHOP_CZ + 6 };
+  var SMOKESHOP_WAREHOUSE_Z = SMOKESHOP_CZ - SMOKESHOP_HALF_Z + 6;   // crate pile anchor
+  var SMOKESHOP_RESTOCK_ZONE = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_WAREHOUSE_Z };
+  var SMOKESHOP_HR_ZONE = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_CZ + 6 };
+  var SMOKESHOP_TIER_PAD = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_CZ + 16 };
+
+  // Per-tier palette + feature flags, index matches SMOKESHOP_TIERS.
+  var SMOKESHOP_LOOKS = [
+    { floor: "dockFloor", wall: "wallPaint", counter: "counter",     trim: "metalRack",
+      neon: false, glassCases: false },
+    { floor: "tile",      wall: "wallBack",  counter: "wood",        trim: "steel",
+      neon: false, glassCases: false },
+    { floor: "floorDark", wall: "wallAccent", counter: "counterStone", trim: "steel",
+      neon: false, glassCases: false },
+    { floor: "dark",      wall: "dark",      counter: "counterStone", trim: "gold",
+      neon: true, glassCases: true },
+  ];
+  function smokeshopLook() { return SMOKESHOP_LOOKS[smokeshopTier()]; }
+
+  // A canvas-drawn sprite rather than 3D cone geometry (the hat's
+  // buildWeedLeaf() approach) — flattened cones read badly at wall-sign
+  // scale and are harder to light evenly than a flat emissive-looking
+  // plane. Five blades fanned from a shared base, same silhouette idea.
+  function buildNeonLeafSign(parent, x, y, z, color) {
+    var c = document.createElement("canvas");
+    c.width = 256; c.height = 256;
+    var g = c.getContext("2d");
+    g.translate(128, 200);
+    g.fillStyle = color;
+    g.shadowColor = color;
+    g.shadowBlur = 22;
+    var angles = [-1.05, -0.52, 0, 0.52, 1.05];
+    var lens = [70, 100, 118, 100, 70];
+    for (var i = 0; i < angles.length; i++) {
+      g.save();
+      g.rotate(angles[i]);
+      var len = lens[i];
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.quadraticCurveTo(len * 0.26, -len * 0.35, 0, -len);
+      g.quadraticCurveTo(-len * 0.26, -len * 0.35, 0, 0);
+      g.closePath();
+      g.fill();
+      g.restore();
+    }
+    var spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), transparent: true, depthTest: false,
+    }));
+    spr.scale.set(4.2, 4.2, 1);
+    spr.position.set(x, y, z);
+    parent.add(spr);
+    addGlow(parent, x, y, z, 7.0, new THREE.Color(color).getHex(), 0.4);
+    return spr;
+  }
+
+  function rebuildSmokeshop() {
+    var g = smokeshopGroup;
+    while (g.children.length) g.remove(g.children[0]);
+
+    var look = smokeshopLook();
+    var floorMat = M[look.floor], wallMat = M[look.wall];
+    var counterMat = M[look.counter], trimMat = M[look.trim];
+    var y = SMOKESHOP_GROUND_TOP;
+
+    smokeshopGround = new THREE.Mesh(
+      new THREE.BoxGeometry(SMOKESHOP_HALF_X * 2 + 6, 0.3, SMOKESHOP_HALF_Z * 2 + 6), floorMat);
+    smokeshopGround.position.set(0, y - 0.15, SMOKESHOP_CZ);
+    smokeshopGround.receiveShadow = true;
+    g.add(smokeshopGround);
+
+    // ---- warehouse strip: always sealed concrete, whatever the retail
+    // floor looks like this tier — it reads as "the back room" regardless ----
+    var whDepth = 12;
+    var wh = new THREE.Mesh(
+      new THREE.PlaneGeometry(SMOKESHOP_HALF_X * 2 - 1, whDepth), M.dockFloor);
+    wh.rotation.x = -Math.PI / 2;
+    wh.position.set(0, y + 0.01, SMOKESHOP_CZ - SMOKESHOP_HALF_Z + whDepth / 2 + 0.5);
+    wh.receiveShadow = true;
+    g.add(wh);
+    var whLbl = textSprite("WAREHOUSE", "#cfd8e0");
+    whLbl.scale.set(4.4, 1.0, 1);
+    whLbl.position.set(0, 3.2, SMOKESHOP_WAREHOUSE_Z);
+    g.add(whLbl);
+
+    // ---- four walls, door gap on the entrance (+Z) wall ----
+    var wallThick = 0.4, wallH = 8.5;
+    var minX = -SMOKESHOP_HALF_X, maxX = SMOKESHOP_HALF_X;
+    var minZ = SMOKESHOP_CZ - SMOKESHOP_HALF_Z, maxZ = SMOKESHOP_CZ + SMOKESHOP_HALF_Z;
+    function wallSlab(sizeX, sizeZ, x, z) {
+      var wall = new THREE.Mesh(new THREE.BoxGeometry(sizeX, wallH, sizeZ), wallMat);
+      wall.position.set(x, wallH / 2, z);
+      wall.receiveShadow = true; wall.castShadow = true;
+      g.add(wall);
+    }
+    wallSlab(maxX - minX + wallThick * 2, wallThick, 0, minZ);   // back wall
+    wallSlab(wallThick, maxZ - minZ, minX, SMOKESHOP_CZ);        // west (register wall)
+    wallSlab(wallThick, maxZ - minZ, maxX, SMOKESHOP_CZ);        // east
+    var doorHalf = 3.0;
+    wallSlab(maxX - doorHalf, wallThick, (minX + maxX - doorHalf) / 2 - 0.15, maxZ);
+    wallSlab(maxX - doorHalf, wallThick, -(minX + maxX - doorHalf) / 2 + 0.15, maxZ);
+    var lintel = new THREE.Mesh(new THREE.BoxGeometry(doorHalf * 2, wallH - 6.2, wallThick), wallMat);
+    lintel.position.set(0, 6.2 + (wallH - 6.2) / 2, maxZ);
+    g.add(lintel);
+    var doorSign = textSprite(smokeshopTierDef().name.toUpperCase(), look.neon ? "#ff5fa8" : "#eafff2");
+    doorSign.scale.set(7.2, 1.5, 1);
+    doorSign.position.set(0, 6.6, maxZ);
+    g.add(doorSign);
+
+    // ---- register counter, fixed on the west (left) wall ----
+    var counter = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 3.6), counterMat);
+    counter.position.set(SMOKESHOP_REGISTER.x, 0.55, SMOKESHOP_REGISTER.z);
+    counter.castShadow = true; counter.receiveShadow = true;
+    g.add(counter);
+    var till = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.6), trimMat);
+    till.position.set(SMOKESHOP_REGISTER.x + 0.3, 1.28, SMOKESHOP_REGISTER.z);
+    g.add(till);
+
+    // ---- tier 3 flourish: glass display cases flanking the register ----
+    if (look.glassCases) {
+      [-2.4, 2.4].forEach(function (dz) {
+        var kase = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.5, 1.2), M.counterGlass);
+        kase.position.set(SMOKESHOP_REGISTER.x, 0.75, SMOKESHOP_REGISTER.z + dz);
+        g.add(kase);
+        var frame = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.06, 1.25), trimMat);
+        frame.position.set(SMOKESHOP_REGISTER.x, 1.5, SMOKESHOP_REGISTER.z + dz);
+        g.add(frame);
+      });
+    }
+
+    // ---- tier 3 flourish: a big neon weed-leaf sign on the back wall,
+    // the first thing customers see walking in from the door ----
+    if (look.neon) {
+      buildNeonLeafSign(g, 0, 5.2, minZ + 0.25, "#ff5fa8");
+    }
+
+    // ---- HR desk, back corner clear of the warehouse crates ----
+    var deskProp = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.0, 1.0), M.wood);
+    deskProp.position.set(SMOKESHOP_HR_ZONE.x, y + 0.5, SMOKESHOP_HR_ZONE.z);
+    deskProp.castShadow = true;
+    g.add(deskProp);
+    addGlow(g, SMOKESHOP_HR_ZONE.x, y + 1.4, SMOKESHOP_HR_ZONE.z, 3.0, 0xffd98a, 0.24);
+    var hrLbl = textSprite("HR OFFICE", "#ffe9b0");
+    hrLbl.scale.set(2.4, 0.54, 1);
+    hrLbl.position.set(SMOKESHOP_HR_ZONE.x, y + 2.1, SMOKESHOP_HR_ZONE.z);
+    g.add(hrLbl);
+
+    // ---- two piles, same makeResourcePile() helper the mill uses: one
+    // shared stack of assorted stock on the shelf by the register (what's
+    // sellable right now), one in the warehouse strip (what's waiting on a
+    // restocker) — one bar each, not per-product, per the shared-warehouse
+    // call ----
+    smokeshopShelfPile = makeResourcePile(
+      g, SMOKESHOP_REGISTER.x + 2.6, SMOKESHOP_REGISTER.z, smokeshopBoxGeo, trimMat, 24, 4, 3, y);
+    smokeshopWarehousePile = makeResourcePile(
+      g, 0, SMOKESHOP_WAREHOUSE_Z, smokeshopBoxGeo, M.pallet, 40, 6, 4, y);
+  }
+  var smokeshopBoxGeo = new THREE.BoxGeometry(0.55, 0.4, 0.4);
+  var smokeshopShelfPile = null, smokeshopWarehousePile = null;
+  rebuildSmokeshop();
+
+  // ===================================================================
+  //  SMOKE SHOP ECONOMY — warehouse trickle, restockers, checkout
+  // ===================================================================
+  // Phase 1 keeps this deliberately simpler than the dispensary's own
+  // customer simulation: instead of walking NPC customers threading a
+  // queue, stock sells itself off the shelf on a timer once it's stocked,
+  // the same "abstracted customer" idea the papers mill's truck already
+  // uses. Restockers are the one part of the loop that gets a real walking
+  // body, since that's the piece the player actually asked to watch happen.
+  var SMOKESHOP_INTAKE_CAPS = [60, 120, 220, 400];
+  function smokeshopIntakeCapFor(tier) { return SMOKESHOP_INTAKE_CAPS[tier] || SMOKESHOP_INTAKE_CAPS[0]; }
+  function smokeshopIntakeCap() { return smokeshopIntakeCapFor(smokeshopTier()); }
+  function smokeshopStockTotal() {
+    var t = 0;
+    SMOKESHOP_KINDS.forEach(function (k) { t += state.smokeshop.stock[k] || 0; });
+    return t;
+  }
+  var SMOKESHOP_RESTOCK_RATE = 1.4;   // units/sec trickling into the warehouse, split across unlocked kinds
+  var SMOKESHOP_SHELF_CAP = 24;       // matches the shelf pile's maxBlocks above
+  var SMOKESHOP_SELL_EVERY = 1.5;     // seconds between automatic sales off the shelf, before speed upgrades
+  var smokeshopShelf = { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 };   // runtime only
+  function smokeshopShelfTotal() {
+    var t = 0;
+    SMOKESHOP_KINDS.forEach(function (k) { t += smokeshopShelf[k] || 0; });
+    return t;
+  }
+  var smokeshopSellAcc = 0;
+
+  var MAX_RESTOCKERS = 3;
+  function costRestocker() { return scaled(40000000 * Math.pow(2.7, (state.smokeshop && state.smokeshop.restockerLv) || 0)); }
+  var restockers = [];
+  (function buildRestockers() {
+    for (var i = 0; i < MAX_RESTOCKERS; i++) {
+      var g = new THREE.Group();
+      var t = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.95, 0.58), M.apron);
+      t.position.y = 1.1; t.castShadow = true; g.add(t);
+      var h = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.64, 0.62), i % 2 ? M.skin2 : M.skin);
+      h.position.y = 1.9; h.castShadow = true; g.add(h);
+      var lgeo = new THREE.BoxGeometry(0.27, 0.7, 0.27);
+      var l1 = new THREE.Mesh(lgeo, M.jeans); l1.position.set(-0.2, 0.35, 0); l1.castShadow = true;
+      var l2 = new THREE.Mesh(lgeo, M.jeans); l2.position.set(0.2, 0.35, 0); l2.castShadow = true;
+      g.add(l1); g.add(l2);
+      var box = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.4), M.pallet);
+      box.position.set(0, 1.35, 0.5); box.visible = false;
+      g.add(box);
+      scene.add(g);
+      restockers.push({
+        obj: g, l1: l1, l2: l2, box: box,
+        pos: { x: SMOKESHOP_RESTOCK_ZONE.x, z: SMOKESHOP_RESTOCK_ZONE.z },
+        phase: "toWarehouse", timer: 0, carrying: 0, walkPhase: i * 1.3,
+      });
+    }
+  })();
+  function rsStepTo(b, tx, tz, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z, d = Math.hypot(dx, dz);
+    if (d < 0.08) return true;
+    var step = Math.min(RUNNER_SPEED_BASE * staffSpeedMult("smokeshop") * dt, d);
+    b.pos.x += (dx / d) * step; b.pos.z += (dz / d) * step;
+    b.walkPhase += dt * 9;
+    return false;
+  }
+  var RUNNER_SPEED_BASE = 5.8;
+
+  var smokeshopTillPad = { x: SMOKESHOP_REGISTER.x, z: SMOKESHOP_REGISTER.z, half: 1.4 };
+  var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER");
+  MYSTERY_TILLS.smokeshop = [smokeshopTillPad, SMOKESHOP_RESTOCK_ZONE];
+
+  function updateSmokeshop(now, dt) {
+    var hired = smokeshopUnlocked();
+    // ---- passive shipments trickle into the warehouse ----
+    if (hired) {
+      var open = smokeshopUnlockedProducts();
+      var room = smokeshopIntakeCap() - smokeshopStockTotal();
+      if (open.length && room > 0) {
+        var per = Math.min(room, SMOKESHOP_RESTOCK_RATE * dt) / open.length;
+        open.forEach(function (p) { state.smokeshop.stock[p.kind] = (state.smokeshop.stock[p.kind] || 0) + per; });
+      }
+    }
+
+    // ---- restockers: warehouse -> shelf ----
+    for (var i = 0; i < restockers.length; i++) {
+      var b = restockers[i];
+      var on = hired && i < (state.smokeshop.restockerLv || 0);
+      b.obj.visible = on;
+      if (!on) continue;
+      var walking = false;
+      if (b.phase === "toWarehouse") {
+        walking = !rsStepTo(b, SMOKESHOP_RESTOCK_ZONE.x, SMOKESHOP_RESTOCK_ZONE.z, dt);
+        if (!walking) { b.phase = "pick"; b.timer = 0.5 * staffActMult("smokeshop"); }
+      } else if (b.phase === "pick") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var cap = 3 + staffCarryBonus("smokeshop");
+          var kinds = smokeshopUnlockedProducts().filter(function (p) { return (state.smokeshop.stock[p.kind] || 0) > 0; });
+          var took = 0;
+          for (var k = 0; k < kinds.length && took < cap; k++) {
+            var kd = kinds[k].kind;
+            var take = Math.min(cap - took, state.smokeshop.stock[kd]);
+            state.smokeshop.stock[kd] -= take;
+            took += take;
+          }
+          b.carrying = took;
+          b.box.visible = took > 0;
+          b.phase = took > 0 ? "toShelf" : "toWarehouse";
+          b.timer = 0.6;
+        }
+      } else if (b.phase === "toShelf") {
+        walking = !rsStepTo(b, SMOKESHOP_REGISTER.x + 2.6, SMOKESHOP_REGISTER.z, dt);
+        if (!walking) { b.phase = "drop"; b.timer = 0.5 * staffActMult("smokeshop"); }
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var shelfRoom = SMOKESHOP_SHELF_CAP - smokeshopShelfTotal();
+          var open2 = smokeshopUnlockedProducts();
+          var put = Math.min(b.carrying, Math.max(0, shelfRoom));
+          for (var j = 0; j < put; j++) {
+            var pk = open2[j % open2.length].kind;
+            smokeshopShelf[pk] = (smokeshopShelf[pk] || 0) + 1;
+          }
+          b.carrying = 0;
+          b.box.visible = false;
+          b.phase = "toWarehouse";
+          b.timer = 0.6;
+        }
+      }
+      b.obj.position.set(b.pos.x, 0, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.5 : 0;
+      b.l1.rotation.x = sw; b.l2.rotation.x = -sw;
+    }
+
+    // ---- checkout: shelf stock sells itself on a timer, faster with more
+    // staff speed at the smoke shop's HR desk (that upgrade covers both
+    // restocking legs and checkout here) ----
+    if (hired && smokeshopShelfTotal() > 0) {
+      smokeshopSellAcc += dt;
+      var every = SMOKESHOP_SELL_EVERY / staffSpeedMult("smokeshop");
+      if (smokeshopSellAcc >= every) {
+        smokeshopSellAcc = 0;
+        var stocked = SMOKESHOP_KINDS.filter(function (k) { return (smokeshopShelf[k] || 0) > 0; });
+        if (stocked.length) {
+          var pick = stocked[Math.floor(Math.random() * stocked.length)];
+          smokeshopShelf[pick]--;
+          var amount = smokeshopProductValue(pick);
+          smokeshopTill.payOut(amount);
+          addFloater(SMOKESHOP_REGISTER.x, 2.4, SMOKESHOP_REGISTER.z, "+$" + fmt(Math.round(amount)), "#ffd75e");
+        }
+      }
+    } else {
+      smokeshopSellAcc = 0;
+    }
+
+    if (smokeshopShelfPile) smokeshopShelfPile.setCount(smokeshopShelfTotal());
+    if (smokeshopWarehousePile) smokeshopWarehousePile.setCount(smokeshopStockTotal());
+    smokeshopTill.update(now, function () {});
   }
 
   // ===================================================================
@@ -12979,6 +13426,29 @@
       },
     },
     {
+      id: "restocker", label: "RESTOCKER", icon: "\ud83d\udce6",
+      x: SMOKESHOP_RESTOCK_ZONE.x, z: SMOKESHOP_RESTOCK_ZONE.z,
+      site: "smokeshop", color: 0x8a95a1, kiosk: false,
+      hidden: function () { return !smokeshopUnlocked(); },
+      name: function () {
+        return (state.smokeshop.restockerLv || 0) === 0 ? "Hire a Restocker" : "Hire Another Restocker";
+      },
+      desc: function () {
+        var n = state.smokeshop.restockerLv || 0;
+        return n >= MAX_RESTOCKERS
+          ? "The stockroom is fully staffed"
+          : (n === 0
+              ? "They carry shipments from the warehouse out to the shelf"
+              : n + " on staff \u00b7 hire one more to keep the shelf full");
+      },
+      cost: costRestocker,
+      maxed: function () { return (state.smokeshop.restockerLv || 0) >= MAX_RESTOCKERS; },
+      buy: function () {
+        state.smokeshop.restockerLv = (state.smokeshop.restockerLv || 0) + 1;
+        toast("\ud83d\udce6 Restocker hired \u2014 the shelf stays full now!");
+      },
+    },
+    {
       id: "purity", label: "PURITY", icon: "\u2728", x: PURITY_ZONE.x, z: PURITY_ZONE.z,
       color: 0xffd75e, kiosk: false,
       hidden: function () { return !dabsUnlocked(); },
@@ -13503,6 +13973,31 @@
         rebuildOfficeAnnex();
         addFloater(OFFICE_TIER_PAD.x, 3.2, OFFICE_TIER_PAD.z, officeTierDef().name + "!", "#ffd75e");
         toast("\ud83c\udfd9\ufe0f " + officeTierDef().name + " \u2014 " + officeTierDef().adds + "!");
+      },
+    },
+    {
+      id: "smokeshoptier", label: "UPGRADE", icon: "\ud83c\udfea",
+      x: SMOKESHOP_TIER_PAD.x, z: SMOKESHOP_TIER_PAD.z,
+      site: "smokeshop", color: 0xd6b06f, kiosk: true,
+      hidden: function () { return !smokeshopUnlocked(); },
+      name: function () {
+        return smokeshopTier() >= MAX_SMOKESHOP_TIER
+          ? "The Glass House"
+          : "Open " + SMOKESHOP_TIERS[smokeshopTier() + 1].name;
+      },
+      desc: function () {
+        if (smokeshopTier() >= MAX_SMOKESHOP_TIER) return "As high-end as this store gets";
+        return SMOKESHOP_TIERS[smokeshopTier() + 1].adds;
+      },
+      cost: function () {
+        return smokeshopTier() >= MAX_SMOKESHOP_TIER ? 0 : scaled(SMOKESHOP_TIERS[smokeshopTier() + 1].cost);
+      },
+      maxed: function () { return smokeshopTier() >= MAX_SMOKESHOP_TIER; },
+      buy: function () {
+        state.smokeshop.tier++;
+        rebuildSmokeshop();
+        addFloater(SMOKESHOP_TIER_PAD.x, 3.2, SMOKESHOP_TIER_PAD.z, smokeshopTierDef().name + "!", "#ffd75e");
+        toast("\ud83c\udfea " + smokeshopTierDef().name + " \u2014 " + smokeshopTierDef().adds + "!");
       },
     },
     {
@@ -14433,6 +14928,7 @@
     updateFactory(dt, now);
     updateFactoryVisuals(now);
     updateFactoryTill(now);
+    updateSmokeshop(now, dt);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
@@ -14608,7 +15104,20 @@
 
   function renderMap() {
     mapRows.innerHTML = "";
-    var sites = citySites();
+    // Every site across every city, not just the one you're standing in —
+    // a deed has to be visible/buyable before you've ever set foot in its
+    // city, since owning a deed there is what grants access in the first
+    // place (see the office City Terminal). Grouped under a city header so
+    // it doesn't just read as one long undifferentiated list.
+    CITIES.forEach(function (c) {
+      var header = document.createElement("div");
+      header.className = "map-section-title";
+      header.textContent = c.name;
+      mapRows.appendChild(header);
+      renderMapSites(c.siteIds.map(function (id) { return SITES[id]; }));
+    });
+  }
+  function renderMapSites(sites) {
     for (var i = 0; i < sites.length; i++) {
       (function (s) {
         var here = s.id === state.site;
@@ -14677,7 +15186,10 @@
     mapBtn.classList.toggle("nudge", !!on);
   }
   function checkDeedAffordable() {
-    var sites = citySites();
+    // Every site everywhere, not just the current city's — same reasoning
+    // as renderMap(): a deed becoming affordable in a city you haven't
+    // travelled to yet is still news worth surfacing.
+    var sites = SITE_LIST;
     for (var i = 0; i < sites.length; i++) {
       var s = sites[i];
       if (!s.deedCost || s.unlocked() || state.deedSeen[s.id]) continue;
@@ -14820,15 +15332,31 @@
     });
 
     // ---- city terminal ----
+    // A city needs no unlock of its own — access is just owning the deed to
+    // any site inside it, the same way every other site is gated, so there
+    // is no separate "buy this city" step here, only a travel button once
+    // you already have a foothold there.
     officeCityRows.innerHTML = "";
     CITIES.forEach(function (c) {
       var here = c.id === currentCityId();
+      var openSites = c.siteIds.filter(function (id) { return SITES[id].unlocked(); });
+      var access = openSites.length > 0;
       officeCityRows.appendChild(buildOfficeRow({
         name: c.name,
-        desc: here ? "Your current city" : (c.comingSoon ? "Scouting the next location..." : ""),
-        btnText: here ? "Here" : "Coming Soon",
-        disabled: true,
-        locked: !here,
+        desc: here ? "Your current city"
+            : access ? "Travel there any time"
+            : "Buy a deed there first — check the map",
+        btnText: here ? "Here" : access ? "Travel" : "Locked",
+        disabled: here || !access,
+        locked: !access,
+        onClick: (!here && access) ? function () {
+          state.cityId = c.id;
+          closeOffice();
+          travelTo(openSites[0]);
+          renderMap();
+          saveState();
+          toast("🗺️ Welcome to " + c.name + "!");
+        } : null,
       }));
     });
   }
