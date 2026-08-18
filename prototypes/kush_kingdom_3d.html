@@ -1300,7 +1300,9 @@
   // city boundary, not just a site boundary. Re-measure fog reach in-browser
   // once the site's camDist is final, same discipline noted at PAPERS_CZ.
   var SMOKESHOP_CZ = -1800;
-  var SMOKESHOP_HALF_X = 20, SMOKESHOP_HALF_Z = 20;
+  // Matches the original dispensary's own footprint (HALF_X=13) rather than
+  // reading as a much bigger building — a corner store should feel like one.
+  var SMOKESHOP_HALF_X = 13, SMOKESHOP_HALF_Z = 15;
   var SMOKESHOP_GROUND_TOP = FLOOR_TOP_BACK;
   var SMOKESHOP_DEED_COST = 8e13;   // Uptown's asking price — priciest yet
   function smokeshopUnlocked() { return !!(state.smokeshop && state.smokeshop.unlocked); }
@@ -1947,12 +1949,12 @@
       { x: 42.0,  z: PAPERS_CZ - 18.0 }, { x: -42.0, z: PAPERS_CZ + 20.0 },
       { x: 20.0,  z: PAPERS_CZ + 22.0 },
     ],
-    // Bounds are +/-(SMOKESHOP_HALF_X - 1.5) and SMOKESHOP_CZ +/-
-    // (SMOKESHOP_HALF_Z - 1.5) — a small room, so these sit well clear of
-    // the register/warehouse pads rather than trying to spread out.
+    // Retail room only (SMOKESHOP_CZ - 4 .. SMOKESHOP_CZ + 15, x +/-11.5) —
+    // the warehouse sits behind its own door now, so spots stay up front
+    // where the player actually is, clear of the fridges/counters/register.
     smokeshop: [
-      { x: -12.0, z: SMOKESHOP_CZ + 12.0 }, { x: 12.0, z: SMOKESHOP_CZ + 12.0 },
-      { x: 12.0,  z: SMOKESHOP_CZ - 4.0 },
+      { x: 0.0,  z: SMOKESHOP_CZ + 10.0 }, { x: -6.0, z: SMOKESHOP_CZ + 13.0 },
+      { x: 6.0,  z: SMOKESHOP_CZ + 2.0 },
     ],
   };
   // Anything you stand on to spend money is off limits — a crate parked on the
@@ -7434,14 +7436,59 @@
   scene.add(smokeshopGroup);
   var smokeshopGround;
 
-  // Front (retail) runs from the door back to z=SMOKESHOP_CZ; everything
-  // behind that, away from the door, is the warehouse strip.
+  // Retail runs from the door back to the partition wall; the warehouse is
+  // its own room behind that wall, through its own doorway — not just a
+  // different-colored patch of the same open floor.
   var SMOKESHOP_DOOR_Z = SMOKESHOP_CZ + SMOKESHOP_HALF_Z;
-  var SMOKESHOP_REGISTER = { x: -SMOKESHOP_HALF_X + 3, z: SMOKESHOP_CZ + 6 };
-  var SMOKESHOP_WAREHOUSE_Z = SMOKESHOP_CZ - SMOKESHOP_HALF_Z + 6;   // crate pile anchor
-  var SMOKESHOP_RESTOCK_ZONE = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_WAREHOUSE_Z };
-  var SMOKESHOP_HR_ZONE = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_CZ + 6 };
-  var SMOKESHOP_TIER_PAD = { x: SMOKESHOP_HALF_X - 4, z: SMOKESHOP_CZ + 16 };
+  var SMOKESHOP_PARTITION_Z = SMOKESHOP_CZ - 4;
+  var SMOKESHOP_REGISTER = { x: -SMOKESHOP_HALF_X + 2.4, z: SMOKESHOP_CZ + 4 };
+  var SMOKESHOP_WAREHOUSE_Z = (SMOKESHOP_PARTITION_Z + (SMOKESHOP_CZ - SMOKESHOP_HALF_Z)) / 2;
+  var SMOKESHOP_RESTOCK_ZONE = { x: SMOKESHOP_HALF_X - 3, z: SMOKESHOP_WAREHOUSE_Z };
+  var SMOKESHOP_HR_ZONE = { x: -SMOKESHOP_HALF_X + 3, z: SMOKESHOP_WAREHOUSE_Z };
+  var SMOKESHOP_TIER_PAD = { x: SMOKESHOP_HALF_X - 3, z: SMOKESHOP_CZ + 13 };
+  var SMOKESHOP_FRIDGE_ZONE = { x: SMOKESHOP_HALF_X - 1.4, z: SMOKESHOP_CZ + 4 };
+  var SMOKESHOP_COUNTER_ZONE = { x: 0, z: SMOKESHOP_CZ - 1.5 };
+
+  function buildFridge(parent, x, z) {
+    var g = new THREE.Group();
+    var body = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.1, 0.8), M.steel);
+    body.position.y = 1.05; body.castShadow = true; body.receiveShadow = true;
+    g.add(body);
+    var doorGlass = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.75, 0.06), M.windowGlass);
+    doorGlass.position.set(0, 1.05, 0.41);
+    g.add(doorGlass);
+    for (var i = 0; i < 3; i++) {
+      var shelf = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.04, 0.5), M.metal);
+      shelf.position.set(0, 0.5 + i * 0.55, 0.05);
+      g.add(shelf);
+    }
+    var vent = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.18, 0.8), M.dark);
+    vent.position.y = 2.19;
+    g.add(vent);
+    var light = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.04), M.lightPanel);
+    light.position.set(0, 1.85, 0.42);
+    g.add(light);
+    g.position.set(x, 0, z);
+    parent.add(g);
+    return g;
+  }
+
+  function buildGlassCounter(parent, x, z, rotY) {
+    var g = new THREE.Group();
+    var base = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.85, 0.7), M.metal);
+    base.position.y = 0.425; base.castShadow = true; base.receiveShadow = true;
+    g.add(base);
+    var top = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.04, 0.7), M.counterGlass);
+    top.position.y = 0.87;
+    g.add(top);
+    var front = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.75, 0.04), M.counterGlass);
+    front.position.set(0, 0.42, 0.35);
+    g.add(front);
+    g.rotation.y = rotY || 0;
+    g.position.set(x, 0, z);
+    parent.add(g);
+    return g;
+  }
 
   // Per-tier palette + feature flags, index matches SMOKESHOP_TIERS.
   var SMOKESHOP_LOOKS = [
@@ -7507,21 +7554,19 @@
     smokeshopGround.receiveShadow = true;
     g.add(smokeshopGround);
 
-    // ---- warehouse strip: always sealed concrete, whatever the retail
-    // floor looks like this tier — it reads as "the back room" regardless ----
-    var whDepth = 12;
+    // ---- warehouse room: its own sealed-concrete floor, always the same
+    // regardless of the retail tier — a stockroom doesn't get fancier ----
+    var whDepth = SMOKESHOP_PARTITION_Z - (SMOKESHOP_CZ - SMOKESHOP_HALF_Z);
     var wh = new THREE.Mesh(
-      new THREE.PlaneGeometry(SMOKESHOP_HALF_X * 2 - 1, whDepth), M.dockFloor);
+      new THREE.PlaneGeometry(SMOKESHOP_HALF_X * 2 - 1, whDepth - 0.5), M.dockFloor);
     wh.rotation.x = -Math.PI / 2;
-    wh.position.set(0, y + 0.01, SMOKESHOP_CZ - SMOKESHOP_HALF_Z + whDepth / 2 + 0.5);
+    wh.position.set(0, y + 0.01, SMOKESHOP_WAREHOUSE_Z);
     wh.receiveShadow = true;
     g.add(wh);
-    var whLbl = textSprite("WAREHOUSE", "#cfd8e0");
-    whLbl.scale.set(4.4, 1.0, 1);
-    whLbl.position.set(0, 3.2, SMOKESHOP_WAREHOUSE_Z);
-    g.add(whLbl);
 
-    // ---- four walls, door gap on the entrance (+Z) wall ----
+    // ---- outer walls, door gap on the entrance (+Z) wall, plus an inner
+    // partition splitting retail from the warehouse — a real doorway, not
+    // just a different floor colour in one open room ----
     var wallThick = 0.4, wallH = 8.5;
     var minX = -SMOKESHOP_HALF_X, maxX = SMOKESHOP_HALF_X;
     var minZ = SMOKESHOP_CZ - SMOKESHOP_HALF_Z, maxZ = SMOKESHOP_CZ + SMOKESHOP_HALF_Z;
@@ -7545,6 +7590,20 @@
     doorSign.position.set(0, 6.6, maxZ);
     g.add(doorSign);
 
+    // ---- warehouse partition + doorway, employee-side plain ----
+    var whDoorHalf = 1.8;
+    wallSlab(maxX - minX - whDoorHalf * 2, wallThick, 0, SMOKESHOP_PARTITION_Z);
+    var whLintel = new THREE.Mesh(new THREE.BoxGeometry(whDoorHalf * 2, wallH - 5.0, wallThick), wallMat);
+    whLintel.position.set(0, 5.0 + (wallH - 5.0) / 2, SMOKESHOP_PARTITION_Z);
+    g.add(whLintel);
+    var whThreshold = new THREE.Mesh(new THREE.BoxGeometry(whDoorHalf * 2 - 0.3, 0.06, wallThick + 0.2), M.threshold);
+    whThreshold.position.set(0, y + 0.03, SMOKESHOP_PARTITION_Z);
+    g.add(whThreshold);
+    var whDoorSign = textSprite("WAREHOUSE", "#eafff2");
+    whDoorSign.scale.set(3.2, 0.68, 1);
+    whDoorSign.position.set(0, 5.35, SMOKESHOP_PARTITION_Z);
+    g.add(whDoorSign);
+
     // ---- register counter, fixed on the west (left) wall ----
     var counter = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 3.6), counterMat);
     counter.position.set(SMOKESHOP_REGISTER.x, 0.55, SMOKESHOP_REGISTER.z);
@@ -7566,11 +7625,19 @@
       });
     }
 
-    // ---- tier 3 flourish: a big neon weed-leaf sign on the back wall,
-    // the first thing customers see walking in from the door ----
+    // ---- tier 3 flourish: a big neon weed-leaf sign on the partition wall
+    // — the retail room's own back wall now that the warehouse sits behind
+    // a door, so it's still the first thing customers see walking in ----
     if (look.neon) {
-      buildNeonLeafSign(g, 0, 5.2, minZ + 0.25, "#ff5fa8");
+      buildNeonLeafSign(g, 0, 5.0, SMOKESHOP_PARTITION_Z + 0.25, "#ff5fa8");
     }
+
+    // ---- base furniture, present from tier 0: commercial fridges along
+    // the east wall, glass display counters toward the back ----
+    buildFridge(g, SMOKESHOP_FRIDGE_ZONE.x, SMOKESHOP_CZ + 1.5);
+    buildFridge(g, SMOKESHOP_FRIDGE_ZONE.x, SMOKESHOP_CZ + 8.5);
+    buildGlassCounter(g, SMOKESHOP_COUNTER_ZONE.x - 4.2, SMOKESHOP_COUNTER_ZONE.z, 0);
+    buildGlassCounter(g, SMOKESHOP_COUNTER_ZONE.x + 4.2, SMOKESHOP_COUNTER_ZONE.z, 0);
 
     // ---- HR desk, back corner clear of the warehouse crates ----
     var deskProp = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.0, 1.0), M.wood);
