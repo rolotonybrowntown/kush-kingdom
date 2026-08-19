@@ -1369,7 +1369,7 @@
   // widest gap already in use. Re-measure fog once camDist is final, same
   // discipline noted at PAPERS_CZ.
   var GLASS_CZ = -2200;
-  var GLASS_HALF_X = 40, GLASS_HALF_Z = 26;
+  var GLASS_HALF_X = 40, GLASS_HALF_Z = 20;
   var GLASS_GROUND_TOP = FLOOR_TOP_BACK;
   var GLASS_DEED_COST = 2e14;   // above the smoke shop's own 8e13
   function glassUnlocked() { return !!(state.glass && state.glass.unlocked); }
@@ -1904,7 +1904,7 @@
         return furnaceOwned() + "/" + MAX_FURNACES + " furnaces · " +
                finisherOwned() + "/" + MAX_FINISHERS + " finishers";
       },
-      spawn: { x: 0, z: GLASS_CZ + GLASS_HALF_Z - 5 },
+      spawn: { x: 0, z: GLASS_CZ + 7 },
       camDist: function () { return 50; },
       groundOf: function () { return glassGround; },
       unlocked: glassUnlocked,
@@ -1917,6 +1917,12 @@
       deedCost: GLASS_DEED_COST,
       onUnlock: function () {
         state.glass.unlocked = true;
+        // Hand over one of each stage, so the yard reads as a working shop
+        // the moment you walk in rather than as an empty slab.
+        state.glass.furnaceCount = Math.max(1, state.glass.furnaceCount);
+        state.glass.blowerCount = Math.max(1, state.glass.blowerCount);
+        state.glass.finisherCount = Math.max(1, state.glass.finisherCount);
+        refreshGlassMachines();
         toast("🔥 Deed signed — the Glass Works is yours!");
       },
     },
@@ -2056,9 +2062,9 @@
     // 1.5). Kept off the machine columns and out of the hire/upgrade pad
     // bands so a crate never lands on top of a pad.
     glassshop: [
-      { x: -32.0, z: GLASS_CZ + 22.0 }, { x: 0.0,  z: GLASS_CZ + 22.0 },
-      { x: 32.0,  z: GLASS_CZ + 22.0 }, { x: -32.0, z: GLASS_CZ - 22.0 },
-      { x: 10.0,  z: GLASS_CZ - 22.0 },
+      { x: -32.0, z: GLASS_CZ + 15.0 }, { x: 0.0,  z: GLASS_CZ + 15.0 },
+      { x: 32.0,  z: GLASS_CZ + 15.0 }, { x: -32.0, z: GLASS_CZ - 15.0 },
+      { x: 10.0,  z: GLASS_CZ - 15.0 },
     ],
   };
   // Anything you stand on to spend money is off limits — a crate parked on the
@@ -8562,6 +8568,226 @@
   // jobs — the field is one room, not a shelf and a bed on opposite walls.
   var fieldHands = [];
   var FIELD_SPEED = 5.6, FIELD_ACT_TIME = 0.5, FIELD_CARRY = 5;
+
+  // ===================== THE GLASS WORKS (Uptown) =====================
+  // Sand -> furnace -> blower bench -> finisher, running left to right in
+  // three rows, then crated over to the Smoke Shop. The machines themselves
+  // are the mill's, built through the shared buildMillMachine() with
+  // glassGroup and the glass floor handed in as options.
+
+  var glassSandGeo   = new THREE.BoxGeometry(0.72, 0.72, 0.72);
+  var glassMoltenGeo = new THREE.SphereGeometry(0.40, 8, 6);
+  var glassBlankGeo  = new THREE.CylinderGeometry(0.30, 0.40, 0.85, 8);
+  var glassPieceGeo  = new THREE.CylinderGeometry(0.20, 0.30, 1.10, 8);
+
+  var furnaceObjects = [], blowerObjects = [], finisherObjects = [];
+  var glassSandPile = null, glassCratePile = null;
+
+  // Machines exist in the scene from the start and are revealed as they are
+  // bought, the same way the mill reveals its saws.
+  function refreshGlassMachines() {
+    var i;
+    for (i = 0; i < furnaceObjects.length; i++)  furnaceObjects[i].group.visible  = i < furnaceOwned();
+    for (i = 0; i < blowerObjects.length; i++)   blowerObjects[i].group.visible   = i < blowerOwned();
+    for (i = 0; i < finisherObjects.length; i++) finisherObjects[i].group.visible = i < finisherOwned();
+  }
+
+  (function buildGlassWorks() {
+    var g = glassGroup;
+    var y = GLASS_GROUND_TOP;
+
+    function slab(w, h, d, x, yy, z, mat) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, yy, z);
+      m.castShadow = true; m.receiveShadow = true;
+      g.add(m);
+      return m;
+    }
+
+    // ---- the yard floor: a concrete slab, oversized so the edge never
+    // shows through the fog, with a sand apron under the hopper end
+    glassGround = new THREE.Mesh(
+      new THREE.BoxGeometry(GLASS_HALF_X * 2 + 60, 0.3, GLASS_HALF_Z * 2 + 60), M.asphalt);
+    glassGround.position.set(0, y - 0.15, GLASS_CZ);
+    glassGround.receiveShadow = true;
+    g.add(glassGround);
+
+    // lighter slab over the shed footprint, so the floor inside reads as a
+    // room instead of merging into the yard in every direction
+    var shedFloor = new THREE.Mesh(
+      new THREE.BoxGeometry(GLASS_HALF_X * 2, 0.08, GLASS_HALF_Z * 2), M.concrete);
+    shedFloor.position.set(0, y + 0.01, GLASS_CZ);
+    shedFloor.receiveShadow = true;
+    g.add(shedFloor);
+
+    var apron = new THREE.Mesh(
+      new THREE.BoxGeometry(20, 0.05, GLASS_HALF_Z * 2 - 4), M.track);
+    apron.position.set(GLASS_SAND_X, y + 0.07, GLASS_CZ);
+    apron.receiveShadow = true;
+    g.add(apron);
+
+    // a scorched lane down the middle of the hot end, so the floor isn't
+    // one flat grey from the furnaces all the way to the crates
+    var burn = new THREE.Mesh(
+      new THREE.BoxGeometry(GLASS_FINISHER_X - GLASS_FURNACE_X + 24, 0.04, GLASS_HALF_Z * 2 - 8), M.asphalt);
+    burn.position.set((GLASS_FURNACE_X + GLASS_FINISHER_X) / 2, y + 0.06, GLASS_CZ);
+    burn.receiveShadow = true;
+    g.add(burn);
+
+    // ---- shell: back and side walls, open to the south so the camera keeps
+    // its view down the line
+    var wallH = 8, wallT = 0.7;
+    slab(GLASS_HALF_X * 2, wallH, wallT, 0, y + wallH / 2, GLASS_CZ - GLASS_HALF_Z, M.counterStone);
+    slab(wallT, wallH, GLASS_HALF_Z * 2, -GLASS_HALF_X, y + wallH / 2, GLASS_CZ, M.counterStone);
+    slab(wallT, wallH, GLASS_HALF_Z * 2,  GLASS_HALF_X, y + wallH / 2, GLASS_CZ, M.counterStone);
+    // South side is a low parapet rather than a full wall - the camera sits
+    // south of the yard, so anything tall here just blocks the view in.
+    var parapetH = 2.2;
+    var bayHalf = 9;
+    var sideW = GLASS_HALF_X - bayHalf;
+    [-1, 1].forEach(function (sx) {
+      slab(sideW, parapetH, wallT, sx * (bayHalf + sideW / 2), y + parapetH / 2, GLASS_CZ + GLASS_HALF_Z, M.counterStone);
+      slab(sideW + 0.6, 0.35, wallT + 0.6, sx * (bayHalf + sideW / 2), y + parapetH + 0.17, GLASS_CZ + GLASS_HALF_Z, M.beltFrame);
+    });
+
+    // capping course, so the walls read as built rather than as flat planes
+    slab(GLASS_HALF_X * 2 + 1, 0.5, wallT + 1, 0, y + wallH + 0.25, GLASS_CZ - GLASS_HALF_Z, M.metalRack);
+    slab(wallT + 1, 0.5, GLASS_HALF_Z * 2, -GLASS_HALF_X, y + wallH + 0.25, GLASS_CZ, M.metalRack);
+    slab(wallT + 1, 0.5, GLASS_HALF_Z * 2,  GLASS_HALF_X, y + wallH + 0.25, GLASS_CZ, M.metalRack);
+
+    // roof vents over the furnace row - a glass works has to breathe
+    for (var vz = -1; vz <= 1; vz++) {
+      slab(3.2, 0.8, 2.4, GLASS_FURNACE_X, y + wallH + 2.6, GLASS_CZ + vz * 8, M.metalRack);
+    }
+
+    // ---- the sand hopper: renewable raw material at the head of the line
+    var hopperG = new THREE.Group();
+    hopperG.position.set(GLASS_SAND_X, y, GLASS_CZ);
+    g.add(hopperG);
+    function hslab(w, h, d, x, yy, z, mat) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, yy, z);
+      m.castShadow = true; m.receiveShadow = true;
+      hopperG.add(m);
+      return m;
+    }
+    [-1, 1].forEach(function (sx) {
+      [-1, 1].forEach(function (sz) {
+        hslab(0.5, 6.0, 0.5, sx * 3.0, 3.0, sz * 2.4, M.beltFrame);
+      });
+    });
+    hslab(7.4, 3.0, 6.0, 0, 7.5, 0, M.metalRack);            // the bin
+    hslab(7.8, 0.4, 6.4, 0, 9.2, 0, M.steel);                 // bin lip
+    var chute = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.5, 2.6, 8), M.steel);
+    chute.position.set(0, 4.7, 0);
+    chute.castShadow = true;
+    hopperG.add(chute);
+    // sand heaped under the chute, which is what you actually pick up
+    glassSandPile = makeResourcePile(hopperG, 0, 5.5, glassSandGeo, M.track, 24, 4, 3);
+    hopperG.add(textSprite("SAND", "#e8d8a8"));
+    hopperG.children[hopperG.children.length - 1].scale.set(3.2, 0.8, 1);
+    hopperG.children[hopperG.children.length - 1].position.set(0, 10.6, 0);
+
+    // ---- the three machine stages
+    function buildFurnace(d) {
+      return buildMillMachine(d, {
+        parent: g, groundY: y,
+        head: "furnace", bodyMat: M.ovenBody, capMat: M.metalRack,
+        inGeo: glassSandGeo, inMat: M.track, outGeo: glassMoltenGeo, outMat: M.ovenGlow,
+        barInColor: 0xd8c890, barOutColor: 0xff8a3c, pileMax: 18,
+      });
+    }
+    function buildBlowerBench(d) {
+      return buildMillMachine(d, {
+        parent: g, groundY: y,
+        head: "blower", bodyMat: M.machine, capMat: M.steel,
+        inGeo: glassMoltenGeo, inMat: M.ovenGlow, outGeo: glassBlankGeo, outMat: M.productJar,
+        barInColor: 0xff8a3c, barOutColor: 0x8ad8ff, pileMax: 18,
+      });
+    }
+    function buildFinisher(d) {
+      return buildMillMachine(d, {
+        parent: g, groundY: y,
+        head: "finisher", bodyMat: M.metalRack, capMat: M.accent,
+        inGeo: glassBlankGeo, inMat: M.productJar, outGeo: glassPieceGeo, outMat: M.productJar,
+        barInColor: 0x8ad8ff, barOutColor: 0x9ad06a, pileMax: 18,
+      });
+    }
+    var gi;
+    for (gi = 0; gi < furnaceDefs.length; gi++)  furnaceObjects.push(buildFurnace(furnaceDefs[gi]));
+    for (gi = 0; gi < blowerDefs.length; gi++)   blowerObjects.push(buildBlowerBench(blowerDefs[gi]));
+    for (gi = 0; gi < finisherDefs.length; gi++) finisherObjects.push(buildFinisher(finisherDefs[gi]));
+    refreshGlassMachines();
+
+    // ---- crate-out: where finished pieces stack waiting for the shop run
+    var crateG = new THREE.Group();
+    crateG.position.set(GLASS_CRATE_X, y, GLASS_CZ);
+    g.add(crateG);
+    // a low loading bench plus a rack behind it
+    var bench = new THREE.Mesh(new THREE.BoxGeometry(5.0, 1.0, 9.0), M.woodDark);
+    bench.position.set(0, 0.5, 0);
+    bench.castShadow = true; bench.receiveShadow = true;
+    crateG.add(bench);
+    [3.0, 6.2].forEach(function (ry) {
+      var beam = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.3, 9.4), M.accent);
+      beam.position.set(0, ry, 0);
+      beam.castShadow = true;
+      crateG.add(beam);
+    });
+    [-1, 1].forEach(function (sx) {
+      [-1, 1].forEach(function (sz) {
+        var post = new THREE.Mesh(new THREE.BoxGeometry(0.4, 7.4, 0.4), M.beltFrame);
+        post.position.set(sx * 2.5, 3.7, sz * 4.5);
+        post.castShadow = true;
+        crateG.add(post);
+      });
+    });
+    glassCratePile = makeResourcePile(crateG, 0, 0, glassPieceGeo, M.productJar, 24, 4, 3, 1.0);
+    var crateLbl = textSprite("TO THE SHOP", "#eafff2");
+    crateLbl.scale.set(4.0, 0.9, 1);
+    crateLbl.position.set(0, 8.4, 0);
+    crateG.add(crateLbl);
+
+    // ---- dressing: gas cylinders by the furnaces, cooling racks by the
+    // finishers, so the yard doesn't read as machines on bare concrete
+    for (var cy = -1; cy <= 1; cy++) {
+      var cyl = new THREE.Group();
+      cyl.position.set(GLASS_FURNACE_X - 7.5, y, GLASS_CZ + cy * 8 - 4.5);
+      for (var cn = 0; cn < 3; cn++) {
+        var tank = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 2.4, 10), cn % 2 ? M.accent : M.steel);
+        tank.position.set(cn * 1.0 - 1.0, 1.2, 0);
+        tank.castShadow = true;
+        cyl.add(tank);
+      }
+      g.add(cyl);
+    }
+    for (var ry2 = -1; ry2 <= 1; ry2++) {
+      var rack = new THREE.Group();
+      rack.position.set(GLASS_FINISHER_X + 8.0, y, GLASS_CZ + ry2 * 8);
+      rack.add(new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, 5.0), M.metalRack));
+      rack.children[0].position.y = 2.6;
+      rack.add(new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, 5.0), M.metalRack));
+      rack.children[1].position.y = 1.3;
+      [-1, 1].forEach(function (sz) {
+        var lp = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3.0, 0.25), M.beltFrame);
+        lp.position.set(0, 1.5, sz * 2.3);
+        rack.add(lp);
+      });
+      for (var pn = 0; pn < 4; pn++) {
+        var pc = new THREE.Mesh(glassPieceGeo, M.productJar);
+        pc.position.set(0, 3.3, -1.7 + pn * 1.15);
+        rack.add(pc);
+      }
+      g.add(rack);
+    }
+
+    // ---- the sign on the back wall
+    var sign = textSprite("GLASS WORKS", "#ffd27a");
+    sign.scale.set(14, 3.0, 1);
+    sign.position.set(0, y + 5.4, GLASS_CZ - GLASS_HALF_Z + 0.8);
+    g.add(sign);
+    addGlow(g, 0, y + 5.4, GLASS_CZ - GLASS_HALF_Z + 1.6, 9.0, 0xff9a3c, 0.28);
+  })();
 
   (function buildFieldHands() {
     for (var n = 0; n < MAX_FIELD_HANDS; n++) {
