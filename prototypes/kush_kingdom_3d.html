@@ -8582,6 +8582,28 @@
 
   var furnaceObjects = [], blowerObjects = [], finisherObjects = [];
   var glassSandPile = null, glassCratePile = null;
+  var glassStudio = null, glassTorches = [];
+
+  // Torch flame. Deliberately NOT additive: the shed floor is bright, and
+  // additive orange over it washes straight out to white. Saturated colour on
+  // normal blending reads as fire; the additive halo is added separately.
+  var glassFlameMat = new THREE.MeshBasicMaterial({
+    color: 0xff5a0c, transparent: true, opacity: 0.95, depthWrite: false,
+  });
+  var glassFlameCoreMat = new THREE.MeshBasicMaterial({
+    color: 0xffd23f, transparent: true, opacity: 1.0, depthWrite: false,
+  });
+  var glassFlameGeo = new THREE.ConeGeometry(0.6, 2.6, 8);
+  var glassFlameCoreGeo = new THREE.ConeGeometry(0.32, 1.5, 8);
+
+  // The studio is the glassblowers' room: they only work once hired, so the
+  // torches only burn then.
+  function glassblowersHired() { return ((state.glass && state.glass.glassblowerLv) || 0) > 0; }
+
+  function refreshGlassStudio() {
+    var lit = glassblowersHired();
+    for (var i = 0; i < glassTorches.length; i++) glassTorches[i].group.visible = lit;
+  }
 
   // Machines exist in the scene from the start and are revealed as they are
   // bought, the same way the mill reveals its saws.
@@ -8590,6 +8612,34 @@
     for (i = 0; i < furnaceObjects.length; i++)  furnaceObjects[i].group.visible  = i < furnaceOwned();
     for (i = 0; i < blowerObjects.length; i++)   blowerObjects[i].group.visible   = i < blowerOwned();
     for (i = 0; i < finisherObjects.length; i++) finisherObjects[i].group.visible = i < finisherOwned();
+  }
+
+  // Spins the machine heads and makes the torches flicker. Runs from the
+  // frame loop rather than on a timer so the flames move with the framerate.
+  function updateGlassVisuals(now) {
+    var i, o;
+    for (i = 0; i < blowerObjects.length; i++) {
+      o = blowerObjects[i];
+      if (o.group.visible && o.head) o.head.rotation.z = now * 0.004;
+    }
+    for (i = 0; i < finisherObjects.length; i++) {
+      o = finisherObjects[i];
+      if (o.group.visible && o.glow) o.glow.material.opacity = 0.18 + Math.sin(now * 0.004 + i) * 0.08;
+    }
+    for (i = 0; i < furnaceObjects.length; i++) {
+      o = furnaceObjects[i];
+      if (o.group.visible && o.glow) o.glow.material.opacity = 0.3 + Math.sin(now * 0.006 + i * 1.7) * 0.14;
+    }
+    for (i = 0; i < glassTorches.length; i++) {
+      var t = glassTorches[i];
+      if (!t.group.visible) continue;
+      // two out-of-phase sines so the flicker never looks like a clean pulse
+      var f = 0.78 + Math.sin(now * 0.017 + t.phase) * 0.16 + Math.sin(now * 0.041 + t.phase * 2.3) * 0.07;
+      t.flame.scale.set(1, f, 1);
+      t.flame.material.opacity = 0.88 + (f - 0.78) * 0.4;
+      t.core.scale.set(1, f * 0.9 + 0.1, 1);
+      t.glow.material.opacity = 0.34 + (f - 0.78) * 0.6;
+    }
   }
 
   (function buildGlassWorks() {
@@ -8718,6 +8768,84 @@
     for (gi = 0; gi < blowerDefs.length; gi++)   blowerObjects.push(buildBlowerBench(blowerDefs[gi]));
     for (gi = 0; gi < finisherDefs.length; gi++) finisherObjects.push(buildFinisher(finisherDefs[gi]));
     refreshGlassMachines();
+
+    // ---- the glassblowers' studio: a glazed room around the blower column,
+    // inside the same shed, so the crew works behind glass with their torches
+    // lit. Open to the south so you can walk in and see the benches.
+    glassStudio = new THREE.Group();
+    glassStudio.position.set(GLASS_BLOWER_X, y, GLASS_CZ);
+    g.add(glassStudio);
+
+    var stHalfX = 8.5, stHalfZ = 13.5, stH = 6.0, stDoorHalf = 3.0;
+    function pane(w, h, d, x, yy, z) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M.windowGlass);
+      m.position.set(x, yy, z);
+      glassStudio.add(m);
+      return m;
+    }
+    function mullion(w, h, d, x, yy, z) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M.beltFrame);
+      m.position.set(x, yy, z);
+      m.castShadow = true;
+      glassStudio.add(m);
+      return m;
+    }
+    // glazing: north and side walls solid, south split around a doorway
+    pane(stHalfX * 2, stH, 0.16, 0, stH / 2, -stHalfZ);
+    pane(0.16, stH, stHalfZ * 2, -stHalfX, stH / 2, 0);
+    pane(0.16, stH, stHalfZ * 2,  stHalfX, stH / 2, 0);
+    var sideRun = stHalfX - stDoorHalf;
+    [-1, 1].forEach(function (sx) {
+      pane(sideRun, stH, 0.16, sx * (stDoorHalf + sideRun / 2), stH / 2, stHalfZ);
+    });
+    // frame: corner posts, a head rail, and regular mullions, so the glazing
+    // reads as a shopfront rather than a floating sheet
+    [-1, 1].forEach(function (sx) {
+      [-1, 1].forEach(function (sz) {
+        mullion(0.3, stH, 0.3, sx * stHalfX, stH / 2, sz * stHalfZ);
+      });
+    });
+    mullion(stHalfX * 2 + 0.4, 0.35, 0.4, 0, stH, -stHalfZ);
+    mullion(stHalfX * 2 + 0.4, 0.35, 0.4, 0, stH,  stHalfZ);
+    mullion(0.4, 0.35, stHalfZ * 2, -stHalfX, stH, 0);
+    mullion(0.4, 0.35, stHalfZ * 2,  stHalfX, stH, 0);
+    for (var mz = -stHalfZ + 4.5; mz < stHalfZ - 1; mz += 4.5) {
+      mullion(0.22, stH, 0.22, -stHalfX, stH / 2, mz);
+      mullion(0.22, stH, 0.22,  stHalfX, stH / 2, mz);
+    }
+    [-1, 1].forEach(function (sx) {
+      mullion(0.3, stH, 0.35, sx * stDoorHalf, stH / 2, stHalfZ);
+    });
+    var stSign = textSprite("BLOWING STUDIO", "#bfe9ff");
+    stSign.scale.set(6.4, 1.2, 1);
+    stSign.position.set(0, stH + 1.4, stHalfZ);
+    glassStudio.add(stSign);
+
+    // ---- torches: one at each bench, burning only while the crew is hired
+    for (var bi = 0; bi < blowerDefs.length; bi++) {
+      var bd = blowerDefs[bi];
+      var tg = new THREE.Group();
+      tg.position.set(bd.x - 2.6, y, bd.z + 2.2);
+      g.add(tg);
+      var stand = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 2.6, 8), M.beltFrame);
+      stand.position.y = 1.3;
+      stand.castShadow = true;
+      tg.add(stand);
+      var nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.6, 8), M.steel);
+      nozzle.position.y = 2.85;
+      tg.add(nozzle);
+      // per-torch material clones: the flicker writes opacity, and a shared
+      // material would make every flame pulse in lockstep
+      var flame = new THREE.Mesh(glassFlameGeo, glassFlameMat.clone());
+      flame.position.y = 4.4;
+      tg.add(flame);
+      var core = new THREE.Mesh(glassFlameCoreGeo, glassFlameCoreMat.clone());
+      core.position.y = 3.9;
+      tg.add(core);
+      var tglow = addGlow(tg, 0, 4.0, 0, 4.5, 0xff8a2c, 0.34);
+      glassTorches.push({ group: tg, flame: flame, core: core, glow: tglow, phase: bi * 2.1 });
+    }
+    refreshGlassStudio();
 
     // ---- crate-out: where finished pieces stack waiting for the shop run
     var crateG = new THREE.Group();
@@ -15980,6 +16108,7 @@
     updateFactoryVisuals(now);
     updateFactoryTill(now);
     updateSmokeshop(now, dt);
+    updateGlassVisuals(now);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
