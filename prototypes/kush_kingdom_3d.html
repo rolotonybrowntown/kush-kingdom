@@ -15274,11 +15274,21 @@
   var feedbackText = document.getElementById("feedback-text");
   var feedbackThanks = document.getElementById("feedback-thanks");
 
+  // Phone keyboards (iOS Safari in particular) auto-swap a straight
+  // apostrophe for a curly one as you type — "smart punctuation" — so
+  // "I'm seeking a loan" typed on a phone often isn't the same string as
+  // typed on a desktop keyboard. The loan regex below hard-codes a plain
+  // ' ('), so without this it silently stopped matching on mobile
+  // while continuing to work anywhere autocorrect doesn't rewrite quotes.
+  function cheatNormalizeQuotes(s) {
+    return String(s).replace(/[‘’ʼ´`]/g, "'");
+  }
+
   // Codes are compared loosely: case, surrounding space, repeated spaces and
   // trailing punctuation all stop mattering, so it fires whether you type
   // "Fuck you gimme money" or "fuck you, gimme money!!".
   function cheatKey(s) {
-    return String(s)
+    return cheatNormalizeQuotes(s)
       .toLowerCase()
       .replace(/[^a-z0-9 ]+/g, " ")
       .replace(/\s+/g, " ")
@@ -15299,7 +15309,7 @@
   // Pattern cheats match against this instead of cheatKey(), which flattens
   // punctuation and would turn "1.5" into "1 5".
   function cheatLoose(s) {
-    return String(s).toLowerCase().replace(/\s+/g, " ").trim();
+    return cheatNormalizeQuotes(s).toLowerCase().replace(/\s+/g, " ").trim();
   }
 
   var CHEATS = [
