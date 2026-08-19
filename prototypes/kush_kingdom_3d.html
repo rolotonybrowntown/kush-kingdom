@@ -6132,6 +6132,205 @@
     return { setCount: setCount };
   }
 
+  // Shared by the Rolling Papers Mill and the Glass Works. These live out
+  // here rather than inside buildPapersSite() so both sites can build the
+  // same conveyor machines; the mill's own call sites are unchanged.
+  function buildMillBelt(parent, x0, x1) {
+    var len = x1 - x0, cx = (x0 + x1) / 2;
+    var bed = new THREE.Mesh(new THREE.BoxGeometry(len, 0.18, MILL_W), M.belt);
+    bed.position.set(cx, MILL_BELT_Y, 0);
+    bed.castShadow = true; bed.receiveShadow = true;
+    parent.add(bed);
+    [-1, 1].forEach(function (s) {
+      var rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.16), M.beltFrame);
+      rail.position.set(cx, MILL_BELT_Y + 0.14, s * (MILL_W / 2 + 0.02));
+      parent.add(rail);
+    });
+    [-1, 1].forEach(function (s) {
+      var leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, MILL_BELT_Y, 0.22), M.beltFrame);
+      leg.position.set(cx + s * (len / 2 - 0.4), MILL_BELT_Y / 2, MILL_W / 2 - 0.3);
+      parent.add(leg);
+      var leg2 = leg.clone();
+      leg2.position.z = -(MILL_W / 2 - 0.3);
+      parent.add(leg2);
+    });
+    var slats = [];
+    var n = Math.max(4, Math.round(len / 0.5));
+    for (var i = 0; i < n; i++) {
+      var sl = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.09, MILL_W - 0.34), M.beltFrame);
+      sl.position.set(x0 + (i + 0.5) * (len / n), MILL_BELT_Y + 0.13, 0);
+      parent.add(sl);
+      slats.push(sl);
+    }
+    return { slats: slats, x0: x0, x1: x1 };
+  }
+
+  // A walk-up marker over a pile, deliberately unlike the BUY pads
+  // (makePaySquare): solid ring instead of a dashed border, an icon and a
+  // plain label instead of a pulsing price. The intent is that you can
+  // tell at a glance which kind of square you're looking at without
+  // reading it. Local to the machine's own group, so it inherits the
+  // group's position and its visible toggle for free — no separate
+  // show/hide bookkeeping the way the BUY pads need.
+  function buildMillWalkPad(parent, offsetX, color, label, icon) {
+    var pg = new THREE.Group();
+    var half = MILL_PILE_HALF, w = half * 2;
+    var halo = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 1.5, w * 1.5),
+      new THREE.MeshBasicMaterial({
+        map: glowTex, color: color, transparent: true,
+        opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    halo.rotation.x = -Math.PI / 2; halo.position.y = 0.006; pg.add(halo);
+    var tint = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, w),
+      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5, depthWrite: false })
+    );
+    tint.rotation.x = -Math.PI / 2; tint.position.y = 0.012; pg.add(tint);
+    // solid ring in place of the BUY pads' dashed edge
+    var ring = new THREE.Mesh(
+      new THREE.RingGeometry(half * 0.92, half, 28),
+      new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.85, depthWrite: false })
+    );
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; pg.add(ring);
+    var iconSpr = textSprite(icon, "#ffffff");
+    iconSpr.scale.set(1.2, 1.2, 1);
+    iconSpr.position.y = 1.5;
+    pg.add(iconSpr);
+    var lbl = textSprite(label, "#eafff2");
+    lbl.scale.set(2.4, 0.56, 1);
+    lbl.position.y = 0.75;
+    pg.add(lbl);
+    pg.position.set(offsetX, 0, 0);
+    parent.add(pg);
+    return pg;
+  }
+
+  function buildMillMachine(d, o) {
+    var mg = new THREE.Group();
+    // Ground height is passed in now that this builder is shared between
+    // sites; the mill omits it and falls back to its own floor.
+    var groundY = (o.groundY != null) ? o.groundY : PAPERS_GROUND_TOP;
+    // Likewise the parent group: the mill omits it and gets papersGroup.
+    var hx = MILL_HEAD_HALF;
+
+    var beltIn = buildMillBelt(mg, -MILL_LEN / 2, -hx);
+    var beltOut = buildMillBelt(mg, hx, MILL_LEN / 2);
+
+    // the working housing, straddling the middle of the line
+    var body = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, 2.3, MILL_W + 0.5), o.bodyMat);
+    body.position.y = 1.15; body.castShadow = true; body.receiveShadow = true;
+    mg.add(body);
+    var cap = new THREE.Mesh(new THREE.BoxGeometry(hx * 2 + 0.4, 0.24, MILL_W + 0.9), o.capMat);
+    cap.position.y = 2.42; cap.castShadow = true;
+    mg.add(cap);
+    // a mouth on each side so material visibly enters and leaves the housing
+    [-1, 1].forEach(function (s) {
+      var mouth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, MILL_W - 0.4), M.dark);
+      mouth.position.set(s * (hx + 0.02), MILL_BELT_Y + 0.42, 0);
+      mg.add(mouth);
+    });
+
+    // ---- the head: what actually makes this machine that machine ----
+    // Saw and planer heads spin about their own axis, so the rotation that
+    // orients them is baked into the geometry (same trick as woodGeo) and
+    // head.rotation.z is left free as a pure spin.
+    var head = null, headKind = o.head;
+    if (o.head === "saw") {
+      // a big rip blade standing proud of the housing, cutting across the line
+      head = new THREE.Mesh(millBladeGeo, M.steel);
+      head.position.set(0, 2.5, 0);
+      head.castShadow = true;
+      mg.add(head);
+      var hub = new THREE.Mesh(millHubGeo, M.machine);
+      hub.position.set(0, 2.5, 0);
+      mg.add(hub);
+    } else if (o.head === "planer") {
+      // a drum across the belt, chewing the width of the board
+      head = new THREE.Mesh(millDrumGeo, M.machine);
+      head.position.set(0, 2.62, 0);
+      head.castShadow = true;
+      mg.add(head);
+      [-1, 1].forEach(function (s) {
+        var post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.0, 0.22), M.beltFrame);
+        post.position.set(s * 0.9, 2.1, 0);
+        mg.add(post);
+      });
+    } else if (o.head === "furnace") {
+      // Glass Works. A squat crucible under a hood, glowing at the mouth.
+      // These three heads are additive — the mill's own three are
+      // untouched — so the one shared machine builder covers both sites.
+      head = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.0, 1.1, 12), M.ovenBody);
+      head.position.set(0, 2.35, 0);
+      head.castShadow = true;
+      mg.add(head);
+      var crucible = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.72, 0.42, 12), M.ovenGlow);
+      crucible.position.set(0, 2.98, 0);
+      mg.add(crucible);
+      var flue = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 1.7, 8), M.beltFrame);
+      flue.position.set(0.95, 3.35, 0);
+      mg.add(flue);
+    } else if (o.head === "blower") {
+      // a gather of molten glass on the end of a pipe, turning over the bench
+      head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 8), M.productJar);
+      head.position.set(0, 2.55, 0);
+      head.castShadow = true;
+      mg.add(head);
+      var blowpipe = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.4, 8), M.metal);
+      blowpipe.rotation.z = Math.PI / 2;
+      blowpipe.position.set(0, 2.55, 0);
+      mg.add(blowpipe);
+    } else if (o.head === "finisher") {
+      // an annealing arch the finished piece passes under, lit inside
+      head = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.16, 8, 14, Math.PI), M.metalRack);
+      head.position.set(0, 2.05, 0);
+      head.rotation.y = Math.PI / 2;
+      head.castShadow = true;
+      mg.add(head);
+      var anneal = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.12, MILL_W - 0.6), M.ovenGlow);
+      anneal.position.set(0, 2.72, 0);
+      mg.add(anneal);
+    } else {
+      // cutter: a guillotine head on posts that stamps down on each pack
+      head = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.34, MILL_W - 0.2), M.pressPlate);
+      head.position.set(0, 2.35, 0);
+      head.castShadow = true;
+      mg.add(head);
+      [-1, 1].forEach(function (s) {
+        var post2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 0.2), M.beltFrame);
+        post2.position.set(s * 1.0, 2.35, 0);
+        mg.add(post2);
+      });
+    }
+
+    var glow = addGlow(mg, 0, 1.6, 0, 2.0, 0xffe066, 0);
+    var barIn = makeStatusBar(1.7, o.barInColor); barIn.position.set(-MILL_LEN / 4, 3.2, 0); mg.add(barIn); statusBars.push(barIn);
+    var barOut = makeStatusBar(1.7, o.barOutColor); barOut.position.set(MILL_LEN / 4, 3.2, 0); mg.add(barOut); statusBars.push(barOut);
+
+    // Piles sit on the ground at each end of the line, which is also exactly
+    // where you walk up to drop material in and take product out.
+    var pileIn = makeResourcePile(mg, -MILL_PILE_OFFSET, 0, o.inGeo, o.inMat, o.pileMax, 2, 3);
+    var pileOut = makeResourcePile(mg, MILL_PILE_OFFSET, 0, o.outGeo, o.outMat, o.pileMax, 2, 3);
+
+    // Marked squares over the piles themselves — solid ring, no dashed
+    // border, no price — so they read as "walk here" rather than "buy
+    // here" at a glance, and so the interaction zone (handleSaws etc.)
+    // lines up with where the pile actually is instead of the machine's
+    // own body, which used to sit between the two belts.
+    buildMillWalkPad(mg, -MILL_PILE_OFFSET, o.barInColor, "DROP OFF", "⬇");
+    buildMillWalkPad(mg, MILL_PILE_OFFSET, o.barOutColor, "COLLECT", "⬆");
+
+    mg.position.set(d.x, groundY, d.z);
+    mg.visible = false;
+    (o.parent || papersGroup).add(mg);
+    return {
+      group: mg, head: head, headKind: headKind, glow: glow,
+      beltIn: beltIn, beltOut: beltOut, beltPhase: 0,
+      barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut,
+    };
+  }
+
   (function buildPapersSite() {
     var g = papersGroup;
     var y = PAPERS_GROUND_TOP;
@@ -6182,164 +6381,6 @@
     // where you actually drop material and the output pile where it comes out.
     // The three stages differ by their head and their materials, so a saw no
     // longer looks like the rosin press with a different tint. ----
-    function buildMillBelt(parent, x0, x1) {
-      var len = x1 - x0, cx = (x0 + x1) / 2;
-      var bed = new THREE.Mesh(new THREE.BoxGeometry(len, 0.18, MILL_W), M.belt);
-      bed.position.set(cx, MILL_BELT_Y, 0);
-      bed.castShadow = true; bed.receiveShadow = true;
-      parent.add(bed);
-      [-1, 1].forEach(function (s) {
-        var rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.16), M.beltFrame);
-        rail.position.set(cx, MILL_BELT_Y + 0.14, s * (MILL_W / 2 + 0.02));
-        parent.add(rail);
-      });
-      [-1, 1].forEach(function (s) {
-        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, MILL_BELT_Y, 0.22), M.beltFrame);
-        leg.position.set(cx + s * (len / 2 - 0.4), MILL_BELT_Y / 2, MILL_W / 2 - 0.3);
-        parent.add(leg);
-        var leg2 = leg.clone();
-        leg2.position.z = -(MILL_W / 2 - 0.3);
-        parent.add(leg2);
-      });
-      var slats = [];
-      var n = Math.max(4, Math.round(len / 0.5));
-      for (var i = 0; i < n; i++) {
-        var sl = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.09, MILL_W - 0.34), M.beltFrame);
-        sl.position.set(x0 + (i + 0.5) * (len / n), MILL_BELT_Y + 0.13, 0);
-        parent.add(sl);
-        slats.push(sl);
-      }
-      return { slats: slats, x0: x0, x1: x1 };
-    }
-
-    // A walk-up marker over a pile, deliberately unlike the BUY pads
-    // (makePaySquare): solid ring instead of a dashed border, an icon and a
-    // plain label instead of a pulsing price. The intent is that you can
-    // tell at a glance which kind of square you're looking at without
-    // reading it. Local to the machine's own group, so it inherits the
-    // group's position and its visible toggle for free — no separate
-    // show/hide bookkeeping the way the BUY pads need.
-    function buildMillWalkPad(parent, offsetX, color, label, icon) {
-      var pg = new THREE.Group();
-      var half = MILL_PILE_HALF, w = half * 2;
-      var halo = new THREE.Mesh(
-        new THREE.PlaneGeometry(w * 1.5, w * 1.5),
-        new THREE.MeshBasicMaterial({
-          map: glowTex, color: color, transparent: true,
-          opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false,
-        })
-      );
-      halo.rotation.x = -Math.PI / 2; halo.position.y = 0.006; pg.add(halo);
-      var tint = new THREE.Mesh(
-        new THREE.PlaneGeometry(w, w),
-        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5, depthWrite: false })
-      );
-      tint.rotation.x = -Math.PI / 2; tint.position.y = 0.012; pg.add(tint);
-      // solid ring in place of the BUY pads' dashed edge
-      var ring = new THREE.Mesh(
-        new THREE.RingGeometry(half * 0.92, half, 28),
-        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.85, depthWrite: false })
-      );
-      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; pg.add(ring);
-      var iconSpr = textSprite(icon, "#ffffff");
-      iconSpr.scale.set(1.2, 1.2, 1);
-      iconSpr.position.y = 1.5;
-      pg.add(iconSpr);
-      var lbl = textSprite(label, "#eafff2");
-      lbl.scale.set(2.4, 0.56, 1);
-      lbl.position.y = 0.75;
-      pg.add(lbl);
-      pg.position.set(offsetX, 0, 0);
-      parent.add(pg);
-      return pg;
-    }
-
-    function buildMillMachine(d, o) {
-      var mg = new THREE.Group();
-      var hx = MILL_HEAD_HALF;
-
-      var beltIn = buildMillBelt(mg, -MILL_LEN / 2, -hx);
-      var beltOut = buildMillBelt(mg, hx, MILL_LEN / 2);
-
-      // the working housing, straddling the middle of the line
-      var body = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, 2.3, MILL_W + 0.5), o.bodyMat);
-      body.position.y = 1.15; body.castShadow = true; body.receiveShadow = true;
-      mg.add(body);
-      var cap = new THREE.Mesh(new THREE.BoxGeometry(hx * 2 + 0.4, 0.24, MILL_W + 0.9), o.capMat);
-      cap.position.y = 2.42; cap.castShadow = true;
-      mg.add(cap);
-      // a mouth on each side so material visibly enters and leaves the housing
-      [-1, 1].forEach(function (s) {
-        var mouth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, MILL_W - 0.4), M.dark);
-        mouth.position.set(s * (hx + 0.02), MILL_BELT_Y + 0.42, 0);
-        mg.add(mouth);
-      });
-
-      // ---- the head: what actually makes this machine that machine ----
-      // Saw and planer heads spin about their own axis, so the rotation that
-      // orients them is baked into the geometry (same trick as woodGeo) and
-      // head.rotation.z is left free as a pure spin.
-      var head = null, headKind = o.head;
-      if (o.head === "saw") {
-        // a big rip blade standing proud of the housing, cutting across the line
-        head = new THREE.Mesh(millBladeGeo, M.steel);
-        head.position.set(0, 2.5, 0);
-        head.castShadow = true;
-        mg.add(head);
-        var hub = new THREE.Mesh(millHubGeo, M.machine);
-        hub.position.set(0, 2.5, 0);
-        mg.add(hub);
-      } else if (o.head === "planer") {
-        // a drum across the belt, chewing the width of the board
-        head = new THREE.Mesh(millDrumGeo, M.machine);
-        head.position.set(0, 2.62, 0);
-        head.castShadow = true;
-        mg.add(head);
-        [-1, 1].forEach(function (s) {
-          var post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.0, 0.22), M.beltFrame);
-          post.position.set(s * 0.9, 2.1, 0);
-          mg.add(post);
-        });
-      } else {
-        // cutter: a guillotine head on posts that stamps down on each pack
-        head = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.34, MILL_W - 0.2), M.pressPlate);
-        head.position.set(0, 2.35, 0);
-        head.castShadow = true;
-        mg.add(head);
-        [-1, 1].forEach(function (s) {
-          var post2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.5, 0.2), M.beltFrame);
-          post2.position.set(s * 1.0, 2.35, 0);
-          mg.add(post2);
-        });
-      }
-
-      var glow = addGlow(mg, 0, 1.6, 0, 2.0, 0xffe066, 0);
-      var barIn = makeStatusBar(1.7, o.barInColor); barIn.position.set(-MILL_LEN / 4, 3.2, 0); mg.add(barIn); statusBars.push(barIn);
-      var barOut = makeStatusBar(1.7, o.barOutColor); barOut.position.set(MILL_LEN / 4, 3.2, 0); mg.add(barOut); statusBars.push(barOut);
-
-      // Piles sit on the ground at each end of the line, which is also exactly
-      // where you walk up to drop material in and take product out.
-      var pileIn = makeResourcePile(mg, -MILL_PILE_OFFSET, 0, o.inGeo, o.inMat, o.pileMax, 2, 3);
-      var pileOut = makeResourcePile(mg, MILL_PILE_OFFSET, 0, o.outGeo, o.outMat, o.pileMax, 2, 3);
-
-      // Marked squares over the piles themselves — solid ring, no dashed
-      // border, no price — so they read as "walk here" rather than "buy
-      // here" at a glance, and so the interaction zone (handleSaws etc.)
-      // lines up with where the pile actually is instead of the machine's
-      // own body, which used to sit between the two belts.
-      buildMillWalkPad(mg, -MILL_PILE_OFFSET, o.barInColor, "DROP OFF", "⬇");
-      buildMillWalkPad(mg, MILL_PILE_OFFSET, o.barOutColor, "COLLECT", "⬆");
-
-      mg.position.set(d.x, y, d.z);
-      mg.visible = false;
-      g.add(mg);
-      return {
-        group: mg, head: head, headKind: headKind, glow: glow,
-        beltIn: beltIn, beltOut: beltOut, beltPhase: 0,
-        barIn: barIn, barOut: barOut, pileIn: pileIn, pileOut: pileOut,
-      };
-    }
-
     function buildSaw(d) {
       return buildMillMachine(d, {
         head: "saw", bodyMat: M.woodDark, capMat: M.barnRoof,
