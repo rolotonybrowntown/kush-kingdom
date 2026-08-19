@@ -1358,6 +1358,70 @@
     return p.baseValue * (sellValueBase() / BASE_SELL_VALUE) * officeProfitMult("smokeshop");
   }
 
+  // ===================================================================
+  //  GLASS BLOWING SHOP — Uptown's second site, and the store's supply
+  // ===================================================================
+  // Until this is built, the smoke shop's warehouse fills from an invented
+  // trickle split evenly across all five products, which is exactly why
+  // bongs are always scarce. This is where the glass goods actually come
+  // from: sand -> molten -> blown blank -> a finished pipe or bong, crated
+  // straight over to the store. 400 past the smoke shop, matching the
+  // widest gap already in use. Re-measure fog once camDist is final, same
+  // discipline noted at PAPERS_CZ.
+  var GLASS_CZ = -2200;
+  var GLASS_HALF_X = 40, GLASS_HALF_Z = 26;
+  var GLASS_GROUND_TOP = FLOOR_TOP_BACK;
+  var GLASS_DEED_COST = 2e14;   // above the smoke shop's own 8e13
+  function glassUnlocked() { return !!(state.glass && state.glass.unlocked); }
+
+  // Reads left to right: sand hopper, furnace, blower bench, finisher,
+  // crate-out. Same column-per-stage / extra-machines-go-down layout the
+  // mill uses, so the stages stay legible as the line is bought out.
+  var GLASS_ROW_SPACING = 8.0;
+  function glassRowZ(row) { return -GLASS_ROW_SPACING + row * GLASS_ROW_SPACING; }
+  var GLASS_SAND_X     = -GLASS_HALF_X + 8;
+  var GLASS_FURNACE_X  = -GLASS_HALF_X + 24;
+  var GLASS_BLOWER_X   = -GLASS_HALF_X + 42;
+  var GLASS_FINISHER_X = -GLASS_HALF_X + 60;
+  var GLASS_CRATE_X    = -GLASS_HALF_X + 74;
+  var GLASS_UPGRADE_Z = GLASS_CZ - 17;   // pad band, above every column
+  var GLASS_HIRE_Z    = GLASS_CZ + 17;   // hire pads, below everything
+
+  // Each machine holds { in, out, acc } exactly like the mill's
+  // saws/planers/cutters, so the same builder, status bars, resource piles
+  // and walk-up pads all apply.
+  var furnaceDefs = [], blowerDefs = [], finisherDefs = [];
+  (function () {
+    for (var r = 0; r < 3; r++) {
+      furnaceDefs.push({  x: GLASS_FURNACE_X,  z: GLASS_CZ + glassRowZ(r) });
+      blowerDefs.push({   x: GLASS_BLOWER_X,   z: GLASS_CZ + glassRowZ(r) });
+      finisherDefs.push({ x: GLASS_FINISHER_X, z: GLASS_CZ + glassRowZ(r) });
+    }
+  })();
+  var MAX_FURNACES = furnaceDefs.length;
+  var MAX_BLOWERS = blowerDefs.length;
+  var MAX_FINISHERS = finisherDefs.length;
+  function furnaceOwned()  { return (state.glass && state.glass.furnaceCount) || 0; }
+  function blowerOwned()   { return (state.glass && state.glass.blowerCount) || 0; }
+  function finisherOwned() { return (state.glass && state.glass.finisherCount) || 0; }
+  var BASE_GLASS_HOPPER = 10;
+  function glassHopperCap() { return BASE_GLASS_HOPPER + 3 * ((state.glass && state.glass.hopperLv) || 0); }
+  // Sand is renewable and free, like the mill's trees — the interesting
+  // decision is how fast you can move it, not whether you can afford it.
+  var GLASS_SAND_CAP = 60;
+  var GLASS_SAND_REGEN = 1.6;   // units/sec back into the hopper
+  // Two crews split the line the same way the mill's do: gatherers feed
+  // the furnaces from the sand hopper, glassblowers relay every stage
+  // downstream from there to the crate-out.
+  var MAX_GATHERERS = 4, MAX_GLASSBLOWERS = 3;
+  function costGatherer()    { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.gathererLv) || 0)); }
+  function costGlassblower() { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.glassblowerLv) || 0)); }
+  var GLASS_HR_ZONE = { x: GLASS_CRATE_X, z: GLASS_HIRE_Z };
+  var BASE_MELT_TIME = 5, BASE_BLOW_TIME = 6, BASE_FINISH_TIME = 6;
+  function meltTimeFor()   { return BASE_MELT_TIME   / Math.pow(1.22, (state.glass && state.glass.meltLv)   || 0) / perkProdMult(); }
+  function blowTimeFor()   { return BASE_BLOW_TIME   / Math.pow(1.22, (state.glass && state.glass.blowLv)   || 0) / perkProdMult(); }
+  function finishTimeFor() { return BASE_FINISH_TIME / Math.pow(1.22, (state.glass && state.glass.finishLv) || 0) / perkProdMult(); }
+
   // ---- the mill reads strictly left to right: forest, saw, planer, cutter,
   // register/trucks. Each machine stage is its own fixed X column; buying
   // more machines in that stage adds new rows going down (+Z) rather than
@@ -1669,7 +1733,7 @@
   // city is a data change, not a rewrite. ----
   var CITIES = [
     { id: "home", name: "Hometown", siteIds: ["shop", "farm", "lounge", "factory", "papers"] },
-    { id: "uptown", name: "Uptown", siteIds: ["smokeshop"] },
+    { id: "uptown", name: "Uptown", siteIds: ["smokeshop", "glassshop"] },
   ];
   function currentCityId() { return state.cityId || "home"; }
   function currentCityDef() {
@@ -1832,8 +1896,33 @@
         toast("🚬 Deed signed — Uptown is open for business!");
       },
     },
+    glassshop: {
+      id: "glassshop", name: "Glass Works", icon: "🔥",
+      skyColor: new THREE.Color(0x8a6a52),   // warm industrial haze off the furnaces
+      sub: function () {
+        if (!glassUnlocked()) return "Buy the deed to blow your own glass";
+        return furnaceOwned() + "/" + MAX_FURNACES + " furnaces · " +
+               finisherOwned() + "/" + MAX_FINISHERS + " finishers";
+      },
+      spawn: { x: 0, z: GLASS_CZ + GLASS_HALF_Z - 5 },
+      camDist: function () { return 50; },
+      groundOf: function () { return glassGround; },
+      unlocked: glassUnlocked,
+      bounds: function () {
+        return {
+          minX: -GLASS_HALF_X + 1.5, maxX: GLASS_HALF_X - 1.5,
+          minZ: GLASS_CZ - GLASS_HALF_Z + 1.5, maxZ: GLASS_CZ + GLASS_HALF_Z - 1.5,
+        };
+      },
+      deedCost: GLASS_DEED_COST,
+      onUnlock: function () {
+        state.glass.unlocked = true;
+        toast("🔥 Deed signed — the Glass Works is yours!");
+      },
+    },
   };
-  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory, SITES.papers, SITES.smokeshop];
+  var SITE_LIST = [SITES.shop, SITES.farm, SITES.lounge, SITES.factory, SITES.papers,
+                   SITES.smokeshop, SITES.glassshop];
   // Deeds are quoted through here rather than read off the site directly, so
   // the late-game scaling cannot be applied at one call site and missed at
   // another — the price on the map row, the affordability check, the "you can
@@ -1963,6 +2052,14 @@
       { x: 0.0,  z: SMOKESHOP_CZ + 10.0 }, { x: -6.0, z: SMOKESHOP_CZ + 13.0 },
       { x: 6.0,  z: SMOKESHOP_CZ + 2.0 },
     ],
+    // Bounds are +/-(GLASS_HALF_X - 1.5) by GLASS_CZ +/-(GLASS_HALF_Z -
+    // 1.5). Kept off the machine columns and out of the hire/upgrade pad
+    // bands so a crate never lands on top of a pad.
+    glassshop: [
+      { x: -32.0, z: GLASS_CZ + 22.0 }, { x: 0.0,  z: GLASS_CZ + 22.0 },
+      { x: 32.0,  z: GLASS_CZ + 22.0 }, { x: -32.0, z: GLASS_CZ - 22.0 },
+      { x: 10.0,  z: GLASS_CZ - 22.0 },
+    ],
   };
   // Anything you stand on to spend money is off limits — a crate parked on the
   // silo pad hides the pad and steals its proximity prompt. stationDefs is read
@@ -2054,8 +2151,10 @@
               who: "Trains woodcutters and mill hands" },
     smokeshop: { base: 16000, title: "Smoke Shop HR", crew: "the shop crew",
               who: "Trains restockers and speeds up checkout" },
+    glassshop: { base: 40000, title: "Glass Works HR", crew: "the glass crew",
+              who: "Trains gatherers and glassblowers" },
   };
-  var HR_SITES = ["shop", "farm", "lounge", "papers", "smokeshop"];
+  var HR_SITES = ["shop", "farm", "lounge", "papers", "smokeshop", "glassshop"];
   // The factory has no hired hands — the line IS the labour — so it gets no
   // desk of its own and hrZoneFor parks its zone somewhere unreachable rather
   // than silently handing the player the shop's books at another site.
@@ -2064,6 +2163,7 @@
     if (site === "lounge") return LOUNGE_HR_ZONE;
     if (site === "papers") return PAPERS_HR_ZONE;
     if (site === "smokeshop") return SMOKESHOP_HR_ZONE;
+    if (site === "glassshop") return GLASS_HR_ZONE;
     if (site === "factory") return { x: 1e6, z: 1e6 };
     return HR_ZONE;
   }
@@ -2478,7 +2578,7 @@
       // ---- executive office ----
       accountantHired: false,
       officeTier: 0,
-      profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0, smokeshop: 0 },
+      profitTier: { shop: 0, farm: 0, lounge: 0, factory: 0, papers: 0, smokeshop: 0, glassshop: 0 },
       equippedHat: "reliable",
       // Only bought hats live here; earned ones are recomputed from their
       // own condition every time, so they can never be lost or forged.
@@ -2518,7 +2618,7 @@
       ovens: ovenDefs.map(function () { return { dabs: 0, cooked: 0, acc: 0 }; }),
       // ---- empire ----
       site: "shop",                     // which location you are standing in
-      sitePos: { shop: null, farm: null, lounge: null, factory: null, papers: null, smokeshop: null },  // where you left off at each one
+      sitePos: { shop: null, farm: null, lounge: null, factory: null, papers: null, smokeshop: null, glassshop: null },  // where you left off at each one
       managers: {},                     // sites that keep working while away
       intake: 0,                        // farm bud waiting at the shop dock
       loungeIntake: { bud: 0, dab: 0, edible: 0, drink: 0 },   // stock delivered to the lounge, also its sellable stock
@@ -2577,6 +2677,22 @@
         // What's physically on the shelf right now is a runtime mesh pile,
         // not saved state — same as the dispensary's own counter pile,
         // which starts empty on every load rather than being restored.
+      },
+      glass: {
+        unlocked: false,
+        sand: GLASS_SAND_CAP,           // renewable raw, starts full
+        furnaceCount: 0,
+        furnaces: furnaceDefs.map(function () { return { sand: 0, molten: 0, acc: 0 }; }),
+        blowerCount: 0,
+        blowers: blowerDefs.map(function () { return { molten: 0, blank: 0, acc: 0 }; }),
+        finisherCount: 0,
+        finishers: finisherDefs.map(function () { return { blank: 0, pipes: 0, bongs: 0, acc: 0 }; }),
+        crate: { pipes: 0, bongs: 0 },  // finished, waiting to go to the store
+        sentToShop: 0,                  // lifetime pieces crated over to the smoke shop
+        pending: 0,                     // wholesale cash waiting at the till
+        hopperLv: 0,
+        meltLv: 0, blowLv: 0, finishLv: 0,
+        gathererLv: 0, glassblowerLv: 0,
       },
       dailyStreak: 0,                   // consecutive calendar days played
       lastLoginDate: null,              // "YYYY-M-D" of the last day a reward was granted
@@ -2741,11 +2857,47 @@
         sms.stock[k] = (typeof stk === "number" && isFinite(stk)) ? Math.max(0, stk) : 0;
       });
 
+      // ---- glass works (uptown) ----
+      if (!merged.glass || typeof merged.glass !== "object") merged.glass = defaultState().glass;
+      var gl = merged.glass;
+      gl.unlocked = !!gl.unlocked;
+      gl.sand = (typeof gl.sand === "number" && isFinite(gl.sand))
+        ? Math.max(0, Math.min(GLASS_SAND_CAP, gl.sand)) : GLASS_SAND_CAP;
+      // Each stage array is parallel to its *Defs layout array, so a build
+      // that changes the machine count must resize rather than reset.
+      function clampGlassStage(countKey, arrKey, defs, max, blank) {
+        gl[countKey] = Math.max(0, Math.min(max, Math.floor(gl[countKey]) || 0));
+        if (!Array.isArray(gl[arrKey])) gl[arrKey] = [];
+        gl[arrKey].length = defs.length;
+        for (var i = 0; i < gl[arrKey].length; i++) {
+          if (!gl[arrKey][i] || typeof gl[arrKey][i] !== "object") gl[arrKey][i] = blank();
+        }
+      }
+      clampGlassStage("furnaceCount", "furnaces", furnaceDefs, MAX_FURNACES,
+        function () { return { sand: 0, molten: 0, acc: 0 }; });
+      clampGlassStage("blowerCount", "blowers", blowerDefs, MAX_BLOWERS,
+        function () { return { molten: 0, blank: 0, acc: 0 }; });
+      clampGlassStage("finisherCount", "finishers", finisherDefs, MAX_FINISHERS,
+        function () { return { blank: 0, pipes: 0, bongs: 0, acc: 0 }; });
+      if (!gl.crate || typeof gl.crate !== "object") gl.crate = { pipes: 0, bongs: 0 };
+      ["pipes", "bongs"].forEach(function (k) {
+        var v = gl.crate[k];
+        gl.crate[k] = (typeof v === "number" && isFinite(v)) ? Math.max(0, v) : 0;
+      });
+      ["sentToShop", "pending"].forEach(function (k) {
+        gl[k] = (typeof gl[k] === "number" && isFinite(gl[k])) ? Math.max(0, gl[k]) : 0;
+      });
+      ["hopperLv", "meltLv", "blowLv", "finishLv"].forEach(function (k) {
+        gl[k] = Math.max(0, Math.floor(gl[k]) || 0);
+      });
+      gl.gathererLv = Math.max(0, Math.min(MAX_GATHERERS, Math.floor(gl.gathererLv) || 0));
+      gl.glassblowerLv = Math.max(0, Math.min(MAX_GLASSBLOWERS, Math.floor(gl.glassblowerLv) || 0));
+
       // ---- executive office ----
       merged.accountantHired = !!merged.accountantHired;
       merged.officeTier = Math.max(0, Math.min(MAX_OFFICE_TIER, Math.floor(merged.officeTier) || 0));
       if (!merged.profitTier || typeof merged.profitTier !== "object") merged.profitTier = {};
-      ["shop", "farm", "lounge", "factory", "papers", "smokeshop"].forEach(function (k) {
+      ["shop", "farm", "lounge", "factory", "papers", "smokeshop", "glassshop"].forEach(function (k) {
         var t = merged.profitTier[k];
         merged.profitTier[k] = (typeof t === "number" && isFinite(t)) ? Math.max(0, Math.min(3, Math.floor(t))) : 0;
       });
@@ -2761,7 +2913,7 @@
       merged.cityId = (typeof merged.cityId === "string" && merged.cityId) ? merged.cityId : "home";
 
       if (!merged.sitePos || typeof merged.sitePos !== "object") merged.sitePos = {};
-      ["shop", "farm", "lounge", "factory", "papers", "smokeshop"].forEach(function (k) {
+      ["shop", "farm", "lounge", "factory", "papers", "smokeshop", "glassshop"].forEach(function (k) {
         var p = merged.sitePos[k];
         if (!p || typeof p.x !== "number" || typeof p.z !== "number") merged.sitePos[k] = null;
       });
@@ -2774,7 +2926,8 @@
           !(merged.site === "lounge" && merged.lounge.unlocked) &&
           !(merged.site === "factory" && fac.unlocked) &&
           !(merged.site === "papers" && pap.unlocked) &&
-          !(merged.site === "smokeshop" && sms.unlocked)) {
+          !(merged.site === "smokeshop" && sms.unlocked) &&
+          !(merged.site === "glassshop" && gl.unlocked)) {
         merged.site = "shop";
       }
       // Beds unlock a whole row at a time now — round an older save's count up
@@ -7446,6 +7599,13 @@
   var smokeshopGroup = new THREE.Group();
   scene.add(smokeshopGroup);
   var smokeshopGround;
+
+  // Declared up here alongside the other site groups so SITES.glassshop's
+  // groundOf() always has something to name, even before the yard itself
+  // is built further down.
+  var glassGroup = new THREE.Group();
+  scene.add(glassGroup);
+  var glassGround;
 
   // Retail runs from the door back to the partition wall; the warehouse is
   // its own room behind that wall, through its own doorway — not just a
