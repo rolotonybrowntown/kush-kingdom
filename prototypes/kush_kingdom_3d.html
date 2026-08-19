@@ -8584,17 +8584,14 @@
   var glassSandPile = null, glassCratePile = null;
   var glassStudio = null, glassTorches = [];
 
-  // Torch flame. Deliberately NOT additive: the shed floor is bright, and
-  // additive orange over it washes straight out to white. Saturated colour on
-  // normal blending reads as fire; the additive halo is added separately.
-  var glassFlameMat = new THREE.MeshBasicMaterial({
-    color: 0xff5a0c, transparent: true, opacity: 0.95, depthWrite: false,
+  // Torch tip. The torches read as a welding flash rather than a standing
+  // flame: a short bright burst at the nozzle, then back to a dull heat.
+  // Kept off additive blending - the shed floor is bright enough that
+  // additive light over it just washes out instead of reading as a flash.
+  var glassFlashMat = new THREE.MeshBasicMaterial({
+    color: 0xffeec2, transparent: true, opacity: 0.14, depthWrite: false,
   });
-  var glassFlameCoreMat = new THREE.MeshBasicMaterial({
-    color: 0xffd23f, transparent: true, opacity: 1.0, depthWrite: false,
-  });
-  var glassFlameGeo = new THREE.ConeGeometry(0.6, 2.6, 8);
-  var glassFlameCoreGeo = new THREE.ConeGeometry(0.32, 1.5, 8);
+  var glassFlashGeo = new THREE.SphereGeometry(0.34, 10, 8);
 
   // The studio is the glassblowers' room: they only work once hired, so the
   // torches only burn then.
@@ -8633,12 +8630,17 @@
     for (i = 0; i < glassTorches.length; i++) {
       var t = glassTorches[i];
       if (!t.group.visible) continue;
-      // two out-of-phase sines so the flicker never looks like a clean pulse
-      var f = 0.78 + Math.sin(now * 0.017 + t.phase) * 0.16 + Math.sin(now * 0.041 + t.phase * 2.3) * 0.07;
-      t.flame.scale.set(1, f, 1);
-      t.flame.material.opacity = 0.88 + (f - 0.78) * 0.4;
-      t.core.scale.set(1, f * 0.9 + 0.1, 1);
-      t.glow.material.opacity = 0.34 + (f - 0.78) * 0.6;
+      // Bursts are scheduled with random gaps rather than driven off a sine,
+      // so the three torches never fall into step with each other.
+      if (now >= t.nextFlash) {
+        t.flashUntil = now + 90 + Math.random() * 120;
+        t.nextFlash = t.flashUntil + 280 + Math.random() * 900;
+      }
+      // within a burst, a fast wobble so it strobes rather than blinking flat
+      var k = now < t.flashUntil ? 0.72 + Math.sin(now * 0.09 + t.phase) * 0.28 : 0;
+      t.tip.material.opacity = 0.14 + k * 0.86;
+      t.tip.scale.setScalar(0.75 + k * 0.85);
+      t.glow.material.opacity = 0.06 + k * 0.66;
     }
   }
 
@@ -8834,16 +8836,16 @@
       var nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.6, 8), M.steel);
       nozzle.position.y = 2.85;
       tg.add(nozzle);
-      // per-torch material clones: the flicker writes opacity, and a shared
-      // material would make every flame pulse in lockstep
-      var flame = new THREE.Mesh(glassFlameGeo, glassFlameMat.clone());
-      flame.position.y = 4.4;
-      tg.add(flame);
-      var core = new THREE.Mesh(glassFlameCoreGeo, glassFlameCoreMat.clone());
-      core.position.y = 3.9;
-      tg.add(core);
-      var tglow = addGlow(tg, 0, 4.0, 0, 4.5, 0xff8a2c, 0.34);
-      glassTorches.push({ group: tg, flame: flame, core: core, glow: tglow, phase: bi * 2.1 });
+      // per-torch material clones: the flash writes opacity, and a shared
+      // material would make every torch fire in lockstep
+      var tip = new THREE.Mesh(glassFlashGeo, glassFlashMat.clone());
+      tip.position.y = 3.25;
+      tg.add(tip);
+      var tglow = addGlow(tg, 0, 3.25, 0, 5.0, 0xffc464, 0.06);
+      glassTorches.push({
+        group: tg, tip: tip, glow: tglow, phase: bi * 2.1,
+        nextFlash: 0, flashUntil: 0,
+      });
     }
     refreshGlassStudio();
 
