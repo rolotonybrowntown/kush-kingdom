@@ -8919,6 +8919,321 @@
     addGlow(g, 0, y + 5.4, GLASS_CZ - GLASS_HALF_Z + 1.6, 9.0, 0xff9a3c, 0.28);
   })();
 
+  // ---- the line itself -------------------------------------------------
+  // Runs wherever you are standing, the same way the factory does, so the
+  // Glass Works keeps producing while you are off in another city.
+
+  var GATHERER_SPEED = 5.4, GATHERER_ACT = 0.9;
+  var GLASSBLOWER_SPEED = 5.8, GLASSBLOWER_ACT = 0.7;
+  var GLASS_CRATE_CAP = 40;
+  var GATHERER_ZONE = { x: GLASS_SAND_X + 6, z: GLASS_HIRE_Z };
+  var GLASSBLOWER_ZONE = { x: GLASS_BLOWER_X, z: GLASS_HIRE_Z };
+
+  // The finisher only makes what the store can actually sell, and leans
+  // toward whichever kind the shelf is shorter on.
+  function glassNextKind() {
+    var canBong = typeof smokeshopProductUnlocked === "function" && smokeshopProductUnlocked("bongs");
+    if (!canBong) return "pipes";
+    // Count everything already in the pipeline, not just what has reached the
+    // store. Comparing store stock alone means the counts never move until a
+    // delivery lands, the tie always resolves the same way, and the line makes
+    // nothing but bongs.
+    var st = (state.smokeshop && state.smokeshop.stock) || {};
+    var cr = (state.glass && state.glass.crate) || {};
+    var pipes = (st.pipes || 0) + (cr.pipes || 0);
+    var bongs = (st.bongs || 0) + (cr.bongs || 0);
+    for (var i = 0; i < finisherOwned(); i++) {
+      var m = state.glass.finishers[i]; if (!m) continue;
+      pipes += m.pipes || 0; bongs += m.bongs || 0;
+    }
+    return bongs <= pipes ? "bongs" : "pipes";
+  }
+
+  function updateGlassLine(dt) {
+    if (!glassUnlocked()) return;
+    var gl = state.glass, cap = glassHopperCap(), i, m;
+
+    // the pit refills on its own - sand is the one input you never buy
+    gl.sand = Math.min(GLASS_SAND_CAP, (gl.sand || 0) + GLASS_SAND_REGEN * dt);
+
+    var meltT = meltTimeFor(), blowT = blowTimeFor(), finT = finishTimeFor();
+
+    for (i = 0; i < furnaceOwned(); i++) {
+      m = gl.furnaces[i]; if (!m) continue;
+      if (m.sand > 0 && m.molten < cap) {
+        m.acc += dt;
+        while (m.acc >= meltT && m.sand > 0 && m.molten < cap) { m.acc -= meltT; m.sand--; m.molten++; }
+      } else { m.acc = 0; }
+    }
+    for (i = 0; i < blowerOwned(); i++) {
+      m = gl.blowers[i]; if (!m) continue;
+      if (m.molten > 0 && m.blank < cap) {
+        m.acc += dt;
+        while (m.acc >= blowT && m.molten > 0 && m.blank < cap) { m.acc -= blowT; m.molten--; m.blank++; }
+      } else { m.acc = 0; }
+    }
+    for (i = 0; i < finisherOwned(); i++) {
+      m = gl.finishers[i]; if (!m) continue;
+      if (m.blank > 0 && (m.pipes || 0) + (m.bongs || 0) < cap) {
+        m.acc += dt;
+        while (m.acc >= finT && m.blank > 0 && (m.pipes || 0) + (m.bongs || 0) < cap) {
+          m.acc -= finT; m.blank--;
+          var k = glassNextKind();
+          m[k] = (m[k] || 0) + 1;
+        }
+      } else { m.acc = 0; }
+    }
+  }
+
+  function gbStepTo(b, tx, tz, speed, dt) {
+    var dx = tx - b.pos.x, dz = tz - b.pos.z;
+    var d = Math.hypot(dx, dz);
+    if (d < 0.3) return true;
+    var step = Math.min(speed * staffSpeedMult("glassshop") * dt, d);
+    b.pos.x += (dx / d) * step;
+    b.pos.z += (dz / d) * step;
+    b.obj.rotation.y = Math.atan2(dx, dz);
+    b.walkPhase += dt * 12;
+    return false;
+  }
+
+  function glassFindRoom(stage, field) {
+    var owned = stage === "blower" ? blowerOwned() : finisherOwned();
+    var arr = stage === "blower" ? state.glass.blowers : state.glass.finishers;
+    var best = -1, most = 0;
+    for (var i = 0; i < owned; i++) {
+      var m = arr[i]; if (!m) continue;
+      var room = glassHopperCap() - (m[field] || 0);
+      if (room > most) { most = room; best = i; }
+    }
+    return best;
+  }
+
+  // ---- gatherers: sand pit -> furnace ----------------------------------
+  var gatherers = [];
+  (function buildGatherers() {
+    for (var n = 0; n < MAX_GATHERERS; n++) {
+      var w = buildMillWorker(M.accent, M.beltFrame);
+      gatherers.push({
+        obj: w.obj, l1: w.l1, l2: w.l2,
+        pos: { x: GATHERER_ZONE.x + 1.4 + n * 0.9, z: GATHERER_ZONE.z + 1.4 },
+        phase: "toPit", timer: 0, carrying: 0, walkPhase: n * 1.7, slot: n, dropIdx: -1,
+      });
+    }
+  })();
+
+  function gathererFindFurnace() {
+    var best = -1, most = 0;
+    for (var i = 0; i < furnaceOwned(); i++) {
+      var f = state.glass.furnaces[i]; if (!f) continue;
+      var room = glassHopperCap() - f.sand;
+      if (room > most) { most = room; best = i; }
+    }
+    return best;
+  }
+
+  function updateGatherers(now, dt) {
+    for (var i = 0; i < gatherers.length; i++) {
+      var b = gatherers[i];
+      var hired = glassUnlocked() && i < (state.glass.gathererLv || 0);
+      b.obj.visible = hired && state.site === "glassshop";
+      if (!hired) { b.carrying = 0; continue; }
+      var walking = false;
+      var cap = 3 + staffCarryBonus("glassshop");
+
+      if (b.phase === "toPit") {
+        if (b.carrying >= cap) { b.phase = "toFurnace"; continue; }
+        if ((state.glass.sand || 0) < 1) { b.phase = "idle"; b.timer = 0.9; continue; }
+        walking = !gbStepTo(b, GLASS_SAND_X, GLASS_CZ + 5.5, GATHERER_SPEED, dt);
+        if (!walking) { b.phase = "dig"; b.timer = GATHERER_ACT * staffActMult("glassshop"); }
+
+      } else if (b.phase === "dig") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var take = Math.min(cap - b.carrying, Math.floor(state.glass.sand));
+          if (take > 0) { state.glass.sand -= take; b.carrying += take; }
+          if (b.carrying > 0) { b.phase = "toFurnace"; }
+          else { b.phase = "idle"; b.timer = 0.9; }
+        }
+
+      } else if (b.phase === "toFurnace") {
+        if (b.carrying <= 0) { b.phase = "toPit"; continue; }
+        var fi = gathererFindFurnace();
+        if (fi < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var fd = furnaceDefs[fi];
+        walking = !gbStepTo(b, fd.x, fd.z, GATHERER_SPEED, dt);
+        if (!walking) { b.phase = "tip"; b.timer = GATHERER_ACT * staffActMult("glassshop"); b.dropIdx = fi; }
+
+      } else if (b.phase === "tip") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var f2 = state.glass.furnaces[b.dropIdx];
+          if (f2) {
+            var put = Math.min(glassHopperCap() - f2.sand, b.carrying);
+            if (put > 0) { f2.sand += put; b.carrying -= put; }
+          }
+          b.phase = "toPit"; b.timer = 0.4;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) { b.timer = 0.7; b.phase = b.carrying > 0 ? "toFurnace" : "toPit"; }
+      }
+
+      b.obj.position.set(b.pos.x, GLASS_GROUND_TOP, b.pos.z);
+      var sw = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw; b.l2.rotation.x = -sw;
+      b.obj.position.y = GLASS_GROUND_TOP + (walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0);
+    }
+  }
+
+  // ---- glassblowers: relay molten -> blank -> finished -> crate ---------
+  var glassblowers = [];
+  (function buildGlassblowers() {
+    for (var n = 0; n < MAX_GLASSBLOWERS; n++) {
+      var w = buildMillWorker(M.runnerVest, M.steel);
+      glassblowers.push({
+        obj: w.obj, l1: w.l1, l2: w.l2,
+        pos: { x: GLASSBLOWER_ZONE.x + 1.4 + n * 0.9, z: GLASSBLOWER_ZONE.z + 1.4 },
+        phase: "seek", timer: 0, carrying: 0, carryKind: null, carryPieces: null,
+        walkPhase: n * 1.4, slot: n, pickRot: 0, dropIdx: -1,
+      });
+    }
+  })();
+
+  function glassDeliveryPhase(kind) {
+    return kind === "molten" ? "toBlower" : kind === "blank" ? "toFinisher" : "toCrate";
+  }
+
+  // Downstream first, so finished pieces always clear before more are made.
+  function glassblowerFindPickup() {
+    var i, m;
+    for (i = 0; i < finisherOwned(); i++) {
+      m = state.glass.finishers[i];
+      if (m && ((m.pipes || 0) + (m.bongs || 0)) > 0) return { stage: "finisher", idx: i };
+    }
+    for (i = 0; i < blowerOwned(); i++) {
+      m = state.glass.blowers[i];
+      if (m && m.blank > 0 && glassFindRoom("finisher", "blank") >= 0) return { stage: "blower", idx: i };
+    }
+    for (i = 0; i < furnaceOwned(); i++) {
+      m = state.glass.furnaces[i];
+      if (m && m.molten > 0 && glassFindRoom("blower", "molten") >= 0) return { stage: "furnace", idx: i };
+    }
+    return null;
+  }
+
+  function updateGlassblowers(now, dt) {
+    for (var i = 0; i < glassblowers.length; i++) {
+      var b = glassblowers[i];
+      var hired = glassUnlocked() && i < (state.glass.glassblowerLv || 0);
+      b.obj.visible = hired && state.site === "glassshop";
+      if (!hired) { b.carrying = 0; b.carryKind = null; continue; }
+      var walking = false;
+      var cap = 3 + staffCarryBonus("glassshop");
+
+      if (b.phase === "seek") {
+        if (b.carrying >= cap) { b.phase = glassDeliveryPhase(b.carryKind); continue; }
+        var job = glassblowerFindPickup();
+        if (!job) {
+          if (b.carrying > 0) { b.phase = glassDeliveryPhase(b.carryKind); continue; }
+          b.phase = "idle"; b.timer = 0.8; continue;
+        }
+        var wantKind = job.stage === "finisher" ? "piece" : job.stage === "blower" ? "blank" : "molten";
+        if (b.carrying > 0 && b.carryKind !== wantKind) { b.phase = glassDeliveryPhase(b.carryKind); continue; }
+        var src = job.stage === "finisher" ? finisherDefs[job.idx]
+                : job.stage === "blower" ? blowerDefs[job.idx] : furnaceDefs[job.idx];
+        walking = !gbStepTo(b, src.x, src.z, GLASSBLOWER_SPEED, dt);
+        if (!walking) { b.phase = "pickup"; b.timer = GLASSBLOWER_ACT * staffActMult("glassshop"); b.pickupJob = job; }
+
+      } else if (b.phase === "pickup") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          var j = b.pickupJob;
+          if (j.stage === "furnace") {
+            var fm = state.glass.furnaces[j.idx];
+            var t1 = fm ? Math.min(fm.molten, cap - b.carrying) : 0;
+            if (t1 > 0) { fm.molten -= t1; b.carrying += t1; b.carryKind = "molten"; }
+          } else if (j.stage === "blower") {
+            var bm = state.glass.blowers[j.idx];
+            var t2 = bm ? Math.min(bm.blank, cap - b.carrying) : 0;
+            if (t2 > 0) { bm.blank -= t2; b.carrying += t2; b.carryKind = "blank"; }
+          } else {
+            // Finished pieces are two kinds, so take from a rotating start.
+            // Filling from the front of the list is exactly what stranded the
+            // last two products at the smoke shop.
+            var fin = state.glass.finishers[j.idx];
+            if (fin) {
+              var kinds = ["pipes", "bongs"];
+              var manifest = { pipes: 0, bongs: 0 }, took = 0;
+              for (var k = 0; k < kinds.length && b.carrying + took < cap; k++) {
+                var kd = kinds[(k + b.pickRot) % kinds.length];
+                var t3 = Math.min(cap - b.carrying - took, Math.floor(fin[kd] || 0));
+                if (t3 <= 0) continue;
+                fin[kd] -= t3; manifest[kd] += t3; took += t3;
+              }
+              b.pickRot = (b.pickRot + 1) % kinds.length;
+              if (took > 0) {
+                var prev = b.carryPieces || { pipes: 0, bongs: 0 };
+                b.carryPieces = { pipes: prev.pipes + manifest.pipes, bongs: prev.bongs + manifest.bongs };
+                b.carrying += took; b.carryKind = "piece";
+              }
+            }
+          }
+          b.phase = "seek";
+        }
+
+      } else if (b.phase === "toBlower" || b.phase === "toFinisher") {
+        if (b.carrying <= 0) { b.phase = "seek"; continue; }
+        var toBlower = b.phase === "toBlower";
+        var di = glassFindRoom(toBlower ? "blower" : "finisher", toBlower ? "molten" : "blank");
+        if (di < 0) { b.phase = "idle"; b.timer = 1.0; continue; }
+        var dd = (toBlower ? blowerDefs : finisherDefs)[di];
+        walking = !gbStepTo(b, dd.x, dd.z, GLASSBLOWER_SPEED, dt);
+        if (!walking) { b.phase = "drop"; b.timer = GLASSBLOWER_ACT * staffActMult("glassshop"); b.dropIdx = di; }
+
+      } else if (b.phase === "toCrate") {
+        if (b.carrying <= 0) { b.phase = "seek"; continue; }
+        walking = !gbStepTo(b, GLASS_CRATE_X, GLASS_CZ, GLASSBLOWER_SPEED, dt);
+        if (!walking) { b.phase = "drop"; b.timer = GLASSBLOWER_ACT * staffActMult("glassshop"); b.dropIdx = -1; }
+
+      } else if (b.phase === "drop") {
+        b.timer -= dt;
+        if (b.timer <= 0) {
+          if (b.carryKind === "molten" && b.dropIdx >= 0) {
+            var bd2 = state.glass.blowers[b.dropIdx];
+            var r1 = bd2 ? Math.min(glassHopperCap() - bd2.molten, b.carrying) : 0;
+            if (r1 > 0) { bd2.molten += r1; b.carrying -= r1; }
+          } else if (b.carryKind === "blank" && b.dropIdx >= 0) {
+            var fd2 = state.glass.finishers[b.dropIdx];
+            var r2 = fd2 ? Math.min(glassHopperCap() - fd2.blank, b.carrying) : 0;
+            if (r2 > 0) { fd2.blank += r2; b.carrying -= r2; }
+          } else if (b.carryKind === "piece") {
+            // deposit exactly what was picked up, kind by kind
+            var mf = b.carryPieces || { pipes: 0, bongs: 0 };
+            var cr = state.glass.crate;
+            var held = (cr.pipes || 0) + (cr.bongs || 0);
+            ["pipes", "bongs"].forEach(function (kd) {
+              var put = Math.min(GLASS_CRATE_CAP - held, mf[kd] || 0);
+              if (put > 0) { cr[kd] = (cr[kd] || 0) + put; mf[kd] -= put; held += put; b.carrying -= put; }
+            });
+          }
+          if (b.carrying <= 0) { b.carryKind = null; b.carryPieces = null; }
+          b.phase = "seek"; b.timer = 0.5;
+        }
+
+      } else if (b.phase === "idle") {
+        b.timer -= dt;
+        if (b.timer <= 0) { b.timer = 0.7; b.phase = "seek"; }
+      }
+
+      b.obj.position.set(b.pos.x, GLASS_GROUND_TOP, b.pos.z);
+      var sw2 = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw2; b.l2.rotation.x = -sw2;
+      b.obj.position.y = GLASS_GROUND_TOP + (walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0);
+    }
+  }
+
   (function buildFieldHands() {
     for (var n = 0; n < MAX_FIELD_HANDS; n++) {
       var g = new THREE.Group();
@@ -14588,6 +14903,53 @@
       },
     },
     {
+      id: "gatherer", label: "GATHERER", icon: "\u26cf\ufe0f",
+      x: GATHERER_ZONE.x, z: GATHERER_ZONE.z,
+      site: "glassshop", color: 0xc9a875, kiosk: false,
+      hidden: function () { return !glassUnlocked(); },
+      name: function () {
+        return (state.glass.gathererLv || 0) === 0 ? "Hire a Gatherer" : "Hire Another Gatherer";
+      },
+      desc: function () {
+        var n = state.glass.gathererLv || 0;
+        return n >= MAX_GATHERERS
+          ? "The sand pit is fully staffed"
+          : (n === 0
+              ? "They haul sand from the pit to the furnaces"
+              : n + " on staff \u00b7 hire one more to keep the furnaces fed");
+      },
+      cost: costGatherer,
+      maxed: function () { return (state.glass.gathererLv || 0) >= MAX_GATHERERS; },
+      buy: function () {
+        state.glass.gathererLv = (state.glass.gathererLv || 0) + 1;
+        toast("\u26cf\ufe0f Gatherer hired \u2014 the furnaces stay fed now!");
+      },
+    },
+    {
+      id: "glassblower", label: "GLASSBLOWER", icon: "\ud83d\udd25",
+      x: GLASSBLOWER_ZONE.x, z: GLASSBLOWER_ZONE.z,
+      site: "glassshop", color: 0xff8a3c, kiosk: false,
+      hidden: function () { return !glassUnlocked(); },
+      name: function () {
+        return (state.glass.glassblowerLv || 0) === 0 ? "Hire a Glassblower" : "Hire Another Glassblower";
+      },
+      desc: function () {
+        var n = state.glass.glassblowerLv || 0;
+        return n >= MAX_GLASSBLOWERS
+          ? "The studio is fully staffed"
+          : (n === 0
+              ? "They work the studio, running glass down the line to the crates"
+              : n + " on staff \u00b7 hire one more to move glass faster");
+      },
+      cost: costGlassblower,
+      maxed: function () { return (state.glass.glassblowerLv || 0) >= MAX_GLASSBLOWERS; },
+      buy: function () {
+        state.glass.glassblowerLv = (state.glass.glassblowerLv || 0) + 1;
+        refreshGlassStudio();
+        toast("\ud83d\udd25 Glassblower hired \u2014 the torches are lit!");
+      },
+    },
+    {
       id: "restocker", label: "RESTOCKER", icon: "\ud83d\udce6",
       x: SMOKESHOP_RESTOCK_ZONE.x, z: SMOKESHOP_RESTOCK_ZONE.z,
       site: "smokeshop", color: 0x8a95a1, kiosk: false,
@@ -16110,6 +16472,9 @@
     updateFactoryVisuals(now);
     updateFactoryTill(now);
     updateSmokeshop(now, dt);
+    updateGlassLine(dt);
+    updateGatherers(now, dt);
+    updateGlassblowers(now, dt);
     updateGlassVisuals(now);
     updateFloaters(dt);
 
