@@ -15822,6 +15822,53 @@
   var STATION_R = 2.6;
   var STATION_PAD_HALF = (STATION_R * 1.4) / 2;
 
+  // ---- Glass Works machine pads ---------------------------------------
+  // One pad per machine slot, but only the next unowned one in each column
+  // shows, so the yard reads as "here is what you buy next" rather than as a
+  // wall of nine squares. Buying the deed grants slot 0 of each stage.
+  function costGlassMachine(base, owned) { return scaled(base * Math.pow(3.2, owned)); }
+  function costFurnace()  { return costGlassMachine(2.0e8, furnaceOwned()); }
+  function costBlower()   { return costGlassMachine(3.0e8, blowerOwned()); }
+  function costFinisher() { return costGlassMachine(4.5e8, finisherOwned()); }
+
+  [
+    { key: "furnace",  defs: furnaceDefs,  owned: furnaceOwned,  max: MAX_FURNACES,
+      cnt: "furnaceCount",  cost: costFurnace,  color: 0xff8a3c,
+      label: "BUY FURNACE",  icon: "\ud83d\udd25", noun: "Furnace",
+      blurb: "Melts sand down into molten glass" },
+    { key: "blower",   defs: blowerDefs,   owned: blowerOwned,   max: MAX_BLOWERS,
+      cnt: "blowerCount",   cost: costBlower,   color: 0x8ad8ff,
+      label: "BUY BENCH",    icon: "\ud83e\uddea", noun: "Blowing Bench",
+      blurb: "Blows molten glass out into blanks" },
+    { key: "finisher", defs: finisherDefs, owned: finisherOwned, max: MAX_FINISHERS,
+      cnt: "finisherCount", cost: costFinisher, color: 0x9ad06a,
+      label: "BUY FINISHER", icon: "\u2728", noun: "Finisher",
+      blurb: "Finishes blanks into pipes and bongs" },
+  ].forEach(function (stage) {
+    stage.defs.forEach(function (d, i) {
+      stationDefs.push({
+        id: "glass_" + stage.key + "_" + i,
+        label: stage.label, icon: stage.icon,
+        x: d.x, z: d.z - 3.4,
+        site: "glassshop", color: stage.color, kiosk: false,
+        hidden: function () { return !glassUnlocked() || stage.owned() !== i; },
+        name: function () { return "Buy a " + stage.noun; },
+        desc: function () {
+          return stage.owned() >= stage.max
+            ? "Every bay in this row is running"
+            : stage.blurb + " \u00b7 " + stage.owned() + " of " + stage.max + " running";
+        },
+        cost: stage.cost,
+        maxed: function () { return stage.owned() >= stage.max; },
+        buy: function () {
+          state.glass[stage.cnt] = (state.glass[stage.cnt] || 0) + 1;
+          refreshGlassMachines();
+          toast(stage.icon + " " + stage.noun + " online \u2014 the line just got wider!");
+        },
+      });
+    });
+  });
+
   // ---- build the kiosks ----
   var stationGroup = new THREE.Group();
   scene.add(stationGroup);
