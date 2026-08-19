@@ -7879,11 +7879,12 @@
     // ---- tier 3 flourish: a big neon weed-leaf sign on the partition wall
     // — the retail room's own back wall now that the warehouse sits behind
     // a door, so it's still the first thing customers see walking in ----
-    // Sits on the lintel above the warehouse doorway, not across it — the
-    // sprite draws with depthTest off, so centred at door height it read
-    // as hanging in the opening rather than mounted on the wall.
+    // Centred on the broad stretch of partition wall to the right of the
+    // warehouse door, not above the door itself — stacked over the
+    // doorway it fought with the WAREHOUSE sign for the same space. Out
+    // here it has a whole blank wall to itself and can be much bigger.
     if (look.neon) {
-      buildNeonLeafSign(g, 0, 6.6, SMOKESHOP_PARTITION_Z + 0.25, "#ff5fa8", 3.0);
+      buildNeonLeafSign(g, (whDoorHalf + maxX) / 2, 4.8, SMOKESHOP_PARTITION_Z + 0.25, "#ff5fa8", 5.6);
     }
 
     // ---- reach-in cooler run down the whole east wall ----
