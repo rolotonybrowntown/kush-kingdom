@@ -8583,6 +8583,7 @@
   var furnaceObjects = [], blowerObjects = [], finisherObjects = [];
   var glassSandPile = null, glassCratePile = null;
   var glassStudio = null, glassTorches = [];
+  var glassTill = null;
 
   // Torch tip. The torches read as a welding flash rather than a standing
   // flame: a short bright burst at the nozzle, then back to a dull heat.
@@ -8906,6 +8907,14 @@
     crateLbl.position.set(0, 8.4, 0);
     crateG.add(crateLbl);
 
+    // wholesale till: whatever the crate can't push to the store sells here
+    // instead of stacking up forever - same per-city accountant the smoke
+    // shop uses, so hiring Uptown's accountant covers both of its tills
+    // South of the rack, not east - GLASS_CRATE_X + 8 sat past the east
+    // wall and outside the walkable bounds entirely, unreachable.
+    var glassTillPad = { x: GLASS_CRATE_X, z: GLASS_CZ + 9, half: 1.4 };
+    glassTill = makeTill(glassTillPad, 0xff9a3c, "$ WHOLESALE", smokeshopAccountantHired);
+
     // ---- dressing: gas cylinders by the furnaces, cooling racks by the
     // finishers, so the yard doesn't read as machines on bare concrete
     for (var cy = -1; cy <= 1; cy++) {
@@ -9011,6 +9020,43 @@
         }
       } else { m.acc = 0; }
     }
+  }
+
+  // Finished pieces sell wholesale at half the store's retail price, so
+  // building the Glass Works is never a worse way to move product than
+  // selling it wholesale straight off the bench would be, but the store
+  // (which the whole site exists to feed) is always the better outlet.
+  function glassWholesaleValue(kind) {
+    return smokeshopProductValue(kind) * 0.5 * officeProfitMult("glassshop");
+  }
+
+  // Crate -> Smoke Shop shelf first, straight clone of the factory's drink
+  // push to the Lounge; whatever the store has no room for sells wholesale
+  // at the till instead of stacking up forever.
+  function updateGlassCrateOut(dt) {
+    if (!glassUnlocked()) return;
+    var gl = state.glass, cr = gl.crate;
+    ["pipes", "bongs"].forEach(function (kind) {
+      var have = cr[kind] || 0;
+      if (have <= 0) return;
+      if (smokeshopUnlocked() && smokeshopProductUnlocked(kind)) {
+        var room = smokeshopIntakeCap() - smokeshopStockTotal();
+        var send = Math.min(Math.floor(have), Math.max(0, room));
+        if (send > 0) {
+          cr[kind] -= send;
+          state.smokeshop.stock[kind] = (state.smokeshop.stock[kind] || 0) + send;
+          gl.sentToShop = (gl.sentToShop || 0) + send;
+          have -= send;
+        }
+      }
+      if (have > 0 && have >= 1) {
+        var sell = Math.floor(have);
+        cr[kind] -= sell;
+        var paid = glassWholesaleValue(kind) * sell * (promoActive() ? PROMO_MULT : 1);
+        gl.pending = (gl.pending || 0) + paid;
+        glassTill.payOut(Math.round(paid));
+      }
+    });
   }
 
   function gbStepTo(b, tx, tz, speed, dt) {
@@ -14000,6 +14046,15 @@
     });
   }
 
+  function updateGlassTill(now) {
+    var live = glassUnlocked();
+    if (glassTill && glassTill.pad) glassTill.pad.visible = live;
+    if (!live || !glassTill) return;
+    glassTill.update(now, function () {
+      state.glass.pending = 0;
+    });
+  }
+
   // ---- a bag of feed that turns up on the shop floor now and then ----
   // It waits there until you walk into it — no expiry — then the next one is
   // held back for five minutes.
@@ -16548,9 +16603,11 @@
     updateFactoryTill(now);
     updateSmokeshop(now, dt);
     updateGlassLine(dt);
+    updateGlassCrateOut(dt);
     updateGatherers(now, dt);
     updateGlassblowers(now, dt);
     updateGlassVisuals(now, dt);
+    updateGlassTill(now);
     updateFloaters(dt);
 
     seedRing.material.opacity = 0.35 + Math.sin(now * 0.003) * 0.18;
@@ -17358,6 +17415,7 @@
   // in-memory total, so without this a shipment banked before you closed the
   // tab would come back as an invisible number you could never collect.
   if (state.factory.pending > 0) factoryTill.payOut(state.factory.pending);
+  if (state.glass.pending > 0) glassTill.payOut(state.glass.pending);
   // a save restored at Upscale or above should already be in black tie
   refreshLoungeFit();
   updateLoungeStockVisuals();
