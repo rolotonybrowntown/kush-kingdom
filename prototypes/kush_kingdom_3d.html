@@ -1395,7 +1395,7 @@
   // textually after that IIFE is still only hoisted as undefined at the
   // point the IIFE actually runs.
   var MAX_GATHERERS = 4, MAX_GLASSBLOWERS = 3;
-  var GLASS_TABLE_X = GLASS_BLOWER_X, GLASS_TABLE_Z = GLASS_CZ + 12;
+  var GLASS_TABLE_X = GLASS_BLOWER_X, GLASS_TABLE_Z = GLASS_CZ;   // the middle blower row, where the benches used to sit
   var GLASS_TABLE_SLOT_DX = 2.9;
   var GLASS_STUDIO_HALF_Z = 3.0;   // must match stHalfZ in buildGlassWorks
   function glassTableSlot(i) {
@@ -1420,7 +1420,10 @@
   var MAX_BLOWERS = blowerDefs.length;
   var MAX_FINISHERS = finisherDefs.length;
   function furnaceOwned()  { return (state.glass && state.glass.furnaceCount) || 0; }
-  function blowerOwned()   { return (state.glass && state.glass.blowerCount) || 0; }
+  function blowerOwned()   { return (state.glass && state.glass.glassblowerLv) || 0; }
+  // state.glass.blowerCount is still in the save shape (old saves have it,
+  // and the array-resize helper below still keys off it) but nothing reads
+  // it for ownership any more - blowerOwned() reads staffing instead.
   function finisherOwned() { return (state.glass && state.glass.finisherCount) || 0; }
   var BASE_GLASS_HOPPER = 10;
   function glassHopperCap() { return BASE_GLASS_HOPPER + 3 * ((state.glass && state.glass.hopperLv) || 0); }
@@ -1937,8 +1940,8 @@
         // Hand over one of each stage, so the yard reads as a working shop
         // the moment you walk in rather than as an empty slab.
         state.glass.furnaceCount = Math.max(1, state.glass.furnaceCount);
-        state.glass.blowerCount = Math.max(1, state.glass.blowerCount);
         state.glass.finisherCount = Math.max(1, state.glass.finisherCount);
+        state.glass.glassblowerLv = Math.max(1, state.glass.glassblowerLv);
         refreshGlassMachines();
         toast("🔥 Deed signed — the Glass Works is yours!");
       },
@@ -8597,7 +8600,7 @@
   var glassBlankGeo  = new THREE.CylinderGeometry(0.30, 0.40, 0.85, 8);
   var glassPieceGeo  = new THREE.CylinderGeometry(0.20, 0.30, 1.10, 8);
 
-  var furnaceObjects = [], blowerObjects = [], finisherObjects = [];
+  var furnaceObjects = [], finisherObjects = [];   // no blower machine objects - see blowerOwned()
   var glassSandPile = null, glassCratePile = null;
   var glassStudio = null;
   var glassTill = null;
@@ -8616,7 +8619,6 @@
   function refreshGlassMachines() {
     var i;
     for (i = 0; i < furnaceObjects.length; i++)  furnaceObjects[i].group.visible  = i < furnaceOwned();
-    for (i = 0; i < blowerObjects.length; i++)   blowerObjects[i].group.visible   = i < blowerOwned();
     for (i = 0; i < finisherObjects.length; i++) finisherObjects[i].group.visible = i < finisherOwned();
   }
 
@@ -8648,12 +8650,7 @@
       updateGlassMachineVisual(o, m.sand > 0 && m.molten < glassHopperCap(), m.sand, m.molten, now, dt);
       if (o.glow) o.glow.material.opacity = (m.molten > 0 ? 0.34 : 0.14) + Math.sin(now * 0.006 + i * 1.7) * 0.1;
     }
-    for (i = 0; i < blowerObjects.length; i++) {
-      o = blowerObjects[i]; if (!o.group.visible) continue;
-      m = state.glass.blowers[i];
-      updateGlassMachineVisual(o, m.molten > 0 && m.blank < glassHopperCap(), m.molten, m.blank, now, dt);
-      if (o.glow) o.glow.material.opacity = m.blank > 0 ? 0.3 + Math.sin(now * 0.006) * 0.14 : 0.1;
-    }
+    // no blower machine visuals any more - the studio table covers it
     for (i = 0; i < finisherObjects.length; i++) {
       o = finisherObjects[i]; if (!o.group.visible) continue;
       m = state.glass.finishers[i];
@@ -8770,14 +8767,6 @@
         barInColor: 0xd8c890, barOutColor: 0xff8a3c, pileMax: 18,
       });
     }
-    function buildBlowerBench(d) {
-      return buildMillMachine(d, {
-        parent: g, groundY: y,
-        head: "blower", bodyMat: M.machine, capMat: M.steel,
-        inGeo: glassMoltenGeo, inMat: M.ovenGlow, outGeo: glassBlankGeo, outMat: M.productJar,
-        barInColor: 0xff8a3c, barOutColor: 0x8ad8ff, pileMax: 18,
-      });
-    }
     function buildFinisher(d) {
       return buildMillMachine(d, {
         parent: g, groundY: y,
@@ -8786,9 +8775,11 @@
         barInColor: 0x8ad8ff, barOutColor: 0x9ad06a, pileMax: 18,
       });
     }
+    // No blower machines any more - the studio table below is the whole
+    // blower stage, and hiring a worker there is what grants a blower slot
+    // (see blowerOwned()), not a separate purchase.
     var gi;
     for (gi = 0; gi < furnaceDefs.length; gi++)  furnaceObjects.push(buildFurnace(furnaceDefs[gi]));
-    for (gi = 0; gi < blowerDefs.length; gi++)   blowerObjects.push(buildBlowerBench(blowerDefs[gi]));
     for (gi = 0; gi < finisherDefs.length; gi++) finisherObjects.push(buildFinisher(finisherDefs[gi]));
     refreshGlassMachines();
 
@@ -15925,18 +15916,16 @@
   // wall of nine squares. Buying the deed grants slot 0 of each stage.
   function costGlassMachine(base, owned) { return scaled(base * Math.pow(3.2, owned)); }
   function costFurnace()  { return costGlassMachine(2.0e8, furnaceOwned()); }
-  function costBlower()   { return costGlassMachine(3.0e8, blowerOwned()); }
   function costFinisher() { return costGlassMachine(4.5e8, finisherOwned()); }
 
+  // No blower entry here - the studio table replaced the blower machines,
+  // so blower capacity comes from hiring a Glassblower (see blowerOwned()
+  // and the "glassblower" hire pad below), not a separate purchase.
   [
     { key: "furnace",  defs: furnaceDefs,  owned: furnaceOwned,  max: MAX_FURNACES,
       cnt: "furnaceCount",  cost: costFurnace,  color: 0xff8a3c,
       label: "BUY FURNACE",  icon: "\ud83d\udd25", noun: "Furnace",
       blurb: "Melts sand down into molten glass" },
-    { key: "blower",   defs: blowerDefs,   owned: blowerOwned,   max: MAX_BLOWERS,
-      cnt: "blowerCount",   cost: costBlower,   color: 0x8ad8ff,
-      label: "BUY BENCH",    icon: "\ud83e\uddea", noun: "Blowing Bench",
-      blurb: "Blows molten glass out into blanks" },
     { key: "finisher", defs: finisherDefs, owned: finisherOwned, max: MAX_FINISHERS,
       cnt: "finisherCount", cost: costFinisher, color: 0x9ad06a,
       label: "BUY FINISHER", icon: "\u2728", noun: "Finisher",
@@ -17491,7 +17480,6 @@
       // offline play is a bonus; failing to register must never break the game
     });
   })();
-  window.__padDbg = { defs: stationDefs, half: STATION_PAD_HALF };
 })();
 </script>
 </body>
