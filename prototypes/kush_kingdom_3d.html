@@ -1387,6 +1387,24 @@
   var GLASS_UPGRADE_Z = GLASS_CZ - 17;   // pad band, above every column
   var GLASS_HIRE_Z    = GLASS_CZ + 17;   // hire pads, below everything
 
+  // The studio table and each worker's fixed slot along it - south of the
+  // machine rows, in the open floor between them and the hire pads.
+  // Declared here (top-level, before any IIFE runs) rather than down by
+  // GLASSBLOWER_ZONE, because buildGlassWorks() is an IIFE that executes
+  // immediately and reads these while building the room - a var declared
+  // textually after that IIFE is still only hoisted as undefined at the
+  // point the IIFE actually runs.
+  var MAX_GATHERERS = 4, MAX_GLASSBLOWERS = 3;
+  var GLASS_TABLE_X = GLASS_BLOWER_X, GLASS_TABLE_Z = GLASS_CZ + 12;
+  var GLASS_TABLE_SLOT_DX = 2.9;
+  var GLASS_STUDIO_HALF_Z = 3.0;   // must match stHalfZ in buildGlassWorks
+  function glassTableSlot(i) {
+    return {
+      x: GLASS_TABLE_X + (i - (MAX_GLASSBLOWERS - 1) / 2) * GLASS_TABLE_SLOT_DX,
+      z: GLASS_TABLE_Z - 0.85,
+    };
+  }
+
   // Each machine holds { in, out, acc } exactly like the mill's
   // saws/planers/cutters, so the same builder, status bars, resource piles
   // and walk-up pads all apply.
@@ -1413,7 +1431,6 @@
   // Two crews split the line the same way the mill's do: gatherers feed
   // the furnaces from the sand hopper, glassblowers relay every stage
   // downstream from there to the crate-out.
-  var MAX_GATHERERS = 4, MAX_GLASSBLOWERS = 3;
   function costGatherer()    { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.gathererLv) || 0)); }
   function costGlassblower() { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.glassblowerLv) || 0)); }
   var GLASS_HR_ZONE = { x: GLASS_CRATE_X, z: GLASS_HIRE_Z };
@@ -8582,7 +8599,7 @@
 
   var furnaceObjects = [], blowerObjects = [], finisherObjects = [];
   var glassSandPile = null, glassCratePile = null;
-  var glassStudio = null, glassTorches = [];
+  var glassStudio = null;
   var glassTill = null;
 
   // Torch tip. The torches read as a welding flash rather than a standing
@@ -8593,15 +8610,6 @@
     color: 0xffeec2, transparent: true, opacity: 0.14, depthWrite: false,
   });
   var glassFlashGeo = new THREE.SphereGeometry(0.34, 10, 8);
-
-  // The studio is the glassblowers' room: they only work once hired, so the
-  // torches only burn then.
-  function glassblowersHired() { return ((state.glass && state.glass.glassblowerLv) || 0) > 0; }
-
-  function refreshGlassStudio() {
-    var lit = glassblowersHired();
-    for (var i = 0; i < glassTorches.length; i++) glassTorches[i].group.visible = lit;
-  }
 
   // Machines exist in the scene from the start and are revealed as they are
   // bought, the same way the mill reveals its saws.
@@ -8655,22 +8663,6 @@
     }
     if (glassSandPile) glassSandPile.setCount(Math.round(state.glass.sand || 0));
     if (glassCratePile) glassCratePile.setCount((state.glass.crate.pipes || 0) + (state.glass.crate.bongs || 0));
-
-    for (i = 0; i < glassTorches.length; i++) {
-      var t = glassTorches[i];
-      if (!t.group.visible) continue;
-      // Bursts are scheduled with random gaps rather than driven off a sine,
-      // so the three torches never fall into step with each other.
-      if (now >= t.nextFlash) {
-        t.flashUntil = now + 90 + Math.random() * 120;
-        t.nextFlash = t.flashUntil + 280 + Math.random() * 900;
-      }
-      // within a burst, a fast wobble so it strobes rather than blinking flat
-      var k = now < t.flashUntil ? 0.72 + Math.sin(now * 0.09 + t.phase) * 0.28 : 0;
-      t.tip.material.opacity = 0.14 + k * 0.86;
-      t.tip.scale.setScalar(0.75 + k * 0.85);
-      t.glow.material.opacity = 0.06 + k * 0.66;
-    }
   }
 
   (function buildGlassWorks() {
@@ -8800,14 +8792,17 @@
     for (gi = 0; gi < finisherDefs.length; gi++) finisherObjects.push(buildFinisher(finisherDefs[gi]));
     refreshGlassMachines();
 
-    // ---- the glassblowers' studio: a glazed room around the blower column,
-    // inside the same shed, so the crew works behind glass with their torches
-    // lit. Open to the south so you can walk in and see the benches.
+    // ---- the glassblowers' studio: a small glazed booth south of the
+    // machine rows, in the open floor between them and the hire pads - not
+    // wrapped around the blower benches any more. A long metal table is the
+    // whole point of the room; each hired glassblower stands at their own
+    // slot along it holding a torch, so headcount reads at a glance instead
+    // of needing to catch someone mid-walk across the yard.
     glassStudio = new THREE.Group();
-    glassStudio.position.set(GLASS_BLOWER_X, y, GLASS_CZ);
+    glassStudio.position.set(GLASS_TABLE_X, y, GLASS_TABLE_Z);
     g.add(glassStudio);
 
-    var stHalfX = 8.5, stHalfZ = 13.5, stH = 6.0, stDoorHalf = 3.0;
+    var stHalfX = 6.2, stHalfZ = GLASS_STUDIO_HALF_Z, stH = 4.0, stDoorHalf = 2.2;
     function pane(w, h, d, x, yy, z) {
       var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M.windowGlass);
       m.position.set(x, yy, z);
@@ -8821,62 +8816,50 @@
       glassStudio.add(m);
       return m;
     }
-    // glazing: north and side walls solid, south split around a doorway
-    pane(stHalfX * 2, stH, 0.16, 0, stH / 2, -stHalfZ);
-    pane(0.16, stH, stHalfZ * 2, -stHalfX, stH / 2, 0);
-    pane(0.16, stH, stHalfZ * 2,  stHalfX, stH / 2, 0);
+    // glazing: north and side walls solid, south (the door side, facing the
+    // player's approach) split around a doorway
+    pane(stHalfX * 2, stH, 0.14, 0, stH / 2, -stHalfZ);
+    pane(0.14, stH, stHalfZ * 2, -stHalfX, stH / 2, 0);
+    pane(0.14, stH, stHalfZ * 2,  stHalfX, stH / 2, 0);
     var sideRun = stHalfX - stDoorHalf;
     [-1, 1].forEach(function (sx) {
-      pane(sideRun, stH, 0.16, sx * (stDoorHalf + sideRun / 2), stH / 2, stHalfZ);
+      pane(sideRun, stH, 0.14, sx * (stDoorHalf + sideRun / 2), stH / 2, stHalfZ);
     });
-    // frame: corner posts, a head rail, and regular mullions, so the glazing
-    // reads as a shopfront rather than a floating sheet
+    // frame: thin corner posts and a head rail only - the old room's posts
+    // ran floor to ceiling at full room height and, with the glass barely
+    // visible at 0.35 opacity, that is what actually read on screen: not a
+    // glazed room but four bare towers. Keeping the room this much smaller
+    // and the posts this much thinner is what fixes that, not the glazing.
     [-1, 1].forEach(function (sx) {
       [-1, 1].forEach(function (sz) {
-        mullion(0.3, stH, 0.3, sx * stHalfX, stH / 2, sz * stHalfZ);
+        mullion(0.2, stH, 0.2, sx * stHalfX, stH / 2, sz * stHalfZ);
       });
     });
-    mullion(stHalfX * 2 + 0.4, 0.35, 0.4, 0, stH, -stHalfZ);
-    mullion(stHalfX * 2 + 0.4, 0.35, 0.4, 0, stH,  stHalfZ);
-    mullion(0.4, 0.35, stHalfZ * 2, -stHalfX, stH, 0);
-    mullion(0.4, 0.35, stHalfZ * 2,  stHalfX, stH, 0);
-    for (var mz = -stHalfZ + 4.5; mz < stHalfZ - 1; mz += 4.5) {
-      mullion(0.22, stH, 0.22, -stHalfX, stH / 2, mz);
-      mullion(0.22, stH, 0.22,  stHalfX, stH / 2, mz);
-    }
+    mullion(stHalfX * 2 + 0.3, 0.28, 0.3, 0, stH, -stHalfZ);
+    mullion(stHalfX * 2 + 0.3, 0.28, 0.3, 0, stH,  stHalfZ);
+    mullion(0.3, 0.28, stHalfZ * 2, -stHalfX, stH, 0);
+    mullion(0.3, 0.28, stHalfZ * 2,  stHalfX, stH, 0);
     [-1, 1].forEach(function (sx) {
-      mullion(0.3, stH, 0.35, sx * stDoorHalf, stH / 2, stHalfZ);
+      mullion(0.2, stH, 0.24, sx * stDoorHalf, stH / 2, stHalfZ);
     });
     var stSign = textSprite("BLOWING STUDIO", "#bfe9ff");
-    stSign.scale.set(6.4, 1.2, 1);
-    stSign.position.set(0, stH + 1.4, stHalfZ);
+    stSign.scale.set(5.2, 1.0, 1);
+    stSign.position.set(0, stH + 1.1, stHalfZ);
     glassStudio.add(stSign);
 
-    // ---- torches: one at each bench, burning only while the crew is hired
-    for (var bi = 0; bi < blowerDefs.length; bi++) {
-      var bd = blowerDefs[bi];
-      var tg = new THREE.Group();
-      tg.position.set(bd.x - 2.6, y, bd.z + 2.2);
-      g.add(tg);
-      var stand = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, 2.6, 8), M.beltFrame);
-      stand.position.y = 1.3;
-      stand.castShadow = true;
-      tg.add(stand);
-      var nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 0.6, 8), M.steel);
-      nozzle.position.y = 2.85;
-      tg.add(nozzle);
-      // per-torch material clones: the flash writes opacity, and a shared
-      // material would make every torch fire in lockstep
-      var tip = new THREE.Mesh(glassFlashGeo, glassFlashMat.clone());
-      tip.position.y = 3.25;
-      tg.add(tip);
-      var tglow = addGlow(tg, 0, 3.25, 0, 5.0, 0xffc464, 0.06);
-      glassTorches.push({
-        group: tg, tip: tip, glow: tglow, phase: bi * 2.1,
-        nextFlash: 0, flashUntil: 0,
+    // ---- the table: one long bench down the middle of the booth
+    var table = new THREE.Mesh(new THREE.BoxGeometry(stHalfX * 2 - 1.4, 0.9, 1.7), M.metalRack);
+    table.position.set(0, 0.45, 0.35);
+    table.castShadow = true; table.receiveShadow = true;
+    glassStudio.add(table);
+    [-1, 1].forEach(function (sx) {
+      [-1, 1].forEach(function (sz) {
+        var leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.9, 0.22), M.beltFrame);
+        leg.position.set(sx * (stHalfX * 2 - 1.4) / 2 - sx * 0.3, 0.45, 0.35 + sz * 0.7);
+        leg.castShadow = true;
+        glassStudio.add(leg);
       });
-    }
-    refreshGlassStudio();
+    });
 
     // ---- crate-out: where finished pieces stack waiting for the shop run
     var crateG = new THREE.Group();
@@ -9166,11 +9149,30 @@
   (function buildGlassblowers() {
     for (var n = 0; n < MAX_GLASSBLOWERS; n++) {
       var w = buildMillWorker(M.runnerVest, M.steel);
+      // Deliveries between machines still happen in the background (see
+      // updateGlassblowers below) - what you see is each hired worker
+      // standing at their own slot on the studio table with a torch, not
+      // walking the yard. A torch is attached to the worker's own group so
+      // it is gated by the same b.obj.visible the worker already gets.
+      var slot = glassTableSlot(n);
+      var torchGroup = new THREE.Group();
+      torchGroup.position.set(0, 1.05, 0.55);
+      w.obj.add(torchGroup);
+      var handle = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.55, 8), M.beltFrame);
+      handle.rotation.x = Math.PI / 2.4;
+      handle.position.set(0, 0, 0.1);
+      torchGroup.add(handle);
+      var tip = new THREE.Mesh(glassFlashGeo, glassFlashMat.clone());
+      tip.scale.setScalar(0.6);
+      tip.position.set(0, 0.16, 0.42);
+      torchGroup.add(tip);
+      var tglow = addGlow(torchGroup, 0, 0.16, 0.42, 3.2, 0xffc464, 0.06);
       glassblowers.push({
         obj: w.obj, l1: w.l1, l2: w.l2,
         pos: { x: GLASSBLOWER_ZONE.x + 1.4 + n * 0.9, z: GLASSBLOWER_ZONE.z + 1.4 },
         phase: "seek", timer: 0, carrying: 0, carryKind: null, carryPieces: null,
         walkPhase: n * 1.4, slot: n, pickRot: 0, dropIdx: -1,
+        tableSlot: slot, tip: tip, glow: tglow, torchPhase: n * 2.1, nextFlash: 0, flashUntil: 0,
       });
     }
   })();
@@ -9301,10 +9303,23 @@
         if (b.timer <= 0) { b.timer = 0.7; b.phase = "seek"; }
       }
 
-      b.obj.position.set(b.pos.x, GLASS_GROUND_TOP, b.pos.z);
-      var sw2 = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
-      b.l1.rotation.x = sw2; b.l2.rotation.x = -sw2;
-      b.obj.position.y = GLASS_GROUND_TOP + (walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0);
+      // b.pos still walks internally above - that is what paces the relay
+      // timing between machines - but the worker itself renders standing at
+      // its fixed table slot, holding a torch that flashes on its own
+      // schedule, instead of visibly crossing the yard.
+      var slot = b.tableSlot;
+      b.obj.position.set(slot.x, GLASS_GROUND_TOP, slot.z);
+      b.obj.rotation.y = 0;
+      b.l1.rotation.x = 0; b.l2.rotation.x = 0;
+
+      if (now >= b.nextFlash) {
+        b.flashUntil = now + 90 + Math.random() * 120;
+        b.nextFlash = b.flashUntil + 280 + Math.random() * 900;
+      }
+      var k = now < b.flashUntil ? 0.72 + Math.sin(now * 0.09 + b.torchPhase) * 0.28 : 0;
+      b.tip.material.opacity = 0.14 + k * 0.86;
+      b.tip.scale.setScalar(0.6 * (0.75 + k * 0.85));
+      b.glow.material.opacity = 0.06 + k * 0.66;
     }
   }
 
@@ -15010,7 +15025,7 @@
     },
     {
       id: "glassblower", label: "GLASSBLOWER", icon: "\ud83d\udd25",
-      x: GLASSBLOWER_ZONE.x, z: GLASSBLOWER_ZONE.z,
+      x: GLASS_TABLE_X, z: GLASS_TABLE_Z + GLASS_STUDIO_HALF_Z - 1.0,
       site: "glassshop", color: 0xff8a3c, kiosk: false,
       hidden: function () { return !glassUnlocked(); },
       name: function () {
@@ -15019,17 +15034,16 @@
       desc: function () {
         var n = state.glass.glassblowerLv || 0;
         return n >= MAX_GLASSBLOWERS
-          ? "The studio is fully staffed"
+          ? "Every seat at the table is taken"
           : (n === 0
-              ? "They work the studio, running glass down the line to the crates"
-              : n + " on staff \u00b7 hire one more to move glass faster");
+              ? "They take a seat at the table and work glass down the line"
+              : n + " at the table \u00b7 hire one more to move glass faster");
       },
       cost: costGlassblower,
       maxed: function () { return (state.glass.glassblowerLv || 0) >= MAX_GLASSBLOWERS; },
       buy: function () {
         state.glass.glassblowerLv = (state.glass.glassblowerLv || 0) + 1;
-        refreshGlassStudio();
-        toast("\ud83d\udd25 Glassblower hired \u2014 the torches are lit!");
+        toast("\ud83d\udd25 Glassblower hired \u2014 another torch lit at the table!");
       },
     },
     {
@@ -17477,6 +17491,7 @@
       // offline play is a bonus; failing to register must never break the game
     });
   })();
+  window.__padDbg = { defs: stationDefs, half: STATION_PAD_HALF };
 })();
 </script>
 </body>
