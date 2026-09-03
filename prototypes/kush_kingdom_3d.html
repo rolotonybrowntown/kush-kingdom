@@ -1434,13 +1434,29 @@
   // Two crews split the line the same way the mill's do: gatherers feed
   // the furnaces from the sand hopper, glassblowers relay every stage
   // downstream from there to the crate-out.
-  function costGatherer()    { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.gathererLv) || 0)); }
-  function costGlassblower() { return scaled(60000000 * Math.pow(2.7, (state.glass && state.glass.glassblowerLv) || 0)); }
+  function costGatherer()    { return scaled(12000000 * Math.pow(2.7, (state.glass && state.glass.gathererLv) || 0)); }
+  function costGlassblower() { return scaled(15000000 * Math.pow(2.7, (state.glass && state.glass.glassblowerLv) || 0)); }
   var GLASS_HR_ZONE = { x: GLASS_CRATE_X, z: GLASS_HIRE_Z };
   var BASE_MELT_TIME = 5, BASE_BLOW_TIME = 6, BASE_FINISH_TIME = 6;
-  function meltTimeFor()   { return BASE_MELT_TIME   / Math.pow(1.22, (state.glass && state.glass.meltLv)   || 0) / perkProdMult(); }
-  function blowTimeFor()   { return BASE_BLOW_TIME   / Math.pow(1.22, (state.glass && state.glass.blowLv)   || 0) / perkProdMult(); }
-  function finishTimeFor() { return BASE_FINISH_TIME / Math.pow(1.22, (state.glass && state.glass.finishLv) || 0) / perkProdMult(); }
+  // Floored like the mill's stages are, so speed levels stay worth buying
+  // deep into the game without the line going infinitely fast.
+  var GLASS_MIN_STAGE_TIME = 0.4;
+  function glassStageTime(base, lv) {
+    var t = base / Math.pow(1.22, lv || 0);
+    if (boostActive()) t *= 0.5;
+    t /= perkProdMult();
+    return Math.max(t, GLASS_MIN_STAGE_TIME);
+  }
+  function meltTimeFor()   { return glassStageTime(BASE_MELT_TIME,   (state.glass && state.glass.meltLv)   || 0); }
+  function blowTimeFor()   { return glassStageTime(BASE_BLOW_TIME,   (state.glass && state.glass.blowLv)   || 0); }
+  function finishTimeFor() { return glassStageTime(BASE_FINISH_TIME, (state.glass && state.glass.finishLv) || 0); }
+  // Upgrade prices. The machine bases below were originally set at 2.0e8/4.5e8
+  // with nothing to compare them against; the mill charges 3000-4000 for the
+  // same kind of purchase and out-earns this site, so they were roughly five
+  // orders of magnitude too steep. scaled() still carries them forward.
+  function costGlassSpeed(lv)  { return scaled(14000 * Math.pow(2.6, lv || 0)); }
+  function costGlassHopper(lv) { return scaled(11000 * Math.pow(2.4, lv || 0)); }
+  function costGlassCraft(lv)  { return scaled(16000 * Math.pow(1.85, lv || 0)); }
 
   // ---- the mill reads strictly left to right: forest, saw, planer, cutter,
   // register/trucks. Each machine stage is its own fixed X column; buying
@@ -2717,7 +2733,7 @@
         sentToShop: 0,                  // lifetime pieces crated over to the smoke shop
         pending: 0,                     // wholesale cash waiting at the till
         hopperLv: 0,
-        meltLv: 0, blowLv: 0, finishLv: 0,
+        meltLv: 0, blowLv: 0, finishLv: 0, valueLv: 0,
         gathererLv: 0, glassblowerLv: 0,
       },
       dailyStreak: 0,                   // consecutive calendar days played
@@ -2913,7 +2929,7 @@
       ["sentToShop", "pending"].forEach(function (k) {
         gl[k] = (typeof gl[k] === "number" && isFinite(gl[k])) ? Math.max(0, gl[k]) : 0;
       });
-      ["hopperLv", "meltLv", "blowLv", "finishLv"].forEach(function (k) {
+      ["hopperLv", "meltLv", "blowLv", "finishLv", "valueLv"].forEach(function (k) {
         gl[k] = Math.max(0, Math.floor(gl[k]) || 0);
       });
       gl.gathererLv = Math.max(0, Math.min(MAX_GATHERERS, Math.floor(gl.gathererLv) || 0));
@@ -8402,7 +8418,16 @@
     var hired = smokeshopUnlocked();
     // ---- passive shipments trickle into the warehouse ----
     if (hired) {
-      var open = smokeshopUnlockedProducts();
+      // Once the Glass Works is running it supplies the glass goods for
+      // real, so the trickle stops inventing them. Before that it still
+      // covers everything, otherwise the store would have no pipes at all.
+      // Without this the site was pure duplication: the trickle already
+      // handed over more glass per second, free, than the Glass Works can
+      // make, so building it added nothing the store did not already have.
+      var glassMade = glassUnlocked();
+      var open = smokeshopUnlockedProducts().filter(function (p) {
+        return !(glassMade && (p.kind === "pipes" || p.kind === "bongs"));
+      });
       var room = smokeshopIntakeCap() - smokeshopStockTotal();
       if (open.length && room > 0) {
         var per = Math.min(room, SMOKESHOP_RESTOCK_RATE * dt) / open.length;
@@ -8996,12 +9021,16 @@
     }
   }
 
-  // Finished pieces sell wholesale at half the store's retail price, so
-  // building the Glass Works is never a worse way to move product than
-  // selling it wholesale straight off the bench would be, but the store
-  // (which the whole site exists to feed) is always the better outlet.
+  // Finished pieces sell wholesale below the store's retail price, so the
+  // store stays the better outlet, but not so far below that the site earns
+  // nothing on its own. Craft levels lift the value the same way the mill's
+  // valueLv and the factory's qualityLv lift theirs - this was the only
+  // producing site in the game with no value axis at all.
+  var GLASS_WHOLESALE_PCT = 0.8;
+  function glassCraftMult() { return 1 + 0.35 * ((state.glass && state.glass.valueLv) || 0); }
   function glassWholesaleValue(kind) {
-    return smokeshopProductValue(kind) * 0.5 * officeProfitMult("glassshop");
+    return smokeshopProductValue(kind) * GLASS_WHOLESALE_PCT * glassCraftMult() *
+           officeProfitMult("glassshop");
   }
 
   // Crate -> Smoke Shop shelf first, straight clone of the factory's drink
@@ -15914,9 +15943,9 @@
   // One pad per machine slot, but only the next unowned one in each column
   // shows, so the yard reads as "here is what you buy next" rather than as a
   // wall of nine squares. Buying the deed grants slot 0 of each stage.
-  function costGlassMachine(base, owned) { return scaled(base * Math.pow(3.2, owned)); }
-  function costFurnace()  { return costGlassMachine(2.0e8, furnaceOwned()); }
-  function costFinisher() { return costGlassMachine(4.5e8, finisherOwned()); }
+  function costGlassMachine(base, owned) { return scaled(base * Math.pow(1.95, owned)); }
+  function costFurnace()  { return costGlassMachine(5000, furnaceOwned()); }
+  function costFinisher() { return costGlassMachine(7000, finisherOwned()); }
 
   // No blower entry here - the studio table replaced the blower machines,
   // so blower capacity comes from hiring a Glassblower (see blowerOwned()
@@ -15952,6 +15981,51 @@
           toast(stage.icon + " " + stage.noun + " online \u2014 the line just got wider!");
         },
       });
+    });
+  });
+
+  // ---- Glass Works upgrade pads ---------------------------------------
+  // The four level fields were wired into the timing and capacity functions
+  // from the start but nothing ever wrote them, so this was the only site in
+  // the game that could never be improved - it ran at base rate forever
+  // while every other site multiplied its throughput.
+  [
+    { id: "glass_melt", lv: "meltLv", x: GLASS_FURNACE_X, color: 0xff8a3c,
+      label: "MELT SPEED", icon: "\ud83d\udd25", noun: "Furnace Draught",
+      blurb: "Melts sand into molten glass faster",
+      cost: function () { return costGlassSpeed(state.glass.meltLv); } },
+    { id: "glass_blow", lv: "blowLv", x: GLASS_TABLE_X, color: 0x8ad8ff,
+      label: "BLOW SPEED", icon: "\ud83e\uddea", noun: "Better Tools",
+      blurb: "The table works molten glass into blanks faster",
+      cost: function () { return costGlassSpeed(state.glass.blowLv); } },
+    { id: "glass_finish", lv: "finishLv", x: GLASS_FINISHER_X, color: 0x9ad06a,
+      label: "FINISH SPEED", icon: "\u2728", noun: "Finishing Jigs",
+      blurb: "Finishes blanks into pipes and bongs faster",
+      cost: function () { return costGlassSpeed(state.glass.finishLv); } },
+    { id: "glass_hopper", lv: "hopperLv", x: GLASS_SAND_X, color: 0xc9a875,
+      label: "HOPPER", icon: "\ud83e\udea3", noun: "Bigger Hoppers",
+      blurb: "Every stage holds more before it backs up",
+      cost: function () { return costGlassHopper(state.glass.hopperLv); } },
+    { id: "glass_craft", lv: "valueLv", x: GLASS_CRATE_X, color: 0xffd75e,
+      label: "CRAFT", icon: "\ud83d\udc8e", noun: "Master Craft",
+      blurb: "Finer work sells for more",
+      cost: function () { return costGlassCraft(state.glass.valueLv); } },
+  ].forEach(function (u) {
+    stationDefs.push({
+      id: u.id, label: u.label, icon: u.icon,
+      x: u.x, z: GLASS_UPGRADE_Z,
+      site: "glassshop", color: u.color, kiosk: false,
+      hidden: function () { return !glassUnlocked(); },
+      name: function () { return u.noun; },
+      desc: function () {
+        return u.blurb + " \u00b7 Lv." + ((state.glass && state.glass[u.lv]) || 0);
+      },
+      cost: u.cost,
+      maxed: function () { return false; },
+      buy: function () {
+        state.glass[u.lv] = (state.glass[u.lv] || 0) + 1;
+        toast(u.icon + " " + u.noun + " \u2014 Lv." + state.glass[u.lv] + "!");
+      },
     });
   });
 
