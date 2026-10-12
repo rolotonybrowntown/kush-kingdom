@@ -1397,7 +1397,14 @@
   var MAX_GATHERERS = 4, MAX_GLASSBLOWERS = 3;
   var GLASS_TABLE_X = GLASS_BLOWER_X, GLASS_TABLE_Z = GLASS_CZ;   // the middle blower row, where the benches used to sit
   var GLASS_TABLE_SLOT_DX = 2.9;
+  // Manual walk-up spots, so the line can be worked by hand before anyone is
+  // hired. The furnaces and finishers get theirs from buildMillMachine; the
+  // sand pit, the studio table and the crate need their own.
+  var GLASS_PIT_PAD   = { x: GLASS_SAND_X,  z: GLASS_CZ + 5.5 };
+  var GLASS_CRATE_PAD = { x: GLASS_CRATE_X, z: GLASS_CZ };
   var GLASS_STUDIO_HALF_Z = 3.0;   // must match stHalfZ in buildGlassWorks
+  function glassTableIn()  { return { x: GLASS_TABLE_X - 4.6, z: GLASS_TABLE_Z + 1.8 }; }
+  function glassTableOut() { return { x: GLASS_TABLE_X + 4.6, z: GLASS_TABLE_Z + 1.8 }; }
   function glassTableSlot(i) {
     return {
       x: GLASS_TABLE_X + (i - (MAX_GLASSBLOWERS - 1) / 2) * GLASS_TABLE_SLOT_DX,
@@ -8366,6 +8373,8 @@
   var smokeshopTillPad = { x: SMOKESHOP_REGISTER.x, z: SMOKESHOP_REGISTER.z, half: 1.4 };
   var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER", smokeshopAccountantHired);
   MYSTERY_TILLS.smokeshop = [smokeshopTillPad, SMOKESHOP_RESTOCK_ZONE, SMOKESHOP_CASHIER_PAD];
+  MYSTERY_TILLS.glassshop = [GLASS_PIT_PAD, GLASS_CRATE_PAD, glassTableIn(), glassTableOut(),
+                             { x: GLASS_CRATE_X, z: GLASS_CZ + 9 }];
 
   // ---- customers: walk in, grab a stocked item off a shelf, queue at the
   // register, leave once rung up. Mirrors the dispensary's own npc pool
@@ -8947,6 +8956,21 @@
       g.add(rack);
     }
 
+    // ---- walk-up pads for the stages that aren't machines: the sand pit,
+    // the studio table and the crate. The furnaces and finishers get theirs
+    // from buildMillMachine already.
+    function walkPadAt(x, z, color, label, icon) {
+      var holder = new THREE.Group();
+      holder.position.set(x, y, z);
+      g.add(holder);
+      buildMillWalkPad(holder, 0, color, label, icon);
+    }
+    walkPadAt(GLASS_PIT_PAD.x, GLASS_PIT_PAD.z, 0xc9a875, "DIG SAND", "\u2191");
+    var tIn = glassTableIn(), tOut = glassTableOut();
+    walkPadAt(tIn.x,  tIn.z,  0xff8a3c, "DROP OFF", "\u2193");
+    walkPadAt(tOut.x, tOut.z, 0x8ad8ff, "COLLECT",  "\u2191");
+    walkPadAt(GLASS_CRATE_PAD.x, GLASS_CRATE_PAD.z, 0xffd75e, "CRATE UP", "\u2193");
+
     // ---- the sign on the back wall
     var sign = textSprite("GLASS WORKS", "#ffd27a");
     sign.scale.set(14, 3.0, 1);
@@ -9084,6 +9108,104 @@
       if (room > most) { most = room; best = i; }
     }
     return best;
+  }
+
+  // ---- working the line by hand ----------------------------------------
+  // Every other producing site lets you run it yourself before you can
+  // afford staff. The Glass Works drew DROP OFF / COLLECT pads on its
+  // machines from the start (buildMillMachine adds them unconditionally)
+  // but nothing ever read them, so they sat there looking interactive and
+  // did nothing. This is the handler they were always missing.
+  function handleGlass() {
+    if (!glassUnlocked() || state.site !== "glassshop") return;
+    var gl = state.glass, cap = glassHopperCap(), moved = false;
+    var px = player.pos.x, pz = player.pos.z;
+
+    function near(x, z) { return d2(px, pz, x, z) <= MILL_PILE_HALF + PLAYER_RADIUS; }
+    // pull `type` out of the backpack into a stage, up to whatever room it has
+    function give(type, room, add, x, z, label, color) {
+      var fed = 0;
+      for (var b = player.backpack.length - 1; b >= 0 && fed < room; b--) {
+        if (player.backpack[b].type === type) { player.backpack.splice(b, 1); fed++; }
+      }
+      if (fed > 0) { add(fed); addFloater(x, 3.0, z, "+" + fed + " " + label, color); moved = true; }
+    }
+    // and the reverse: load the backpack from a stage until one of them runs out
+    function take(avail, remove, type, x, z, label, color) {
+      var got = 0;
+      while (avail() >= 1 && player.backpack.length < backpackCap()) { remove(); player.backpack.push({ type: type }); got++; }
+      if (got > 0) { addFloater(x, 3.4, z, "+" + got + " " + label, color); moved = true; }
+    }
+
+    // sand pit -> backpack
+    if (near(GLASS_PIT_PAD.x, GLASS_PIT_PAD.z)) {
+      take(function () { return gl.sand; }, function () { gl.sand -= 1; },
+           "sand", GLASS_PIT_PAD.x, GLASS_PIT_PAD.z, "SAND", "#e8d8a8");
+    }
+
+    // furnaces: sand in, molten out
+    for (var i = 0; i < furnaceOwned(); i++) {
+      var fd = furnaceDefs[i], fm = gl.furnaces[i];
+      if (!fm) continue;
+      if (near(fd.x - MILL_PILE_OFFSET, fd.z)) {
+        give("sand", cap - fm.sand, function (n) { fm.sand += n; },
+             fd.x - MILL_PILE_OFFSET, fd.z, "SAND", "#e8d8a8");
+      }
+      if (near(fd.x + MILL_PILE_OFFSET, fd.z)) {
+        (function (m) {
+          take(function () { return m.molten; }, function () { m.molten -= 1; },
+               "molten", fd.x + MILL_PILE_OFFSET, fd.z, "MOLTEN", "#ff8a3c");
+        })(fm);
+      }
+    }
+
+    // the studio table: molten in, blanks out. The table is the blower stage
+    // now, so its slots are staffing, not machines - but the deed always
+    // grants one worker, so there is always at least one slot to feed.
+    var tIn = glassTableIn(), tOut = glassTableOut();
+    for (var w = 0; w < blowerOwned(); w++) {
+      var bm = gl.blowers[w];
+      if (!bm) continue;
+      if (near(tIn.x, tIn.z) && bm.molten < cap) {
+        give("molten", cap - bm.molten, (function (m) { return function (n) { m.molten += n; }; })(bm),
+             tIn.x, tIn.z, "MOLTEN", "#ff8a3c");
+      }
+      if (near(tOut.x, tOut.z)) {
+        (function (m) {
+          take(function () { return m.blank; }, function () { m.blank -= 1; },
+               "blank", tOut.x, tOut.z, "BLANKS", "#8ad8ff");
+        })(bm);
+      }
+    }
+
+    // finishers: blanks in, finished pieces out
+    for (var j = 0; j < finisherOwned(); j++) {
+      var nd = finisherDefs[j], nm = gl.finishers[j];
+      if (!nm) continue;
+      if (near(nd.x - MILL_PILE_OFFSET, nd.z)) {
+        give("blank", cap - nm.blank, (function (m) { return function (n) { m.blank += n; }; })(nm),
+             nd.x - MILL_PILE_OFFSET, nd.z, "BLANKS", "#8ad8ff");
+      }
+      if (near(nd.x + MILL_PILE_OFFSET, nd.z)) {
+        (function (m) {
+          ["pipes", "bongs"].forEach(function (kd) {
+            take(function () { return m[kd] || 0; }, function () { m[kd] -= 1; },
+                 kd, nd.x + MILL_PILE_OFFSET, nd.z, kd.toUpperCase(), "#9ad06a");
+          });
+        })(nm);
+      }
+    }
+
+    // crate-out: hand finished pieces over for the shop run
+    if (near(GLASS_CRATE_PAD.x, GLASS_CRATE_PAD.z)) {
+      ["pipes", "bongs"].forEach(function (kd) {
+        var held = (gl.crate.pipes || 0) + (gl.crate.bongs || 0);
+        give(kd, GLASS_CRATE_CAP - held, function (n) { gl.crate[kd] = (gl.crate[kd] || 0) + n; },
+             GLASS_CRATE_PAD.x, GLASS_CRATE_PAD.z, kd.toUpperCase(), "#ffd75e");
+      });
+    }
+
+    if (moved) { syncStack(); renderUpgrades(); }
   }
 
   // ---- gatherers: sand pit -> furnace ----------------------------------
@@ -11343,6 +11465,9 @@
           : want === "preroll" ? prerollGeo
           : want === "wood" ? woodGeo : want === "cutwood" ? cutwoodGeo
           : want === "lumber" ? lumberGeo : want === "papers" ? papersGeo
+          : want === "sand" ? glassSandGeo : want === "molten" ? glassMoltenGeo
+          : want === "blank" ? glassBlankGeo
+          : (want === "pipes" || want === "bongs") ? glassPieceGeo
           : budGeo;
         mm.material = want === "seed" ? M.packA
           : want === "dab" ? M.dab : want === "edible" ? M.edible
@@ -11350,6 +11475,8 @@
           : want === "preroll" ? M.preroll
           : want === "wood" ? M.woodDark : want === "cutwood" ? M.wood
           : want === "lumber" ? M.plank : want === "papers" ? M.preroll
+          : want === "sand" ? M.track : want === "molten" ? M.ovenGlow
+          : (want === "blank" || want === "pipes" || want === "bongs") ? M.productJar
           : M.bud;
         mm.userData.type = want;
         mm.userData.spawnAt = performance.now();
@@ -16610,6 +16737,7 @@
     handlePlaners();
     handleCutters();
     handlePapersDrop();
+    handleGlass();
     updatePlotVisuals(now);
     updateRowTiles(now);
     updatePressPads(now);
