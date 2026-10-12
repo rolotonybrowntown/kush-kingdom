@@ -2721,6 +2721,8 @@
         tier: 0,
         restockerLv: 0,
         cashierLv: 0,
+        footfallLv: 0,
+        basketLv: 0,
         accountantHired: false,   // Uptown's own accountant, separate from state.accountantHired
         stock: { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 },   // warehouse (back-of-house)
         // What's physically on the shelf right now is a runtime mesh pile,
@@ -2899,6 +2901,8 @@
       sms.tier = Math.max(0, Math.min(MAX_SMOKESHOP_TIER, Math.floor(sms.tier) || 0));
       sms.restockerLv = Math.max(0, Math.floor(sms.restockerLv) || 0);
       sms.cashierLv = Math.max(0, Math.floor(sms.cashierLv) || 0);
+      sms.footfallLv = Math.max(0, Math.floor(sms.footfallLv) || 0);
+      sms.basketLv = Math.max(0, Math.floor(sms.basketLv) || 0);
       sms.accountantHired = !!sms.accountantHired;
       if (!sms.stock || typeof sms.stock !== "object") sms.stock = {};
       SMOKESHOP_KINDS.forEach(function (k) {
@@ -8320,6 +8324,9 @@
     return t;
   }
   var SMOKESHOP_RESTOCK_RATE = 1.4;   // units/sec trickling into the warehouse, split across unlocked kinds
+  // A bigger store orders bigger. Without this, footfall upgrades just
+  // starve the shelf instead of raising takings.
+  function smokeshopRestockRate() { return SMOKESHOP_RESTOCK_RATE * (1 + 0.9 * smokeshopTier()); }
   var SMOKESHOP_SHELF_CAP = 24;       // total units the two shelves hold between them
   var smokeshopShelf = { papers: 0, pipes: 0, lighters: 0, bongs: 0, grinders: 0 };   // runtime only
   function smokeshopShelfTotal() {
@@ -8382,7 +8389,21 @@
   // right now" count) but with its own linear FSM instead of the
   // dispensary's time-derived phase cycle, since these have to react to
   // real shelf stock and a real register queue. ----
-  var MAX_SMOKESHOP_CUSTOMERS = 5;
+  // Was 5, and 5 was the ceiling on the whole site's income: with only five
+  // people allowed in the shop at once, each needing a full walk-in, pick,
+  // queue, pay and walk-out cycle, throughput was pinned at roughly 0.44
+  // customers/sec no matter what. Measured: a 12x staff-speed upgrade moved
+  // takings 8%. Footfall is what actually lifts it now.
+  var MAX_SMOKESHOP_CUSTOMERS = 16;
+  var MAX_FOOTFALL = MAX_SMOKESHOP_CUSTOMERS - 5;
+  function costFootfall() { return scaled(26000 * Math.pow(2.1, (state.smokeshop && state.smokeshop.footfallLv) || 0)); }
+  // How much each customer buys per visit. Footfall alone could not close the
+  // gap: the shop is throughput-limited by how long a customer takes to walk
+  // in, pick, queue and leave, so the other half of the fix is making a visit
+  // worth more rather than only making visits more frequent.
+  var MAX_BASKET = 6;
+  function smokeshopBasket() { return 1 + ((state.smokeshop && state.smokeshop.basketLv) || 0); }
+  function costBasket() { return scaled(30000 * Math.pow(2.2, (state.smokeshop && state.smokeshop.basketLv) || 0)); }
   var SMOKESHOP_CUSTOMER_SPEED = 5.4;
   var smokeshopCustomers = [];
   var smokeshopQueue = [];       // customer indices waiting at the register, arrival order
@@ -8420,7 +8441,8 @@
     return false;
   }
   function smokeshopActiveCustomers() {
-    return Math.max(2, Math.min(MAX_SMOKESHOP_CUSTOMERS, 2 + smokeshopTier()));
+    var n = 2 + smokeshopTier() + ((state.smokeshop && state.smokeshop.footfallLv) || 0);
+    return Math.max(2, Math.min(MAX_SMOKESHOP_CUSTOMERS, n));
   }
 
   function updateSmokeshop(now, dt) {
@@ -8439,7 +8461,7 @@
       });
       var room = smokeshopIntakeCap() - smokeshopStockTotal();
       if (open.length && room > 0) {
-        var per = Math.min(room, SMOKESHOP_RESTOCK_RATE * dt) / open.length;
+        var per = Math.min(room, smokeshopRestockRate() * dt) / open.length;
         open.forEach(function (p) { state.smokeshop.stock[p.kind] = (state.smokeshop.stock[p.kind] || 0) + per; });
       }
     }
@@ -8549,7 +8571,9 @@
         c.timer -= dt;
         if (c.timer <= 0) {
           if ((smokeshopShelf[c.kind] || 0) > 0) {
-            smokeshopShelf[c.kind]--;
+            var want = Math.min(smokeshopBasket(), Math.floor(smokeshopShelf[c.kind]));
+            c.qty = Math.max(1, want);
+            smokeshopShelf[c.kind] -= c.qty;
             c.item.visible = true;
             var qi = smokeshopQueue.length % SMOKESHOP_REGISTER_SLOTS.length;
             var rslot = SMOKESHOP_REGISTER_SLOTS[qi];
@@ -8595,7 +8619,7 @@
       if (smokeshopCheckoutAcc >= every) {
         smokeshopCheckoutAcc = 0;
         smokeshopQueue.shift();
-        var amount = smokeshopProductValue(frontCust.kind);
+        var amount = smokeshopProductValue(frontCust.kind) * (frontCust.qty || 1);
         smokeshopTill.payOut(amount);
         addFloater(SMOKESHOP_REGISTER.x, 2.4, SMOKESHOP_REGISTER.z, "+$" + fmt(Math.round(amount)), "#ffd75e");
         frontCust.targetX = 0; frontCust.targetZ = SMOKESHOP_DOOR_Z - 1;
@@ -15214,6 +15238,44 @@
       buy: function () {
         state.smokeshop.restockerLv = (state.smokeshop.restockerLv || 0) + 1;
         toast("\ud83d\udce6 Restocker hired \u2014 the shelf stays full now!");
+      },
+    },
+    {
+      id: "basket", label: "BASKET", icon: "\ud83d\udecd\ufe0f",
+      x: -9, z: SMOKESHOP_CZ + 8,
+      site: "smokeshop", color: 0x8ad8ff, kiosk: false,
+      hidden: function () { return !smokeshopUnlocked(); },
+      name: function () { return "Upsell At The Counter"; },
+      desc: function () {
+        var n = (state.smokeshop.basketLv || 0);
+        return n >= MAX_BASKET
+          ? "Nobody leaves with just the one"
+          : "Customers take " + smokeshopBasket() + " per visit \u00b7 Lv." + n;
+      },
+      cost: costBasket,
+      maxed: function () { return (state.smokeshop.basketLv || 0) >= MAX_BASKET; },
+      buy: function () {
+        state.smokeshop.basketLv = (state.smokeshop.basketLv || 0) + 1;
+        toast("\ud83d\udecd\ufe0f Upsell \u2014 " + smokeshopBasket() + " per customer now!");
+      },
+    },
+    {
+      id: "footfall", label: "FOOTFALL", icon: "\ud83d\udce3",
+      x: 9, z: SMOKESHOP_CZ + 8,
+      site: "smokeshop", color: 0xff8fbf, kiosk: false,
+      hidden: function () { return !smokeshopUnlocked(); },
+      name: function () { return "Pull In More Customers"; },
+      desc: function () {
+        var n = (state.smokeshop.footfallLv || 0);
+        return n >= MAX_FOOTFALL
+          ? "The place is packed wall to wall"
+          : "Room for " + smokeshopActiveCustomers() + " in the shop at once \u00b7 Lv." + n;
+      },
+      cost: costFootfall,
+      maxed: function () { return (state.smokeshop.footfallLv || 0) >= MAX_FOOTFALL; },
+      buy: function () {
+        state.smokeshop.footfallLv = (state.smokeshop.footfallLv || 0) + 1;
+        toast("\ud83d\udce3 Word is spreading \u2014 room for " + smokeshopActiveCustomers() + " at once!");
       },
     },
     {
