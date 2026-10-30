@@ -795,6 +795,11 @@
         <div id="office-empire-rows"></div>
       </div>
 
+      <div class="office-section" id="office-sec-site">
+        <div id="office-site-rows"></div>
+        <button class="menu-action" id="office-site-back">&larr; All businesses</button>
+      </div>
+
       <div class="office-section" id="office-sec-accountant">
         <div id="office-accountant-rows"></div>
       </div>
@@ -17239,6 +17244,7 @@
   var officeCityRows = document.getElementById("office-city-rows");
   var officeEmpireRows = document.getElementById("office-empire-rows");
   var officeEmpireTotal = document.getElementById("office-empire-total");
+  var officeSiteRows = document.getElementById("office-site-rows");
 
   // One row-builder shared by every section: icon optional, name/desc/button.
   function buildOfficeRow(opts) {
@@ -17310,27 +17316,100 @@
     empireLiveRows = [];
     SITE_LIST.forEach(function (s) {
       var unlocked = s.unlocked();
-      var tier = profitTierOf(s.id);
-      var maxed = tier >= MAX_PROFIT_TIER;
-      var cost = costProfitTier(s.id);
       var row = buildOfficeRow({
         name: s.icon + " " + s.name,
         desc: siteIncomeLine(s),
-        btnText: !unlocked ? "Locked" : maxed ? "MAX" : "$" + fmt(cost),
-        disabled: !unlocked || maxed || state.cash < cost,
+        btnText: unlocked ? "Manage" : "Locked",
+        disabled: !unlocked,
         locked: !unlocked,
-        onClick: function () {
-          if (!unlocked || maxed || state.cash < cost) return;
-          state.cash -= cost;
-          state.profitTier[s.id] = tier + 1;
-          toast(s.icon + " " + s.name + " profit boosted to " + PROFIT_TIER_LABELS[tier + 1] + "!");
-          renderHud(); renderOfficePanel(); saveState();
-        },
+        onClick: unlocked ? function () { openSiteManage(s.id); } : null,
       });
       empireLiveRows.push({ site: s, desc: row.querySelector(".hr-info span") });
       officeEmpireRows.appendChild(row);
     });
     refreshEmpireNumbers();
+  }
+
+  // ---- managing one business from the desk ----
+  // Station pads normally charge you by standing on them, accumulating into
+  // state.stationPaid until the price is met. Buying from here settles
+  // whatever is left to pay, so a part-paid pad is honoured rather than
+  // charged twice, then runs the pad's own buy().
+  function remoteBuyStation(st) {
+    if (st.hidden && st.hidden()) return false;
+    if (st.maxed && st.maxed()) return false;
+    var owe = Math.max(0, st.cost() - (state.stationPaid[st.id] || 0));
+    if (state.cash < owe) return false;
+    state.cash -= owe;
+    state.stationPaid[st.id] = 0;
+    st.buy();
+    return true;
+  }
+
+  var manageSiteId = null;
+  function renderSiteSection() {
+    var s = SITES[manageSiteId];
+    if (!s) return;
+    officeSiteRows.innerHTML = "";
+
+    // the site's own cut first, then everything its pads sell
+    var tier = profitTierOf(s.id);
+    var tierMaxed = tier >= MAX_PROFIT_TIER;
+    var tierCost = costProfitTier(s.id);
+    officeSiteRows.appendChild(buildOfficeRow({
+      name: "📈 Profit Booster",
+      desc: tierMaxed ? "Maxed — " + PROFIT_TIER_LABELS[tier] + " on everything sold here"
+                      : "Tier " + tier + "/" + MAX_PROFIT_TIER + " · next: " + PROFIT_TIER_LABELS[tier + 1],
+      btnText: tierMaxed ? "MAX" : "$" + fmt(tierCost),
+      disabled: tierMaxed || state.cash < tierCost,
+      onClick: function () {
+        if (tierMaxed || state.cash < tierCost) return;
+        state.cash -= tierCost;
+        state.profitTier[s.id] = tier + 1;
+        toast(s.icon + " " + s.name + " profit boosted!");
+        renderHud(); renderSiteSection(); saveState();
+      },
+    }));
+
+    var shown = 0;
+    stationDefs.forEach(function (st) {
+      if ((st.site || "shop") !== s.id) return;
+      if (st.hidden && st.hidden()) return;
+      shown++;
+      var maxed = !!(st.maxed && st.maxed());
+      var owe = Math.max(0, st.cost() - (state.stationPaid[st.id] || 0));
+      var part = (state.stationPaid[st.id] || 0) > 0;
+      officeSiteRows.appendChild(buildOfficeRow({
+        name: (st.icon ? st.icon + " " : "") + st.name(),
+        desc: st.desc() + (part && !maxed ? " · part paid at the pad" : ""),
+        btnText: maxed ? "MAX" : "$" + fmt(owe),
+        disabled: maxed || state.cash < owe,
+        onClick: function () {
+          if (!remoteBuyStation(st)) return;
+          renderHud(); renderSiteSection(); renderUpgrades(); saveState();
+        },
+      }));
+    });
+
+    if (!shown) {
+      officeSiteRows.appendChild(buildOfficeRow({
+        name: "Nothing to buy here yet",
+        desc: "This location has no upgrades available right now.",
+        btnText: "—", disabled: true,
+      }));
+    }
+  }
+
+  function openSiteManage(siteId) {
+    manageSiteId = siteId;
+    var s = SITES[siteId];
+    renderSiteSection();
+    for (var m in OFFICE_SECTIONS) {
+      document.getElementById("office-sec-" + m).classList.toggle("show", m === "site");
+    }
+    officeTitleEl.textContent = s.icon + " " + s.name;
+    officeSubEl.textContent = "$" + fmt(siteIncomePerSec(siteId)) + "/sec · run it without the walk.";
+    officeOverlay.classList.add("show");
   }
 
   function renderOfficePanel() {
@@ -17463,6 +17542,7 @@
   var officeSubEl = document.getElementById("office-sub");
   var OFFICE_SECTIONS = {
     empire:     { title: "The Empire", sub: "Every business, what it earns, and what it costs to earn more." },
+    site:       { title: "", sub: "" },   // title is set per business by openSiteManage()
     accountant: { title: "Hire an Accountant", sub: "Skip the walk — every sale drops straight into your cash, everywhere." },
     profit:     { title: "Profit Boosters", sub: "Buy each location's way to a bigger cut, three tiers deep." },
     hats:       { title: "Hat Locker", sub: "Swap hats — some come with a production bonus." },
@@ -17492,6 +17572,8 @@
     toast("💼 Welcome to the Executive Office");
   }
   officeBtn.addEventListener("click", function () { openOfficeSection("empire"); });
+  document.getElementById("office-site-back")
+    .addEventListener("click", function () { openOfficeSection("empire"); });
   document.getElementById("office-close").addEventListener("click", closeOffice);
   officeOverlay.addEventListener("click", function (e) { if (e.target === officeOverlay) closeOffice(); });
 
