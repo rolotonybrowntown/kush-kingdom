@@ -1334,11 +1334,11 @@
   // Uptown doesn't fall behind as strain progress climbs, but the SKUs
   // themselves are unrelated to anything sold at the dispensary.
   var SMOKESHOP_PRODUCTS = [
-    { kind: "papers",   tierGate: 0, icon: "📄", label: "papers",   baseValue: 9000 },
-    { kind: "lighters", tierGate: 0, icon: "🔥", label: "lighter",  baseValue: 12000 },
-    { kind: "pipes",    tierGate: 0, icon: "🪈", label: "pipe",     baseValue: 25000 },
-    { kind: "grinders", tierGate: 2, icon: "⚙️", label: "grinder",  baseValue: 40000 },
-    { kind: "bongs",    tierGate: 3, icon: "🌬️", label: "bong",     baseValue: 60000 },
+    { kind: "papers",   tierGate: 0, icon: "📄", label: "papers",   baseValue: 40000 },
+    { kind: "lighters", tierGate: 0, icon: "🔥", label: "lighter",  baseValue: 53000 },
+    { kind: "pipes",    tierGate: 0, icon: "🪈", label: "pipe",     baseValue: 110000 },
+    { kind: "grinders", tierGate: 2, icon: "⚙️", label: "grinder",  baseValue: 176000 },
+    { kind: "bongs",    tierGate: 3, icon: "🌬️", label: "bong",     baseValue: 264000 },
   ];
   var SMOKESHOP_KINDS = SMOKESHOP_PRODUCTS.map(function (p) { return p.kind; });
   function smokeshopProductDef(kind) {
@@ -1589,7 +1589,10 @@
   // old flat number — this now scales with strain progress the same way
   // infusedValue() already does, so it does not fall back behind the other
   // products again as a save's bud level climbs.
-  var BASE_PAPERS_VALUE = 7000;
+  // Deed order is the unlock order, so income has to ascend along it. The
+  // mill unlocks after the factory ($30T vs $5T) but earned roughly half as
+  // much; these values are what close that, rather than moving any deed.
+  var BASE_PAPERS_VALUE = 19800;
   function papersValue() {
     return BASE_PAPERS_VALUE * (sellValueBase() / BASE_SELL_VALUE) *
            (1 + 0.35 * (state.papers && state.papers.valueLv || 0)) *
@@ -9074,7 +9077,7 @@
   // nothing on its own. Craft levels lift the value the same way the mill's
   // valueLv and the factory's qualityLv lift theirs - this was the only
   // producing site in the game with no value axis at all.
-  var GLASS_WHOLESALE_PCT = 0.8;
+  var GLASS_WHOLESALE_PCT = 0.55;
   function glassCraftMult() { return 1 + 0.35 * ((state.glass && state.glass.valueLv) || 0); }
   function glassWholesaleValue(kind) {
     return smokeshopProductValue(kind) * GLASS_WHOLESALE_PCT * glassCraftMult() *
