@@ -9107,8 +9107,8 @@
         var sell = Math.floor(have);
         cr[kind] -= sell;
         var paid = glassWholesaleValue(kind) * sell * (promoActive() ? PROMO_MULT : 1);
-        gl.pending = (gl.pending || 0) + paid;
         glassTill.payOut(Math.round(paid));
+        gl.pending = glassTill.pending();
       }
     });
   }
@@ -14227,8 +14227,8 @@
   var factoryTill = makeTill(FACTORY_CASH_PAD, 0x8ef0a4, "$ COLLECT");
   function factoryPayOut(amount) {
     if (amount <= 0) return;
-    state.factory.pending += amount;
     factoryTill.payOut(amount);
+    state.factory.pending = factoryTill.pending();
   }
   function updateFactoryTill(now) {
     var live = factoryUnlocked();
@@ -17697,8 +17697,18 @@
   // Rebuild the factory's cash pile from the save. The till keeps its own
   // in-memory total, so without this a shipment banked before you closed the
   // tab would come back as an invisible number you could never collect.
-  if (state.factory.pending > 0) factoryTill.payOut(state.factory.pending);
-  if (state.glass.pending > 0) glassTill.payOut(state.glass.pending);
+  // Only restore a pile the till could actually be holding. With that city's
+  // accountant hired the money was banked the moment it was earned and the
+  // till is empty, so paying the mirror back in would hand it over a second
+  // time - and legacy saves carry an inflated mirror from when it was
+  // incremented regardless, which re-paid in full on every single load.
+  function restoreTill(till, holder, key, accountant) {
+    if (accountant()) { holder[key] = 0; return; }
+    if (holder[key] > 0) till.payOut(holder[key]);
+    holder[key] = till.pending();
+  }
+  restoreTill(factoryTill, state.factory, "pending", accountantHired);
+  restoreTill(glassTill, state.glass, "pending", smokeshopAccountantHired);
   // a save restored at Upscale or above should already be in black tie
   refreshLoungeFit();
   updateLoungeStockVisuals();
