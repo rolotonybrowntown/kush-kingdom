@@ -8739,29 +8739,29 @@
     // shows through the fog, with a sand apron under the hopper end
     glassGround = new THREE.Mesh(
       new THREE.BoxGeometry(GLASS_HALF_X * 2 + 60, 0.3, GLASS_HALF_Z * 2 + 60), M.asphalt);
-    glassGround.position.set(0, y - 0.15, GLASS_CZ);
+    glassGround.position.set(0, y - 0.17, GLASS_CZ);   // top at y-0.02
     glassGround.receiveShadow = true;
     g.add(glassGround);
 
     // lighter slab over the shed footprint, so the floor inside reads as a
     // room instead of merging into the yard in every direction
     var shedFloor = new THREE.Mesh(
-      new THREE.BoxGeometry(GLASS_HALF_X * 2, 0.08, GLASS_HALF_Z * 2), M.concrete);
-    shedFloor.position.set(0, y + 0.01, GLASS_CZ);
+      new THREE.BoxGeometry(GLASS_HALF_X * 2, 0.02, GLASS_HALF_Z * 2), M.concrete);
+    shedFloor.position.set(0, y - 0.022, GLASS_CZ);    // top at y-0.012
     shedFloor.receiveShadow = true;
     g.add(shedFloor);
 
     var apron = new THREE.Mesh(
-      new THREE.BoxGeometry(20, 0.05, GLASS_HALF_Z * 2 - 4), M.track);
-    apron.position.set(GLASS_SAND_X, y + 0.07, GLASS_CZ);
+      new THREE.BoxGeometry(20, 0.02, GLASS_HALF_Z * 2 - 4), M.track);
+    apron.position.set(GLASS_SAND_X, y - 0.014, GLASS_CZ);   // top at y-0.004
     apron.receiveShadow = true;
     g.add(apron);
 
     // a scorched lane down the middle of the hot end, so the floor isn't
     // one flat grey from the furnaces all the way to the crates
     var burn = new THREE.Mesh(
-      new THREE.BoxGeometry(GLASS_FINISHER_X - GLASS_FURNACE_X + 24, 0.04, GLASS_HALF_Z * 2 - 8), M.asphalt);
-    burn.position.set((GLASS_FURNACE_X + GLASS_FINISHER_X) / 2, y + 0.06, GLASS_CZ);
+      new THREE.BoxGeometry(GLASS_FINISHER_X - GLASS_FURNACE_X + 24, 0.02, GLASS_HALF_Z * 2 - 8), M.asphalt);
+    burn.position.set((GLASS_FURNACE_X + GLASS_FINISHER_X) / 2, y - 0.018, GLASS_CZ);  // top at y-0.008
     burn.receiveShadow = true;
     g.add(burn);
 
@@ -9338,7 +9338,7 @@
       var tglow = addGlow(torchGroup, 0, 0.16, 0.42, 3.2, 0xffc464, 0.06);
       glassblowers.push({
         obj: w.obj, l1: w.l1, l2: w.l2,
-        pos: { x: GLASSBLOWER_ZONE.x + 1.4 + n * 0.9, z: GLASSBLOWER_ZONE.z + 1.4 },
+        pos: { x: slot.x, z: slot.z },
         phase: "seek", timer: 0, carrying: 0, carryKind: null, carryPieces: null,
         walkPhase: n * 1.4, slot: n, pickRot: 0, dropIdx: -1,
         tableSlot: slot, tip: tip, glow: tglow, torchPhase: n * 2.1, nextFlash: 0, flashUntil: 0,
@@ -9468,18 +9468,23 @@
         }
 
       } else if (b.phase === "idle") {
+        // nothing to move, so head back to your own place at the table
+        var home = b.tableSlot;
+        walking = !gbStepTo(b, home.x, home.z, GLASSBLOWER_SPEED, dt);
+        if (!walking) b.obj.rotation.y = 0;
         b.timer -= dt;
         if (b.timer <= 0) { b.timer = 0.7; b.phase = "seek"; }
       }
 
-      // b.pos still walks internally above - that is what paces the relay
-      // timing between machines - but the worker itself renders standing at
-      // its fixed table slot, holding a torch that flashes on its own
-      // schedule, instead of visibly crossing the yard.
-      var slot = b.tableSlot;
-      b.obj.position.set(slot.x, GLASS_GROUND_TOP, slot.z);
-      b.obj.rotation.y = 0;
-      b.l1.rotation.x = 0; b.l2.rotation.x = 0;
+      // Render where they actually are. They used to be pinned to their table
+      // slot while b.pos did the relay invisibly, which meant the line ran but
+      // looked dead - no way to tell staff were doing anything. The table is
+      // still where they stand when idle, it is just not where they stand
+      // while carrying.
+      b.obj.position.set(b.pos.x, GLASS_GROUND_TOP, b.pos.z);
+      var sw2 = walking ? Math.sin(b.walkPhase) * 0.55 : 0;
+      b.l1.rotation.x = sw2; b.l2.rotation.x = -sw2;
+      b.obj.position.y = GLASS_GROUND_TOP + (walking ? Math.abs(Math.sin(b.walkPhase)) * 0.07 : 0);
 
       if (now >= b.nextFlash) {
         b.flashUntil = now + 90 + Math.random() * 120;
