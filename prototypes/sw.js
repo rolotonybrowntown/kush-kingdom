@@ -14,7 +14,7 @@
  * silently serving a stale cache is exactly the "I pushed but nothing
  * changed" trap this project has been bitten by before.
  */
-var CACHE = "kush-kingdom-v1";
+var CACHE = "kush-kingdom-v2";
 var PRECACHE = ["./", "./kush_kingdom_3d.html"];
 
 self.addEventListener("install", function (e) {
