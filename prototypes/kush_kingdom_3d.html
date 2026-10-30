@@ -408,6 +408,41 @@
     cursor: default;
   }
 
+  /* ---- empire dashboard ---- */
+  /* Each business is a card: accent tile, live rate, and a bar showing how
+     much of the empire's income it is actually carrying. */
+  #office-empire-total {
+    text-align: center; font-size: 11.5px; opacity: 0.74;
+    padding: 2px 0 12px; margin-bottom: 2px;
+    border-bottom: 1px solid rgba(143,224,138,0.18);
+  }
+  #office-empire-total b {
+    display: block; font-size: 23px; color: #8ff5a8;
+    letter-spacing: 0.3px; margin-bottom: 3px;
+  }
+  .emp-row {
+    display: flex; align-items: center; gap: 11px;
+    padding: 11px 0;
+    border-top: 1px solid rgba(143,224,138,0.14);
+  }
+  .emp-icon {
+    flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 21px; background: rgba(255,255,255,0.06);
+    border: 1.5px solid rgba(255,255,255,0.16);
+  }
+  .emp-mid { flex: 1; min-width: 0; text-align: left; }
+  .emp-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .emp-head b { font-size: 14px; color: #eafff2; }
+  .emp-rate { font-size: 13px; font-weight: 800; color: #8ff5a8; white-space: nowrap; }
+  .emp-bar {
+    height: 7px; border-radius: 6px; margin-top: 6px;
+    background: rgba(255,255,255,0.09); overflow: hidden;
+  }
+  .emp-fill { height: 100%; border-radius: 6px; width: 0%; transition: width 0.45s ease; }
+  .emp-sub { display: block; font-size: 11px; opacity: 0.66; margin-top: 4px; line-height: 1.35; }
+  .emp-row.locked .emp-icon, .emp-row.locked .emp-mid { opacity: 0.48; }
+
   /* ---------------- executive office ---------------- */
   /* Same shell as the HR panel; the rows reuse .hr-row/.hr-info/.hr-buy. */
   #office-overlay {
@@ -17281,34 +17316,53 @@
   // make it earn more. Rows are built once per open and then refreshed in
   // place, so the numbers can tick live without the list flickering or a
   // button being rebuilt out from under a click.
+  // Accent per business, matching the colour its pads already use in-world.
+  var SITE_ACCENT = {
+    shop: "#6fd68a", farm: "#9ad06a", lounge: "#c76ee0", factory: "#8ef0a4",
+    papers: "#d7a869", smokeshop: "#ffd75e", glassshop: "#ff9a3c",
+  };
+
   var empireLiveRows = [];
-  function siteIncomeLine(s) {
-    if (!s.unlocked()) return "Not open for business yet";
+  // What the row says under the name. The rate itself is shown separately,
+  // so this carries the context: tier progress, or where the money went.
+  function siteNoteLine(s) {
+    if (!s.unlocked()) return "Not open for business yet — buy the deed from the map";
     if (s.id === "farm") {
       // the farm has no till - it feeds the shop's counter rather than
       // selling anything itself, so a $/sec reading would always be zero
       return "Supplies the shop · no till of its own";
     }
     var tier = profitTierOf(s.id);
-    var tierTxt = tier >= MAX_PROFIT_TIER ? PROFIT_TIER_LABELS[tier] + " profit, maxed"
-                                          : "next tier " + PROFIT_TIER_LABELS[tier + 1];
+    var tierTxt = tier >= MAX_PROFIT_TIER
+      ? PROFIT_TIER_LABELS[tier] + " profit, maxed"
+      : "Profit tier " + tier + "/" + MAX_PROFIT_TIER;
     // The Glass Works books almost nothing itself once the Corner Store is
     // open, because its pipes and bongs go over as stock and the shop rings
-    // them up - only the overflow it cannot fit sells wholesale at its own
-    // till. Reading a flat $0/sec would make the site look dead when it is
-    // actually carrying the shop, so say where the money went.
+    // them up - only the overflow sells wholesale at its own till. A bare
+    // $0/sec would make the site look dead when it is carrying the shop.
     if (s.id === "glassshop" && smokeshopUnlocked() && (state.glass.sentToShop || 0) > 0) {
-      return "$" + fmt(siteIncomePerSec(s.id)) + "/sec wholesale · stocking " +
-             SITES.smokeshop.name + " · " + tierTxt;
+      return "Stocking " + SITES.smokeshop.name + " · " + tierTxt;
     }
-    return "$" + fmt(siteIncomePerSec(s.id)) + "/sec · " + tierTxt;
+    return tierTxt;
   }
   function refreshEmpireNumbers() {
-    officeEmpireTotal.textContent =
-      "$" + fmt(empireIncomePerSec()) + "/sec across the empire · bankroll $" + fmt(state.cash);
+    var total = empireIncomePerSec();
+    officeEmpireTotal.innerHTML = "";
+    var big = document.createElement("b");
+    big.textContent = "$" + fmt(total) + "/sec";
+    officeEmpireTotal.appendChild(big);
+    officeEmpireTotal.appendChild(
+      document.createTextNode("across the empire · bankroll $" + fmt(state.cash)));
     for (var i = 0; i < empireLiveRows.length; i++) {
-      var r = empireLiveRows[i];
-      r.desc.textContent = siteIncomeLine(r.site);
+      var r = empireLiveRows[i], s = r.site;
+      var open = s.unlocked();
+      var rate = open ? siteIncomePerSec(s.id) : 0;
+      r.rate.textContent = open ? "$" + fmt(rate) + "/sec" : "—";
+      r.sub.textContent = siteNoteLine(s);
+      // Share of the empire, which is the thing the bar is actually for:
+      // at a glance, which business is carrying you and which is idle.
+      var share = (open && total > 0) ? Math.min(100, (rate / total) * 100) : 0;
+      r.fill.style.width = share.toFixed(1) + "%";
     }
   }
   function renderEmpireSection() {
@@ -17316,100 +17370,46 @@
     empireLiveRows = [];
     SITE_LIST.forEach(function (s) {
       var unlocked = s.unlocked();
-      var row = buildOfficeRow({
-        name: s.icon + " " + s.name,
-        desc: siteIncomeLine(s),
-        btnText: unlocked ? "Manage" : "Locked",
-        disabled: !unlocked,
-        locked: !unlocked,
-        onClick: unlocked ? function () { openSiteManage(s.id); } : null,
-      });
-      empireLiveRows.push({ site: s, desc: row.querySelector(".hr-info span") });
+      var accent = SITE_ACCENT[s.id] || "#6fd68a";
+
+      var row = document.createElement("div");
+      row.className = "emp-row" + (unlocked ? "" : " locked");
+
+      var icon = document.createElement("div");
+      icon.className = "emp-icon";
+      icon.textContent = s.icon;
+      if (unlocked) icon.style.borderColor = accent;
+
+      var mid = document.createElement("div");
+      mid.className = "emp-mid";
+      var head = document.createElement("div");
+      head.className = "emp-head";
+      var nm = document.createElement("b");
+      nm.textContent = s.name;
+      var rate = document.createElement("span");
+      rate.className = "emp-rate";
+      head.appendChild(nm); head.appendChild(rate);
+      var bar = document.createElement("div");
+      bar.className = "emp-bar";
+      var fill = document.createElement("div");
+      fill.className = "emp-fill";
+      fill.style.background = accent;
+      bar.appendChild(fill);
+      var note = document.createElement("span");
+      note.className = "emp-sub";
+      mid.appendChild(head); mid.appendChild(bar); mid.appendChild(note);
+
+      var btn = document.createElement("button");
+      btn.className = "hr-buy";
+      btn.textContent = unlocked ? "Manage" : "Locked";
+      btn.disabled = !unlocked;
+      if (unlocked) btn.addEventListener("click", function () { openSiteManage(s.id); });
+
+      row.appendChild(icon); row.appendChild(mid); row.appendChild(btn);
       officeEmpireRows.appendChild(row);
+      empireLiveRows.push({ site: s, rate: rate, fill: fill, sub: note });
     });
     refreshEmpireNumbers();
-  }
-
-  // ---- managing one business from the desk ----
-  // Station pads normally charge you by standing on them, accumulating into
-  // state.stationPaid until the price is met. Buying from here settles
-  // whatever is left to pay, so a part-paid pad is honoured rather than
-  // charged twice, then runs the pad's own buy().
-  function remoteBuyStation(st) {
-    if (st.hidden && st.hidden()) return false;
-    if (st.maxed && st.maxed()) return false;
-    var owe = Math.max(0, st.cost() - (state.stationPaid[st.id] || 0));
-    if (state.cash < owe) return false;
-    state.cash -= owe;
-    state.stationPaid[st.id] = 0;
-    st.buy();
-    return true;
-  }
-
-  var manageSiteId = null;
-  function renderSiteSection() {
-    var s = SITES[manageSiteId];
-    if (!s) return;
-    officeSiteRows.innerHTML = "";
-
-    // the site's own cut first, then everything its pads sell
-    var tier = profitTierOf(s.id);
-    var tierMaxed = tier >= MAX_PROFIT_TIER;
-    var tierCost = costProfitTier(s.id);
-    officeSiteRows.appendChild(buildOfficeRow({
-      name: "📈 Profit Booster",
-      desc: tierMaxed ? "Maxed — " + PROFIT_TIER_LABELS[tier] + " on everything sold here"
-                      : "Tier " + tier + "/" + MAX_PROFIT_TIER + " · next: " + PROFIT_TIER_LABELS[tier + 1],
-      btnText: tierMaxed ? "MAX" : "$" + fmt(tierCost),
-      disabled: tierMaxed || state.cash < tierCost,
-      onClick: function () {
-        if (tierMaxed || state.cash < tierCost) return;
-        state.cash -= tierCost;
-        state.profitTier[s.id] = tier + 1;
-        toast(s.icon + " " + s.name + " profit boosted!");
-        renderHud(); renderSiteSection(); saveState();
-      },
-    }));
-
-    var shown = 0;
-    stationDefs.forEach(function (st) {
-      if ((st.site || "shop") !== s.id) return;
-      if (st.hidden && st.hidden()) return;
-      shown++;
-      var maxed = !!(st.maxed && st.maxed());
-      var owe = Math.max(0, st.cost() - (state.stationPaid[st.id] || 0));
-      var part = (state.stationPaid[st.id] || 0) > 0;
-      officeSiteRows.appendChild(buildOfficeRow({
-        name: (st.icon ? st.icon + " " : "") + st.name(),
-        desc: st.desc() + (part && !maxed ? " · part paid at the pad" : ""),
-        btnText: maxed ? "MAX" : "$" + fmt(owe),
-        disabled: maxed || state.cash < owe,
-        onClick: function () {
-          if (!remoteBuyStation(st)) return;
-          renderHud(); renderSiteSection(); renderUpgrades(); saveState();
-        },
-      }));
-    });
-
-    if (!shown) {
-      officeSiteRows.appendChild(buildOfficeRow({
-        name: "Nothing to buy here yet",
-        desc: "This location has no upgrades available right now.",
-        btnText: "—", disabled: true,
-      }));
-    }
-  }
-
-  function openSiteManage(siteId) {
-    manageSiteId = siteId;
-    var s = SITES[siteId];
-    renderSiteSection();
-    for (var m in OFFICE_SECTIONS) {
-      document.getElementById("office-sec-" + m).classList.toggle("show", m === "site");
-    }
-    officeTitleEl.textContent = s.icon + " " + s.name;
-    officeSubEl.textContent = "$" + fmt(siteIncomePerSec(siteId)) + "/sec · run it without the walk.";
-    officeOverlay.classList.add("show");
   }
 
   function renderOfficePanel() {
