@@ -14755,18 +14755,25 @@
   // a payout counts up rather than jumping, the same way the $/sec readout
   // eases instead of stepping.
   var displayCash = state.cash;
+  var shownCashText = null;          // what cashEl is actually displaying
   function updateCashDisplay(dt) {
     var diff = state.cash - displayCash;
-    if (diff === 0) return;
-    // Snap once the gap is imperceptible, rather than easing toward it
-    // forever — floating point never quite reaches an asymptotic target.
-    if (Math.abs(diff) < Math.max(1, Math.abs(state.cash) * 1e-6)) {
-      displayCash = state.cash;
-    } else {
-      // Framerate-independent: the same catch-up speed at 30fps or 144fps.
-      displayCash += diff * (1 - Math.exp(-5 * dt));
+    if (diff !== 0) {
+      // Snap once the gap is imperceptible, rather than easing toward it
+      // forever — floating point never quite reaches an asymptotic target.
+      if (Math.abs(diff) < Math.max(1, Math.abs(state.cash) * 1e-6)) {
+        displayCash = state.cash;
+      } else {
+        // Framerate-independent: the same catch-up speed at 30fps or 144fps.
+        displayCash += diff * (1 - Math.exp(-5 * dt));
+      }
     }
-    cashEl.textContent = fmt(displayCash);
+    // Written against what is on screen rather than behind an
+    // unchanged-balance early-out, so the first frame after a load always
+    // paints the real number instead of leaving the markup's "0" sitting
+    // there until the balance next happens to move.
+    var txt = fmt(displayCash);
+    if (txt !== shownCashText) { cashEl.textContent = txt; shownCashText = txt; }
   }
   var productHud = document.getElementById("product-hud");
   var hudRows = document.getElementById("hud-rows");
@@ -15054,7 +15061,8 @@
   function renderHud() {
     // cashEl's text is owned by updateCashDisplay(), called every frame, so
     // the number can ease toward state.cash instead of snapping to it here.
-    var rateOn = accountantHired();
+    var acct = ACCOUNTANTS && ACCOUNTANTS[currentCityId()];
+    var rateOn = acct ? acct.hired() : accountantHired();
     if (rateOn) {
       rateChip.classList.add("on");
       rateVal.textContent = "$" + fmt(cashPerSecond()) + "/sec";
