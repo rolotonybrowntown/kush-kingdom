@@ -790,6 +790,11 @@
       <h2 id="office-title">Executive Office</h2>
       <p class="hr-sub" id="office-sub">Run the whole operation from one desk.</p>
 
+      <div class="office-section" id="office-sec-empire">
+        <div id="office-empire-total"></div>
+        <div id="office-empire-rows"></div>
+      </div>
+
       <div class="office-section" id="office-sec-accountant">
         <div id="office-accountant-rows"></div>
       </div>
@@ -6629,7 +6634,7 @@
     }
   }
 
-  var papersTill = makeTill(PAPERS_TILL_PAD, 0xd7a869, "$ COLLECT");
+  var papersTill = makeTill(PAPERS_TILL_PAD, 0xd7a869, "$ COLLECT", null, "papers");
   function updatePapersTill(now) { papersTill.update(now); }
   function updatePapersStockPile() {
     if (papersStockPile) papersStockPile.setCount(papersUnlocked() ? (state.papers.stock || 0) : 0);
@@ -8381,7 +8386,7 @@
   function costCashier() { return scaled(70000000); }
 
   var smokeshopTillPad = { x: SMOKESHOP_REGISTER.x, z: SMOKESHOP_REGISTER.z, half: 1.4 };
-  var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER", smokeshopAccountantHired);
+  var smokeshopTill = makeTill(smokeshopTillPad, 0xffd75e, "$ REGISTER", smokeshopAccountantHired, "smokeshop");
   MYSTERY_TILLS.smokeshop = [smokeshopTillPad, SMOKESHOP_RESTOCK_ZONE, SMOKESHOP_CASHIER_PAD];
   MYSTERY_TILLS.glassshop = [GLASS_PIT_PAD, GLASS_CRATE_PAD, glassTableIn(), glassTableOut(),
                              { x: GLASS_CRATE_X, z: GLASS_CZ + 9 }];
@@ -8948,7 +8953,7 @@
     // South of the rack, not east - GLASS_CRATE_X + 8 sat past the east
     // wall and outside the walkable bounds entirely, unreachable.
     var glassTillPad = { x: GLASS_CRATE_X, z: GLASS_CZ + 9, half: 1.4 };
-    glassTill = makeTill(glassTillPad, 0xff9a3c, "$ WHOLESALE", smokeshopAccountantHired);
+    glassTill = makeTill(glassTillPad, 0xff9a3c, "$ WHOLESALE", smokeshopAccountantHired, "glassshop");
 
     // ---- dressing: gas cylinders by the furnaces, cooling racks by the
     // finishers, so the yard doesn't read as machines on bare concrete
@@ -14056,7 +14061,7 @@
   // lounge) gets its own pad/pile without copy-pasting the geometry and
   // animation code — every call site keeps calling the same functions it
   // always did (payOutCash === shopTill.payOut).
-  function makeTill(pad, padColor, label, accountantCheck) {
+  function makeTill(pad, padColor, label, accountantCheck, siteId) {
     // Defaults to the Hometown accountant — the one flag basically every
     // till in the game already checked. A city with its own accountant
     // (Uptown's) passes its own check fn instead, so hiring one only ever
@@ -14150,6 +14155,7 @@
 
     function payOut(amount) {
       if (amount <= 0) return;
+      creditSite(siteId, amount);
       // The accountant is the whole point of the office: once hired for
       // this till's city, it skips the physical pile and drops straight
       // into the bankroll.
@@ -14200,7 +14206,7 @@
     return { payOut: payOut, update: update, pending: pending, pad: padGroup };
   }
 
-  var shopTill = makeTill(CASH_PAD, 0xffd75e, "$ COLLECT");
+  var shopTill = makeTill(CASH_PAD, 0xffd75e, "$ COLLECT", null, "shop");
   var payOutCash = shopTill.payOut;   // every existing call site (customerBuyBud etc.) is untouched
 
   // One till per table slot rather than a single one at the bar: a served
@@ -14208,7 +14214,7 @@
   // pile shows up where you earned it. Built for all six slots up front and
   // hidden for tables this tier has not opened yet.
   var loungeTills = LOUNGE_TABLE_SLOTS.map(function (slot) {
-    return makeTill({ x: slot.x, z: slot.z + 3.0, half: 1.2 }, 0xc76ee0, "$ TIP");
+    return makeTill({ x: slot.x, z: slot.z + 3.0, half: 1.2 }, 0xc76ee0, "$ TIP", null, "lounge");
   });
 
   function updateLoungeTills(now) {
@@ -14224,7 +14230,7 @@
   // so unlike the bar's tips this money can pile up for a long time unseen.
   // That makes it the one till worth persisting: state.factory.pending is the
   // authority and the till mirrors it, so a reload never eats a shipment.
-  var factoryTill = makeTill(FACTORY_CASH_PAD, 0x8ef0a4, "$ COLLECT");
+  var factoryTill = makeTill(FACTORY_CASH_PAD, 0x8ef0a4, "$ COLLECT", null, "factory");
   function factoryPayOut(amount) {
     if (amount <= 0) return;
     factoryTill.payOut(amount);
@@ -15019,6 +15025,48 @@
   // fast), then it eases back down over a few seconds rather than dropping
   // straight to zero (decay is slow) — the same shape a VU meter uses, and
   // it reads as "alive" the way a hard binary 0-or-a-number never does.
+  // ---- per-site income ----
+  // Every till is tagged with the site it belongs to and credits that site
+  // the moment it is paid, so the dashboard reads what each business
+  // actually earned. Deriving these from each site's production formulas
+  // instead would be a trap: refLineGrossPerSec() reads like factory output
+  // but is a pricing anchor built from base rates, and several sites are
+  // gated by supply or staff rather than by their own numbers.
+  //
+  // Credited at EARN time, not at collection, so the figure is a real income
+  // rate whether or not that city has an accountant banking it for you.
+  var siteEarned = {}, siteRate = {};
+  var lastSiteRateT = null;
+  function creditSite(siteId, amount) {
+    if (!siteId || !(amount > 0)) return;
+    siteEarned[siteId] = (siteEarned[siteId] || 0) + amount;
+  }
+  function updateSiteRates(nowMs) {
+    var t = nowMs / 1000;
+    if (lastSiteRateT === null) { lastSiteRateT = t; return; }
+    var dt = t - lastSiteRateT;
+    if (dt <= 0) return;
+    lastSiteRateT = t;
+    // Same attack/decay envelope the global readout uses, so a lumpy payout
+    // (a papers truck, a factory container) reads as a live number rather
+    // than flicking between a spike and zero.
+    for (var i = 0; i < SITE_LIST.length; i++) {
+      var id = SITE_LIST[i].id;
+      var inst = (siteEarned[id] || 0) / dt;
+      siteEarned[id] = 0;
+      var cur = siteRate[id] || 0;
+      var k = inst > cur ? 0.6 : 0.05;
+      cur += (inst - cur) * k;
+      siteRate[id] = cur < 0.01 ? 0 : cur;
+    }
+  }
+  function siteIncomePerSec(id) { return siteRate[id] || 0; }
+  function empireIncomePerSec() {
+    var t = 0;
+    for (var i = 0; i < SITE_LIST.length; i++) t += siteIncomePerSec(SITE_LIST[i].id);
+    return t;
+  }
+
   var cashRate = 0;
   var lastRateT = null, lastRateCash = null;
   function updateCashRate(nowMs) {
@@ -16897,7 +16945,7 @@
     sellRing.material.opacity = 0.35 + Math.sin(now * 0.003 + 1.2) * 0.18;
 
     hudAcc += dt;
-    if (hudAcc > 0.1) { updateCashRate(now); renderHud(); renderPrompt(); hudAcc = 0; }
+    if (hudAcc > 0.1) { updateCashRate(now); updateSiteRates(now); renderHud(); renderPrompt(); hudAcc = 0; }
 
     faceBarsAtCamera();
     renderer.render(scene, camera);
@@ -17189,6 +17237,8 @@
   var officeProfitRows = document.getElementById("office-profit-rows");
   var officeHatRows = document.getElementById("office-hat-rows");
   var officeCityRows = document.getElementById("office-city-rows");
+  var officeEmpireRows = document.getElementById("office-empire-rows");
+  var officeEmpireTotal = document.getElementById("office-empire-total");
 
   // One row-builder shared by every section: icon optional, name/desc/button.
   function buildOfficeRow(opts) {
@@ -17220,7 +17270,71 @@
     uptown: { cost: SMOKESHOP_ACCOUNTANT_COST, hired: smokeshopAccountantHired,
               hire: function () { state.smokeshop.accountantHired = true; } },
   };
+  // ---- the empire dashboard ----
+  // Every business on one screen: what it earns right now, and the button to
+  // make it earn more. Rows are built once per open and then refreshed in
+  // place, so the numbers can tick live without the list flickering or a
+  // button being rebuilt out from under a click.
+  var empireLiveRows = [];
+  function siteIncomeLine(s) {
+    if (!s.unlocked()) return "Not open for business yet";
+    if (s.id === "farm") {
+      // the farm has no till - it feeds the shop's counter rather than
+      // selling anything itself, so a $/sec reading would always be zero
+      return "Supplies the shop · no till of its own";
+    }
+    var tier = profitTierOf(s.id);
+    var tierTxt = tier >= MAX_PROFIT_TIER ? PROFIT_TIER_LABELS[tier] + " profit, maxed"
+                                          : "next tier " + PROFIT_TIER_LABELS[tier + 1];
+    // The Glass Works books almost nothing itself once the Corner Store is
+    // open, because its pipes and bongs go over as stock and the shop rings
+    // them up - only the overflow it cannot fit sells wholesale at its own
+    // till. Reading a flat $0/sec would make the site look dead when it is
+    // actually carrying the shop, so say where the money went.
+    if (s.id === "glassshop" && smokeshopUnlocked() && (state.glass.sentToShop || 0) > 0) {
+      return "$" + fmt(siteIncomePerSec(s.id)) + "/sec wholesale · stocking " +
+             SITES.smokeshop.name + " · " + tierTxt;
+    }
+    return "$" + fmt(siteIncomePerSec(s.id)) + "/sec · " + tierTxt;
+  }
+  function refreshEmpireNumbers() {
+    officeEmpireTotal.textContent =
+      "$" + fmt(empireIncomePerSec()) + "/sec across the empire · bankroll $" + fmt(state.cash);
+    for (var i = 0; i < empireLiveRows.length; i++) {
+      var r = empireLiveRows[i];
+      r.desc.textContent = siteIncomeLine(r.site);
+    }
+  }
+  function renderEmpireSection() {
+    officeEmpireRows.innerHTML = "";
+    empireLiveRows = [];
+    SITE_LIST.forEach(function (s) {
+      var unlocked = s.unlocked();
+      var tier = profitTierOf(s.id);
+      var maxed = tier >= MAX_PROFIT_TIER;
+      var cost = costProfitTier(s.id);
+      var row = buildOfficeRow({
+        name: s.icon + " " + s.name,
+        desc: siteIncomeLine(s),
+        btnText: !unlocked ? "Locked" : maxed ? "MAX" : "$" + fmt(cost),
+        disabled: !unlocked || maxed || state.cash < cost,
+        locked: !unlocked,
+        onClick: function () {
+          if (!unlocked || maxed || state.cash < cost) return;
+          state.cash -= cost;
+          state.profitTier[s.id] = tier + 1;
+          toast(s.icon + " " + s.name + " profit boosted to " + PROFIT_TIER_LABELS[tier + 1] + "!");
+          renderHud(); renderOfficePanel(); saveState();
+        },
+      });
+      empireLiveRows.push({ site: s, desc: row.querySelector(".hr-info span") });
+      officeEmpireRows.appendChild(row);
+    });
+    refreshEmpireNumbers();
+  }
+
   function renderOfficePanel() {
+    renderEmpireSection();
     // ---- accountant ----
     officeAccountantRows.innerHTML = "";
     CITIES.forEach(function (c) {
@@ -17248,13 +17362,9 @@
 
     // ---- profit boosters ----
     officeProfitRows.innerHTML = "";
-    var profitSites = [
-      { id: "shop", label: "Shop", icon: "🏪" },
-      { id: "farm", label: "Farm", icon: "🌾" },
-      { id: "lounge", label: "Lounge", icon: "🍸" },
-      { id: "factory", label: "Factory", icon: "🏭" },
-      { id: "papers", label: "Rolling Mill", icon: "🪵" },
-    ];
+    var profitSites = SITE_LIST.map(function (s) {
+      return { id: s.id, label: s.name, icon: s.icon };
+    });
     profitSites.forEach(function (ps) {
       var s = SITES[ps.id];
       var unlocked = s && s.unlocked();
@@ -17352,6 +17462,7 @@
   var officeTitleEl = document.getElementById("office-title");
   var officeSubEl = document.getElementById("office-sub");
   var OFFICE_SECTIONS = {
+    empire:     { title: "The Empire", sub: "Every business, what it earns, and what it costs to earn more." },
     accountant: { title: "Hire an Accountant", sub: "Skip the walk — every sale drops straight into your cash, everywhere." },
     profit:     { title: "Profit Boosters", sub: "Buy each location's way to a bigger cut, three tiers deep." },
     hats:       { title: "Hat Locker", sub: "Swap hats — some come with a production bonus." },
@@ -17380,7 +17491,7 @@
     saveState();
     toast("💼 Welcome to the Executive Office");
   }
-  officeBtn.addEventListener("click", teleportToOffice);
+  officeBtn.addEventListener("click", function () { openOfficeSection("empire"); });
   document.getElementById("office-close").addEventListener("click", closeOffice);
   officeOverlay.addEventListener("click", function (e) { if (e.target === officeOverlay) closeOffice(); });
 
@@ -17719,6 +17830,13 @@
   requestAnimationFrame(frame);
 
   setInterval(renderUpgrades, 1200);
+  // Only the figures, not the rows - see renderEmpireSection.
+  setInterval(function () {
+    if (officeOverlay.classList.contains("show") &&
+        document.getElementById("office-sec-empire").classList.contains("show")) {
+      refreshEmpireNumbers();
+    }
+  }, 500);
   setInterval(saveState, 4000);
   window.addEventListener("beforeunload", saveState);
   setTimeout(function () { toast("Joystick or tap the ground to move"); }, 400);
